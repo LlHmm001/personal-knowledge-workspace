@@ -259,7 +259,12 @@ export interface ImportAttachmentInput {
   mimeType: string
 }
 
+export interface AttachmentListFilter {
+  includeDeleted?: boolean
+}
+
 export interface PkwAttachmentsService {
+  list(filter?: AttachmentListFilter): AttachmentRecord[]
   get(attachmentId: AttachmentId): AttachmentRecord | undefined
   resolve(relativePath: string): AttachmentRecord | undefined
   importFile(input: ImportAttachmentInput): Promise<AttachmentRecord>

@@ -85,6 +85,15 @@ export class AttachmentsService extends Service {
     return this.table
   }
 
+  list(filter: import('@deepseek-ai/dsh-pkw-domain').AttachmentListFilter = {}): AttachmentRecord[] {
+    const out: AttachmentRecord[] = []
+    for (const [, record] of this.requireTable().entries()) {
+      if (!(filter.includeDeleted === true) && record.deletedAt !== undefined) continue
+      out.push(record)
+    }
+    return out
+  }
+
   get(attachmentId: AttachmentId): AttachmentRecord | undefined {
     return this.requireTable().get(attachmentId)
   }
