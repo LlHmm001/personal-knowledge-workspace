@@ -8,10 +8,16 @@
  * Verified against WeKnora 0.7.1:
  *  - Manual knowledge content is transported as a JSON string, stored in the
  *    `metadata` JSON column, and streamed back verbatim by
- *    `GET /knowledge/:id/download` (application/octet-stream). JSON string
- *    transport is lossless for Unicode / CJK / emoji, and WeKnora performs no
- *    newline (CRLF/LF), BOM, or trailing-newline normalization on manual
- *    content. Therefore the canonical form is the identity function.
+ *    `GET /knowledge/:id/download` (application/octet-stream). `readManualContent`
+ *    decodes raw bytes WITHOUT BOM stripping so a leading UTF-8 BOM survives.
+ *  - WeKnora runs `secutils.CleanMarkdown` over manual content on BOTH create
+ *    and update (it strips a fixed set of XSS patterns). The received content is
+ *    therefore ALREADY cleaned; canonicalization below applies the same strip so
+ *    the send-side fingerprint equals the recovery-side fingerprint even when a
+ *    note contains one of those patterns. The strip is idempotent, so applying it
+ *    to the already-cleaned received content is a no-op.
+ *  - Manual knowledge is a DRAFT (parse_status "draft", not indexed) unless the
+ *    payload carries `status: "publish"`. The Adapter always publishes.
  *  - File upload dedup (`file_hash`) is MD5 over the raw uploaded bytes, not
  *    sha256. Attachment remote verification therefore uses MD5, while the PKW
  *    local identity (AttachmentRecord.sha256) stays sha256.
@@ -22,20 +28,41 @@
 import { createHash } from 'node:crypto'
 
 /**
- * Normalize a Manual content string before fingerprinting.
- *
- * Current contract: identity. WeKnora stores manual content verbatim in a JSON
- * string and streams the raw bytes back (no CRLF/LF/BOM/trailing-newline
- * normalization), so the exact content round-trips. `readManualContent` decodes
- * the raw bytes WITHOUT BOM stripping (`TextDecoder` `ignoreBOM: true`) so a
- * leading UTF-8 BOM survives too. Kept as a named seam so any future WeKnora
- * normalization change lands here exactly once, on both send- and recovery-side.
+ * The XSS patterns WeKnora's `secutils.CleanMarkdown` strips (case-insensitive),
+ * replicated EXACTLY so canonicalization matches the real stored content.
+ * `.` matches non-newline on both sides (Go regexp default == JS without `s`).
+ */
+const XSS_PATTERNS: RegExp[] = [
+  /<script[^>]*>.*?<\/script>/i,
+  /<iframe[^>]*>.*?<\/iframe>/i,
+  /<object[^>]*>.*?<\/object>/i,
+  /<embed[^>]*>.*?<\/embed>/i,
+  /<embed[^>]*>/i,
+  /<form[^>]*>.*?<\/form>/i,
+  /<input[^>]*>/i,
+  /<button[^>]*>.*?<\/button>/i,
+  /javascript:/i,
+  /vbscript:/i,
+  /onload\s*=/i,
+  /onerror\s*=/i,
+  /onclick\s*=/i,
+  /onmouseover\s*=/i,
+  /onfocus\s*=/i,
+  /onblur\s*=/i,
+]
+
+/**
+ * Normalize a Manual content string before fingerprinting — must match exactly
+ * what WeKnora stores after `secutils.CleanMarkdown`. Used on both the send
+ * side and the recovery side (idempotent on already-cleaned content).
  */
 export function canonicalizeRemoteManualContent(content: string): string {
-  return content
+  let cleaned = content
+  for (const pattern of XSS_PATTERNS) cleaned = cleaned.replace(pattern, '')
+  return cleaned
 }
 
-/** Fingerprint of the exact Manual payload sent to / returned from WeKnora. */
+/** Fingerprint of the exact Manual payload WeKnora stores for the given content. */
 export function remoteManualFingerprint(content: string): string {
   return sha256Text(canonicalizeRemoteManualContent(content))
 }

@@ -13,7 +13,7 @@ import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { SqliteStorageBackend } from '@deepseek-ai/dsh-storage-sqlite'
 import WorkspaceRegistry from '@deepseek-ai/dsh-workspace'
 import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
-import { WeKnoraError, redactSecrets } from '@deepseek-ai/dsh-pkw-weknora'
+import { WeKnoraError, canonicalizeRemoteManualContent, redactSecrets } from '@deepseek-ai/dsh-pkw-weknora'
 import PkwEventStoreService from '../../events/src/index.ts'
 import PkwWorkspaceService from '../../workspace/src/index.ts'
 import NotesService from '../../notes/src/index.ts'
@@ -361,6 +361,24 @@ describe('manual payload fingerprint round-trip', () => {
     }
     // silence unused
     void notes; void sync
+  })
+})
+
+// ── canonicalization (matches WeKnora secutils.CleanMarkdown) ─────────────────
+
+describe('remote manual content canonicalization', () => {
+  it('strips WeKnora XSS patterns (idempotent) and leaves normal content untouched', () => {
+    const dirty = 'a<script>alert(1)</script>b<iframe>x</iframe>c[javascript:x](x) onload=1 onclick=2 end'
+    const once = canonicalizeRemoteManualContent(dirty)
+    expect(once).not.toContain('script')
+    expect(once).not.toContain('iframe')
+    expect(once).not.toContain('javascript:')
+    expect(once).not.toContain('onload=')
+    expect(once).not.toContain('onclick=')
+    expect(canonicalizeRemoteManualContent(once)).toBe(once) // idempotent
+
+    const clean = '---\nid: note_x\n---\n\n# 中文 🎉\nCRLF ok\r\n'
+    expect(canonicalizeRemoteManualContent(clean)).toBe(clean)
   })
 })
 

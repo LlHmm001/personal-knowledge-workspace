@@ -208,14 +208,17 @@ export class WeKnoraClient extends Service {
   async createManualKnowledge(kbId: string, input: { title: string; content: string }): Promise<ManualKnowledge> {
     const r = await this.request<{ data: ManualKnowledge }>(
       'POST', `/knowledge-bases/${kbId}/knowledge/manual`,
-      { title: input.title, content: input.content, channel: 'pkw' },
+      // `status: "publish"` is REQUIRED: without it WeKnora stores a draft
+      // (parse_status "draft", not indexed/searchable).
+      { title: input.title, content: input.content, channel: 'pkw', status: 'publish' },
     )
     return r.data
   }
 
   async updateManualKnowledge(knowledgeId: string, input: { title: string; content: string }): Promise<ManualKnowledge> {
     const r = await this.request<{ data: ManualKnowledge }>(
-      'PUT', `/knowledge/manual/${knowledgeId}`, { title: input.title, content: input.content, channel: 'pkw' },
+      'PUT', `/knowledge/manual/${knowledgeId}`,
+      { title: input.title, content: input.content, channel: 'pkw', status: 'publish' },
     )
     return r.data
   }

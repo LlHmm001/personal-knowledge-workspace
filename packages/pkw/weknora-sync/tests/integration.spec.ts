@@ -3,11 +3,11 @@
  *
  * Skipped unless a credential + a dedicated test KB are injected through the
  * environment (the API key is NEVER pasted into chat or committed):
- *   - WKNORA_API_KEY     (X-API-Key secret; prefer a Harness credential in real use)
- *   - WKNORA_TEST_KB_ID  (a dedicated test KB/namespace — this suite never creates
- *                         or deletes a KB, and only ever deletes knowledge objects
- *                         it created itself)
- *   - WKNORA_BASE_URL    (optional; defaults to the local instance)
+ *   - WEKNORA_API_KEY     (X-API-Key secret; prefer a Harness credential in real use)
+ *   - WEKNORA_TEST_KB_ID  (a dedicated test KB/namespace — this suite never creates
+ *                          or deletes a KB, and only ever deletes knowledge objects
+ *                          it created itself)
+ *   - WEKNORA_BASE_URL    (optional; defaults to the local instance)
  *
  * Every test cleans up only the knowledge objects it created (tracked ids).
  */
@@ -17,9 +17,9 @@ import { Context } from '@deepseek-ai/cordis'
 import { WeKnoraError } from '@deepseek-ai/dsh-pkw-weknora'
 import WeKnoraClient from '../../weknora/src/index.ts'
 
-const baseUrl = process.env.WKNORA_BASE_URL ?? 'http://127.0.0.1:18088/api/v1'
-const apiKey = process.env.WKNORA_API_KEY ?? ''
-const kbId = process.env.WKNORA_TEST_KB_ID ?? ''
+const baseUrl = process.env.WEKNORA_BASE_URL ?? 'http://127.0.0.1:18088/api/v1'
+const apiKey = process.env.WEKNORA_API_KEY ?? ''
+const kbId = process.env.WEKNORA_TEST_KB_ID ?? ''
 const hasCredential = apiKey !== '' && kbId !== ''
 
 const createdIds = new Set<string>()
@@ -42,18 +42,28 @@ afterAll(async () => {
 })
 
 describe.skipIf(!hasCredential)('real WeKnora integration (opt-in)', () => {
-  it('Manual create → list visibility → download round-trip', async () => {
+  it('Manual create → list visibility → download round-trip (complex Markdown)', async () => {
     const c = await getClient()
-    const content = '---\nid: pkw_it_manual\n---\n\n# integration\n\n中文 + emoji 🎉\n'
-    const created = await c.createManualKnowledge(kbId, { title: 'pkw-it-manual', content })
-    createdIds.add(created.id)
-    expect(created.id).toBeDefined()
+    // Representative complex Markdown: CJK, emoji, quoted frontmatter title,
+    // nested unknown field, CRLF, trailing newline, and a leading BOM case.
+    const cases = [
+      '---\nid: pkw_it_manual\ntitle: "quoted 标题"\nunknown:\n  nested: true\n---\n\n# integration\n\n中文 + emoji 🎉\n',
+      '---\r\nid: pkw_it_manual\r\n---\r\n\r\nCRLF body\r\n',
+      '\uFEFF---\nid: pkw_it_manual\n---\n\nBOM body\n',
+    ]
+    for (const content of cases) {
+      const created = await c.createManualKnowledge(kbId, { title: 'pkw-it-manual', content })
+      createdIds.add(created.id)
+      expect(created.id).toBeDefined()
 
-    const listed = await c.listKnowledge(kbId)
-    expect(listed.some(item => item.id === created.id)).toBe(true)
+      const listed = await c.listKnowledge(kbId)
+      expect(listed.some(item => item.id === created.id)).toBe(true)
 
-    const downloaded = await c.readManualContent(created.id)
-    expect(downloaded).toBe(content)
+      const downloaded = await c.readManualContent(created.id)
+      expect(downloaded).toBe(content)
+      // Fingerprint contract: send-side == recovery-side.
+      expect(c.fingerprintManualContent(downloaded)).toBe(c.fingerprintManualContent(content))
+    }
   })
 
   it('Manual update round-trips the new content', async () => {
@@ -73,17 +83,21 @@ describe.skipIf(!hasCredential)('real WeKnora integration (opt-in)', () => {
     expect(uploaded.id).toBeDefined()
     expect(uploaded.file_hash).toBeDefined()
 
-    let duplicateId: string | undefined
+    let duplicate: { id?: string; fileHash?: string } | undefined
     try {
       await c.uploadFile(kbId, { content: bytes, filename: 'pkw-it.txt', channel: 'pkw', mimeType: 'text/plain' })
     } catch (error) {
       if (error instanceof WeKnoraError && error.kind === 'conflict') {
-        duplicateId = error.duplicate?.id
+        duplicate = { id: error.duplicate?.id, fileHash: error.duplicate?.file_hash }
       } else {
         throw error
       }
     }
-    expect(duplicateId).toBe(uploaded.id)
+    // The 409 body is the recovery primitive: it carries BOTH the existing
+    // KnowledgeId and the file_hash (MD5) used to verify intended attachment state.
+    expect(duplicate?.id).toBe(uploaded.id)
+    expect(duplicate?.fileHash).toBe(uploaded.file_hash)
+    expect(duplicate?.fileHash).toBe(c.fingerprintFile(bytes))
   })
 
   it('parse status is a raw WeKnora status (not collapsed to "ready")', async () => {
@@ -91,7 +105,7 @@ describe.skipIf(!hasCredential)('real WeKnora integration (opt-in)', () => {
     const created = await c.createManualKnowledge(kbId, { title: 'pkw-it-parse', content: '---\nid: pkw_it_parse\n---\n\n# parse\n' })
     createdIds.add(created.id)
     const knowledge = await c.getKnowledge(created.id)
-    const raw = new Set(['pending', 'processing', 'finalizing', 'completed', 'failed', 'cancelled'])
+    const raw = new Set(['draft', 'pending', 'processing', 'finalizing', 'completed', 'failed', 'cancelled', 'deleting'])
     expect(raw.has(knowledge.parse_status ?? '')).toBe(true)
   })
 
