@@ -1,0 +1,9 @@
+{
+  "name": "@deepseek-ai/dsh-pkw-attachments",
+  "version": "0.1.0",
+  "description": "PKW Attachments core (ctx.pkwAttachments): workspace binary file is the source of truth; catalog is a rebuildable projection.",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "dependencies": {}
+}

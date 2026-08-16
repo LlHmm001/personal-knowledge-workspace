@@ -1,0 +1,9 @@
+{
+  "name": "@deepseek-ai/dsh-pkw-notes",
+  "version": "0.1.0",
+  "description": "PKW Markdown Notes core (ctx.pkwNotes): Markdown is the content source of truth; NoteIndex is a rebuildable projection.",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "dependencies": {}
+}

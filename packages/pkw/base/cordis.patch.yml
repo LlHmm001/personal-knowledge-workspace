@@ -1,0 +1,31 @@
+# PKW host-plane bundle patch. Layers over `@deepseek-ai/dsh-base` (which
+# supplies session/session-persistence/fs/sandbox/attachments — the `workspace`
+# row transitively needs `sessionPersistence`).
+#
+# One harness-managed SQLite DB; structured PKW state is partitioned by
+# workspaceId (never a `.system/workspace.sqlite` inside the workspace).
+# A patch replaces a row's whole `config`; `storage-domain.routes` remains the
+# backend-replaceability knob.
+
+- insert:
+    - id: storage
+      name: '@deepseek-ai/dsh-storage'
+
+    - id: storage-sqlite
+      name: '@deepseek-ai/dsh-storage-sqlite'
+      config:
+        path: !!js dshHomePath('pkw', 'pkw.sqlite')
+
+    - id: storage-domain
+      name: '@deepseek-ai/dsh-storage-domain'
+      config:
+        backend: sqlite
+
+    - id: workspace
+      name: '@deepseek-ai/dsh-workspace'
+
+    - id: pkw-events
+      name: '@deepseek-ai/dsh-pkw-events'
+
+    - id: pkw-workspace
+      name: '@deepseek-ai/dsh-pkw-workspace'

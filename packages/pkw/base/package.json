@@ -1,0 +1,11 @@
+{
+  "name": "@deepseek-ai/dsh-pkw-base",
+  "version": "0.1.0",
+  "description": "PKW host bundle: composes the harness storage/fs/workspace seams plus the PKW services.",
+  "type": "module",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
