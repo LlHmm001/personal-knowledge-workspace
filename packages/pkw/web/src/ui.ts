@@ -185,7 +185,7 @@ const STR = {
     quickSwitch:'快速切换笔记', typeToSearch:'输入标题或路径…',
     taskAll:'全部任务', taskToday:'今日', taskUpcoming:'即将到来', taskCompleted:'已完成', taskInbox:'收件箱（未分类）',
     q1:'重要且紧急', q2:'重要不紧急', q3:'紧急不重要', q4:'不紧急不重要',
-    taskQuickAdd:'快速添加任务', taskTitle:'标题', taskMatrix:'矩阵', taskQuadrant:'象限', taskPriority:'优先级', taskDue:'截止日期', taskSave:'创建', taskCancel:'取消',
+    taskQuickAdd:'快速添加任务', taskTitle:'标题', taskMatrix:'矩阵', taskQuadrant:'象限', taskPriority:'优先级', taskDue:'截止日期', taskSave:'创建', taskCancel:'取消', taskSaveEdit:'保存', taskClose:'关闭',
     noteToTask:'笔记 → 待办', selectionToTask:'选区 → 待办', taskNoTasks:'暂无任务。', taskTomorrow:'明天', taskYesterday:'昨天', taskOverdue:'已逾期',
     slashH1:'一级标题', slashH2:'二级标题', slashH3:'三级标题', slashList:'无序列表', slashTask:'任务列表', slashQuote:'引用', slashCalloutNote:'提示框', slashCalloutWarning:'警告框', slashTable:'表格', slashHr:'分割线',
     slashInlineCode:'行内代码', slashCodeBlock:'代码块', slashLink:'链接', slashWikiLink:'Wiki 链接', slashImage:'图片', slashFootnote:'脚注', slashCallout:'提示框',
@@ -221,7 +221,7 @@ const STR = {
     quickSwitch:'Quick switch note', typeToSearch:'Type a title or path…',
     taskAll:'All tasks', taskToday:'Today', taskUpcoming:'Upcoming', taskCompleted:'Completed', taskInbox:'Inbox (unassigned)',
     q1:'Important & Urgent', q2:'Important, Not Urgent', q3:'Urgent, Not Important', q4:'Not Urgent, Not Important',
-    taskQuickAdd:'Quick add task', taskTitle:'Title', taskMatrix:'Matrix', taskQuadrant:'Quadrant', taskPriority:'Priority', taskDue:'Due date', taskSave:'Create', taskCancel:'Cancel',
+    taskQuickAdd:'Quick add task', taskTitle:'Title', taskMatrix:'Matrix', taskQuadrant:'Quadrant', taskPriority:'Priority', taskDue:'Due date', taskSave:'Create', taskCancel:'Cancel', taskSaveEdit:'Save', taskClose:'Close',
     noteToTask:'Note → Task', selectionToTask:'Selection → Task', taskNoTasks:'No tasks yet.', taskTomorrow:'Tomorrow', taskYesterday:'Yesterday', taskOverdue:'Overdue',
     slashH1:'Heading 1', slashH2:'Heading 2', slashH3:'Heading 3', slashList:'Bullet list', slashTask:'Task list', slashQuote:'Quote', slashCalloutNote:'Callout', slashCalloutWarning:'Warning', slashTable:'Table', slashHr:'Divider',
     slashInlineCode:'Inline code', slashCodeBlock:'Code block', slashLink:'Link', slashWikiLink:'Wiki link', slashImage:'Image', slashFootnote:'Footnote', slashCallout:'Callout',
@@ -964,9 +964,9 @@ function dueLabel(iso){
   if (diff < -1) return t('taskOverdue') + ' ' + (-diff) + 'd'
   return (d.getMonth() + 1) + '/' + d.getDate()
 }
-function taskRow(x, matrices){
+function taskRow(x, matrices, inMatrix){
   const due = x.dueAt ? '<span class="muted mono">' + esc(dueLabel(x.dueAt)) + '</span>' : ''
-  const badge = x.matrixId ? '<span class="badge">' + esc(matrixName(matrices, x.matrixId)) + '</span>' : ''
+  const badge = (inMatrix ? '' : (x.matrixId ? '<span class="badge">' + esc(matrixName(matrices, x.matrixId)) + '</span>' : ''))
   const src = x.sourceRefs && x.sourceRefs[0] && x.sourceRefs[0].noteId
     ? '<span class="task-src" data-action="open-task-source" data-id="' + esc(x.sourceRefs[0].noteId) + '" data-exact="' + esc(x.sourceRefs[0].exact || '') + '" title="' + esc(t('openNote')) + '">📄</span>' : ''
   const mv = '<span class="task-mv"><span data-action="task-up" data-id="' + esc(x.taskId) + '" title="' + esc(t('moveUp')) + '">↑</span><span data-action="task-down" data-id="' + esc(x.taskId) + '" title="' + esc(t('moveDown')) + '">↓</span></span>'
@@ -1040,7 +1040,7 @@ function renderMatrixGrid(matrices, all, matrixId){
   const grid = cells.map(([q, label, title]) => {
     const items = open.filter(x => quadrantOf(x) === q)
     return '<div class="quad"><div class="quad-head"><b>' + label + '</b> <span class="muted">' + esc(title) + '</span><span class="count">' + items.length + '</span></div>' +
-      (items.length ? items.map(x => taskRow(x, matrices)).join('') : '<div class="empty small">—</div>') + '</div>'
+      (items.length ? items.map(x => taskRow(x, matrices, true)).join('') : '<div class="empty small">—</div>') + '</div>'
   }).join('')
   // Completed section keeps the matrix/quadrant context (group by quadrant).
   const doneRows = done.map(x => '<div class="tree-row task-card" data-action="open-task-detail" data-id="' + esc(x.taskId) + '"><span class="ic" data-action="toggle-task" data-completed="1" data-id="' + esc(x.taskId) + '">☑</span><span class="nm">' + esc(x.title) + '</span><span class="badge">Q' + quadrantOf(x) + '</span></div>').join('')
@@ -1048,7 +1048,7 @@ function renderMatrixGrid(matrices, all, matrixId){
     ? '<div class="list-section">' + esc(t('taskCompleted')) + ' (' + done.length + ')</div>' + doneRows
     : ''
   $('#main').innerHTML =
-    '<h2>' + esc(name) + '<span class="sub">' + esc(t('taskMatrix')) + '</span></h2>' +
+    '<h2>' + esc(name) + '<span class="sub">' + esc(t('matrices')) + '</span></h2>' +
     '<div class="toolbar"><button class="btn primary" data-action="new-task-matrix" data-id="' + esc(matrixId) + '">+ ' + esc(t('taskQuickAdd')) + '</button><button class="btn" data-action="new-matrix">+ ' + esc(t('newMatrix')) + '</button></div>' +
     '<div class="quad-grid">' + grid + '</div>' + doneHtml
 }
@@ -1422,15 +1422,17 @@ function taskDetailDialog(taskId){
       subSection +
       srcNote +
       '<div class="muted mono" style="font-size:11px">' + esc(t('taskCreated')) + ': ' + esc((task.createdAt || '').slice(0, 16)) + ' · ' + esc(t('updated')) + ': ' + esc((task.updatedAt || '').slice(0, 16)) + (task.completedAt ? ' · ' + esc(t('taskCompleted')) + ': ' + esc(task.completedAt.slice(0, 16)) : '') + '</div>' +
-      '<div class="toolbar"><button class="btn primary" id="tdSave">' + esc(t('taskSave')) + '</button><button class="btn" id="tdCancel">' + esc(t('taskCancel')) + '</button></div></div></div>'
+      '<div class="toolbar"><button class="btn primary" id="tdSave">' + esc(t('taskSaveEdit')) + '</button><button class="btn" id="tdCancel">' + esc(t('taskClose')) + '</button></div></div></div>'
     )
     const modal = $('#taskDetailModal')
-    $('#tdAddSub').addEventListener('click', () => {
+    const submitSubtask = () => {
       const title = $('#tdNewSub').value.trim()
       if (!title) return
       const pq = quadrantOf(task)
-      api('createTask', { title, parentTaskId: taskId, ...(task.matrixId ? { matrixId: task.matrixId } : {}), important: pq === 1 || pq === 2, urgent: pq === 1 || pq === 3 }).then(() => { modal.remove(); taskDetailDialog(taskId) }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
-    })
+      api('createTask', { title, parentTaskId: taskId, ...(task.matrixId ? { matrixId: task.matrixId } : {}), important: pq === 1 || pq === 2, urgent: pq === 1 || pq === 3 }).then(() => { $('#tdNewSub').value = ''; modal.remove(); taskDetailDialog(taskId) }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
+    }
+    $('#tdAddSub').addEventListener('click', submitSubtask)
+    $('#tdNewSub').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submitSubtask() } })
     $('#tdCancel').addEventListener('click', () => modal.remove())
     $('#tdSave').addEventListener('click', () => {
       const q = Number($('#tdQuad').value)
