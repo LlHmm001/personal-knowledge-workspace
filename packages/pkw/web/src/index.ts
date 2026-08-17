@@ -360,6 +360,14 @@ export class PkwWebService extends Service {
         await this.attachments.remove(AttachmentId(String(args.attachmentId)))
         return { deleted: true }
       }
+      case 'restoreAttachment': {
+        const rec = await this.attachments.restore(AttachmentId(String(args.attachmentId)))
+        return { attachmentId: String(rec.id), filename: rec.filename, deleted: false }
+      }
+      case 'purgeAttachment': {
+        await this.attachments.purge(AttachmentId(String(args.attachmentId)))
+        return { purged: true }
+      }
       case 'search': {
         return this.sync.search(String(args.query), { limit: typeof args.limit === 'number' ? args.limit : 10 })
       }

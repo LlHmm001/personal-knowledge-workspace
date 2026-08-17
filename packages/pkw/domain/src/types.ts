@@ -285,6 +285,8 @@ export interface PkwAttachmentsService {
   importFile(input: ImportAttachmentInput): Promise<AttachmentRecord>
   open(attachmentId: AttachmentId): Promise<Uint8Array>
   remove(attachmentId: AttachmentId): Promise<void>
+  restore(attachmentId: AttachmentId): Promise<AttachmentRecord>
+  purge(attachmentId: AttachmentId): Promise<void>
   reconcile(): Promise<ReconcileReport>
 }
 

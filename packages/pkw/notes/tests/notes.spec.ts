@@ -261,6 +261,23 @@ describe('pkw notes + attachments core', () => {
     expect(got.id).toBe(rec.id) // identity unchanged
   })
 
+  it('attachment trash → restore keeps identity, then purge removes it permanently', async () => {
+    const { attachments } = await boot()
+    const rec = await attachments.importFile({ content: new Uint8Array([9, 9, 9]), filename: 't.bin', mimeType: 'x' })
+    const id = rec.id
+    await attachments.remove(id)
+    expect(attachments.get(id)!.deletedAt).toBeDefined()
+    // explicit restore
+    const restored = await attachments.restore(id)
+    expect(restored.id).toBe(id)
+    expect(restored.deletedAt).toBeUndefined()
+    // trash again + purge
+    await attachments.remove(id)
+    await attachments.purge(id)
+    expect(attachments.get(id)).toBeUndefined()
+    expect(attachments.list({ includeDeleted: true }).some(a => a.id === id)).toBe(false)
+  })
+
   it('creates folders as real directories and lists them', async () => {
     const { notes, dir } = await boot()
     await notes.createFolder('工作/项目A')

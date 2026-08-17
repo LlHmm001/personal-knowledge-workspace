@@ -146,7 +146,11 @@ export class AttachmentsService extends Service {
   async remove(attachmentId: AttachmentId): Promise<void> {
     const record = this.requireTable().get(attachmentId)
     if (record === undefined || record.deletedAt !== undefined) return
-    await this.ctx.fs.remove(await this.ctx.fs.resolve(this.handle.attachmentPath(attachmentId, record.filename)))
+    // Soft delete (trash): move the binary to archive instead of hard-deleting.
+    await this.ctx.fs.rename(
+      await this.ctx.fs.resolve(this.handle.attachmentPath(attachmentId, record.filename)),
+      await this.ctx.fs.resolve(this.handle.archivePath(posix.join('attachments', String(attachmentId), record.filename))),
+    )
     const payload: AttachmentEventPayload = {
       attachmentId: String(attachmentId),
       relativePath: record.relativePath,
@@ -156,6 +160,37 @@ export class AttachmentsService extends Service {
     }
     await this.commitEvent(ATTACHMENT_DELETED, String(attachmentId), payload)
     await this.requireTable().put(attachmentId, { ...record, deletedAt: new Date().toISOString() })
+  }
+
+  /** Restore a trashed attachment: move the archived binary back, clear deletedAt. */
+  async restore(attachmentId: AttachmentId): Promise<AttachmentRecord> {
+    const record = this.requireTable().get(attachmentId)
+    if (record === undefined || record.deletedAt === undefined) {
+      throw new Error(`pkwAttachments: attachment '${attachmentId}' is not trashed`)
+    }
+    await this.ctx.fs.rename(
+      await this.ctx.fs.resolve(this.handle.archivePath(posix.join('attachments', String(attachmentId), record.filename))),
+      await this.ctx.fs.resolve(this.handle.attachmentPath(attachmentId, record.filename)),
+    )
+    await this.commitEvent(ATTACHMENT_RESTORED, String(attachmentId), {
+      attachmentId: String(attachmentId),
+      relativePath: record.relativePath,
+      sha256: record.sha256,
+      observedRevision: record.observedRevision + 1,
+      afterStateFingerprint: fingerprint(this.config.workspaceId, String(attachmentId), record.relativePath, record.sha256, false),
+    })
+    const restored = { ...record, deletedAt: undefined, observedRevision: record.observedRevision + 1 }
+    await this.requireTable().put(attachmentId, restored)
+    return restored
+  }
+
+  /** Permanently purge a trashed attachment and its archived binary. */
+  async purge(attachmentId: AttachmentId): Promise<void> {
+    const record = this.requireTable().get(attachmentId)
+    if (record === undefined) return
+    try { await this.ctx.fs.remove(await this.ctx.fs.resolve(this.handle.archivePath(posix.join('attachments', String(attachmentId), record.filename)))) } catch { /* already gone */ }
+    try { await this.ctx.fs.remove(await this.ctx.fs.resolve(this.handle.attachmentPath(attachmentId, record.filename))) } catch { /* already gone */ }
+    await this.requireTable().delete(attachmentId)
   }
 
   async reconcile(): Promise<ReconcileReport> {
