@@ -1313,6 +1313,14 @@ function clearTrashSelection(){
   document.querySelectorAll('.trash-check').forEach(cb => { cb.checked = false })
   updateTrashSelectionUI()
 }
+function patchTrashCache(okKeys){
+  const c = state.trashCache
+  if (!c) return
+  const okSet = new Set(okKeys)
+  c.notes = c.notes.filter(n => !okSet.has('note:' + n.noteId))
+  c.atts = c.atts.filter(a => !okSet.has('attachment:' + a.attachmentId))
+  c.folders = c.folders.filter(f => !okSet.has('folder:' + f.trashEntryId))
+}
 function doBatchRestore(keys){
   if (state.trashBusy) return
   state.trashBusy = true; updateTrashSelectionUI()
@@ -1320,6 +1328,7 @@ function doBatchRestore(keys){
     state.trashBusy = false
     const ok = r.ok || [], failed = r.failed || []
     for (const k of ok) state.trashSelection.delete(k)
+    patchTrashCache(ok)
     if (failed.length === 0) toast(t('trashRestored', { n: ok.length }), 'ok')
     else toast(t('trashRestoredPartial', { n: ok.length, m: failed.length }), 'warn')
     refreshTrash()
@@ -1332,6 +1341,7 @@ function doBatchPurge(keys){
     state.trashBusy = false
     const ok = r.ok || [], failed = r.failed || []
     for (const k of ok) state.trashSelection.delete(k)
+    patchTrashCache(ok)
     if (failed.length === 0) toast(t('trashPurged', { n: ok.length }), 'ok')
     else toast(t('trashPurgedPartial', { n: ok.length, m: failed.length }), 'warn')
     refreshTrash()
