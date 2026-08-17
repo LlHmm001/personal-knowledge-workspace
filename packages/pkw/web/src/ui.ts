@@ -168,6 +168,7 @@ const STR = {
     q1:'重要且紧急', q2:'重要不紧急', q3:'紧急不重要', q4:'不紧急不重要',
     taskQuickAdd:'快速添加任务', taskTitle:'标题', taskMatrix:'矩阵', taskQuadrant:'象限', taskPriority:'优先级', taskDue:'截止日期', taskSave:'创建', taskCancel:'取消',
     noteToTask:'笔记 → 待办', selectionToTask:'选区 → 待办', taskNoTasks:'暂无任务。', taskTomorrow:'明天', taskYesterday:'昨天', taskOverdue:'已逾期',
+    slashH1:'一级标题', slashH2:'二级标题', slashList:'无序列表', slashTask:'任务列表', slashQuote:'引用', slashCalloutNote:'提示框', slashCalloutWarning:'警告框', slashTable:'表格', slashHr:'分割线',
   },
   en: {
     overview:'Overview', notes:'Notes', attachments:'Attachments', tasks:'Tasks', trash:'Trash', search:'Search',
@@ -197,6 +198,7 @@ const STR = {
     q1:'Important & Urgent', q2:'Important, Not Urgent', q3:'Urgent, Not Important', q4:'Not Urgent, Not Important',
     taskQuickAdd:'Quick add task', taskTitle:'Title', taskMatrix:'Matrix', taskQuadrant:'Quadrant', taskPriority:'Priority', taskDue:'Due date', taskSave:'Create', taskCancel:'Cancel',
     noteToTask:'Note → Task', selectionToTask:'Selection → Task', taskNoTasks:'No tasks yet.', taskTomorrow:'Tomorrow', taskYesterday:'Yesterday', taskOverdue:'Overdue',
+    slashH1:'Heading 1', slashH2:'Heading 2', slashList:'Bullet list', slashTask:'Task list', slashQuote:'Quote', slashCalloutNote:'Callout', slashCalloutWarning:'Warning', slashTable:'Table', slashHr:'Divider',
   },
 }
 let lang = localStorage.getItem('pkw-lang') === 'en' ? 'en' : 'zh'
@@ -476,9 +478,27 @@ function initVditor(){
     height: '56vh',
     value: state.editor.body || '',
     toolbar: ['undo', 'redo', '|', 'headings', 'bold', 'italic', 'strike', '|', 'list', 'ordered-list', 'check', '|', 'quote', 'inline-code', 'code', '|', 'link', 'table', '|', 'upload', '|', 'outline'],
+    hint: {
+      parse: false,
+      delay: 0,
+      extend: [{ key: '/', hint: () => slashMenu() }],
+    },
     upload: { handler: (files) => { uploadVditorFiles(files) } },
     input: () => { onEditorInput() },
   })
+}
+function slashMenu(){
+  return [
+    { html: 'Ｈ1 · ' + esc(t('slashH1')), value: '# ' },
+    { html: 'Ｈ2 · ' + esc(t('slashH2')), value: '## ' },
+    { html: '• ' + esc(t('slashList')), value: '- ' },
+    { html: '☐ ' + esc(t('slashTask')), value: '- [ ] ' },
+    { html: '❝ ' + esc(t('slashQuote')), value: '> ' },
+    { html: '💡 ' + esc(t('slashCalloutNote')), value: '> [!NOTE]\\n> ' },
+    { html: '⚠️ ' + esc(t('slashCalloutWarning')), value: '> [!WARNING]\\n> ' },
+    { html: '⊞ ' + esc(t('slashTable')), value: '|  |  |\\n| --- | --- |\\n|  |  |\\n' },
+    { html: '— ' + esc(t('slashHr')), value: '---\\n' },
+  ]
 }
 function uploadVditorFiles(files){
   for (const file of files) {
