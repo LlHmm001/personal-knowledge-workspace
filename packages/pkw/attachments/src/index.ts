@@ -16,6 +16,7 @@ import {
   ATTACHMENT_RESTORED,
   ATTACHMENT_UPDATED,
   AttachmentId,
+  NoteId,
   OperationId,
   attachmentDomainSpec,
   type AttachmentRecord,
@@ -192,6 +193,13 @@ export class AttachmentsService extends Service {
     try { await this.ctx.fs.remove(await this.ctx.fs.resolve(this.handle.archivePath(posix.join('attachments', String(attachmentId), record.filename)))) } catch { /* already gone */ }
     try { await this.ctx.fs.remove(await this.ctx.fs.resolve(this.handle.attachmentPath(attachmentId, record.filename))) } catch { /* already gone */ }
     await this.requireTable().delete(attachmentId)
+  }
+
+  /** Persist (or clear) the durable Companion Note relation for an attachment. */
+  async setCompanionNote(attachmentId: AttachmentId, noteId: NoteId | null): Promise<void> {
+    const record = this.requireTable().get(attachmentId)
+    if (record === undefined) return
+    await this.requireTable().put(attachmentId, { ...record, companionNoteId: noteId ?? undefined })
   }
 
   async reconcile(): Promise<ReconcileReport> {

@@ -42,7 +42,7 @@ function md5Hex(b: Uint8Array): string {
 // ── stateful fake WeKnora ─────────────────────────────────────────────────────
 
 interface ManualRec { id: string; title: string; content: string; parseStatus: string }
-interface FileRec { id: string; title: string; filename: string; fileHash: string; parseStatus: string; content: Buffer }
+interface FileRec { id: string; title: string; filename: string; fileHash: string; parseStatus: string; content: Buffer; summary?: string; summaryStatus?: string }
 
 interface FakeWeKnora {
   baseUrl: string
@@ -222,7 +222,7 @@ function startFakeServer(): Promise<FakeWeKnora> {
         const m = fake.manuals.get(get[1]!)
         if (m !== undefined) { send(200, { data: { id: m.id, title: m.title, parse_status: m.parseStatus, channel: 'pkw' } }); return }
         const f = fake.files.get(get[1]!)
-        if (f !== undefined) { send(200, { data: { id: f.id, title: f.title, file_name: f.filename, file_hash: f.fileHash, parse_status: f.parseStatus } }); return }
+        if (f !== undefined) { send(200, { data: { id: f.id, title: f.title, file_name: f.filename, file_hash: f.fileHash, parse_status: f.parseStatus, description: f.summary, summary_status: f.summaryStatus } }); return }
         res.writeHead(404); res.end('{}'); return
       }
 
@@ -785,6 +785,50 @@ describe('secret redaction', () => {
     const intent = sync.listIntents().find(i => i.state === 'permanent')!
     expect(intent.lastError).not.toContain('test-key')
     expect(intent.lastError).not.toContain('X-API-Key')
+  })
+})
+
+// ── Companion Note summary materialization ────────────────────────────────────
+
+describe('companion summary materialization', () => {
+  it('materializes the Attachment Knowledge summary into the Companion Note (upsert, reuse KnowledgeId)', async () => {
+    const { attachments, notes, sync, fake } = await boot()
+    const note = await notes.create({ relativePath: '海报3.md', markdown: '# 海报3\n\n![](attachments/att_x/海报3.png)\n' })
+    const rec = await attachments.importFile({ content: Buffer.from('PNG'), filename: '海报3.png', mimeType: 'image/png' })
+    await attachments.setCompanionNote(rec.id, note.noteId)
+    const knowledgeId = await sync.syncAttachment(rec.id)
+    // summary becomes ready on the remote projection
+    const f = fake.files.get(knowledgeId)!
+    f.summary = '这张海报展示了……'
+    f.summaryStatus = 'completed'
+
+    const changed = await sync.materializeCompanionSummary(rec.id)
+    expect(changed).toBe(true)
+    const doc = await notes.getDocument(note.noteId)
+    expect(doc.markdown).toContain('附件解析摘要')
+    expect(doc.markdown).toContain('这张海报展示了……')
+
+    // same summary → no-op (no second write)
+    const changedAgain = await sync.materializeCompanionSummary(rec.id)
+    expect(changedAgain).toBe(false)
+
+    // replace-in-place on a new summary (reparse update)
+    f.summary = '新摘要'
+    const changed3 = await sync.materializeCompanionSummary(rec.id)
+    expect(changed3).toBe(true)
+    const doc3 = await notes.getDocument(note.noteId)
+    expect(doc3.markdown).toContain('新摘要')
+    expect(doc3.markdown).not.toContain('这张海报展示了')
+    expect(doc3.markdown.split('pkw:attachment-summary:start').length - 1).toBe(1)
+  })
+
+  it('does NOT materialize for an attachment without a companion relation', async () => {
+    const { attachments, sync, fake } = await boot()
+    const rec = await attachments.importFile({ content: Buffer.from('X'), filename: 'x.png', mimeType: 'image/png' })
+    const knowledgeId = await sync.syncAttachment(rec.id)
+    fake.files.get(knowledgeId)!.summary = 'no note'; fake.files.get(knowledgeId)!.summaryStatus = 'completed'
+    const changed = await sync.materializeCompanionSummary(rec.id)
+    expect(changed).toBe(false)
   })
 })
 

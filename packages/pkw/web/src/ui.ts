@@ -1255,7 +1255,9 @@ async function createCompanionNote(up, file, folder){
   const ref = 'attachments/' + up.attachmentId + '/' + file.name
   const refMd = isImage ? '![](' + ref + ')' : '[' + file.name + '](' + ref + ')'
   const notePath = await uniqueNotePath(folder, base)
-  await api('createNote', { relativePath: notePath, markdown: '# ' + base + '\\n\\n' + refMd + '\\n' })
+  const created = await api('createNote', { relativePath: notePath, markdown: '# ' + base + '\\n\\n' + refMd + '\\n' })
+  // Persist the durable Companion relation: AttachmentId → NoteId (not title/path).
+  await api('setCompanionNote', { attachmentId: up.attachmentId, noteId: created.noteId }).catch(() => {})
   return notePath
 }
 async function uploadFilesWithCompanion(files, withNote, folder, index){

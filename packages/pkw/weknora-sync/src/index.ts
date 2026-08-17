@@ -25,7 +25,7 @@ import { z } from 'zod'
 import { randomUUID } from 'node:crypto'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import type { Domain, KvTable } from '@deepseek-ai/dsh-storage-domain'
-import { AttachmentId, NoteId } from '@deepseek-ai/dsh-pkw-domain'
+import { AttachmentId, NoteId, extractAttachmentSummary, insertAttachmentSummary } from '@deepseek-ai/dsh-pkw-domain'
 import type { NoteId as NoteIdT, AttachmentId as AttachmentIdT } from '@deepseek-ai/dsh-pkw-domain'
 import {
   WeKnoraError,
@@ -223,6 +223,10 @@ export class WeKnoraSyncService extends Service {
         this.ctx.logger.warn('pkw weknora sync drain failed')
         this.ctx.logger.warn(error)
       })
+      void this.drainCompanionSummaries().catch((error: unknown) => {
+        this.ctx.logger.warn('pkw companion summary sweep failed')
+        this.ctx.logger.warn(error)
+      })
     }, this.config.pollMs)
 
     // Restart resume: actively recover dirty/pending/unknown/retryable state,
@@ -324,6 +328,44 @@ export class WeKnoraSyncService extends Service {
       if (id === undefined) throw new Error(`pkwWeKnoraSync: attachment '${attachmentId}' did not converge`)
       return id
     })
+  }
+
+  /**
+   * Companion Note summary materialization: when the Attachment Knowledge
+   * summary is ready (description non-empty), upsert the managed summary block
+   * into the Companion Note's canonical Markdown. Idempotent (same summary =
+   * no-op), replace-in-place, and updates the SAME Note KnowledgeId (never
+   * creates a second manual knowledge).
+   */
+  async materializeCompanionSummary(attachmentId: AttachmentIdT): Promise<boolean> {
+    const rec = this.ctx.pkwAttachments.get(attachmentId)
+    if (rec === undefined || rec.companionNoteId === undefined) return false
+    const mapping = this.reqMappings().get(this.entityKey(ENTITY_ATTACHMENT, String(attachmentId)))
+    if (mapping === undefined || mapping.knowledgeId === undefined) return false
+    let description: string | undefined
+    try {
+      const k = await this.ctx.pkwWeKnora.getKnowledge(mapping.knowledgeId)
+      if (k.summary_status !== 'completed' || !k.description) return false
+      description = k.description
+    } catch { return false } // offline → retry next drain
+
+    const noteId = NoteId(String(rec.companionNoteId))
+    const doc = await this.ctx.pkwNotes.getDocument(noteId).catch(() => undefined)
+    if (doc === undefined) return false
+    const current = extractAttachmentSummary(doc.markdown, String(attachmentId))
+    if (current !== undefined && current.trim() === description.trim()) return false // no-op
+    const next = insertAttachmentSummary(doc.markdown, String(attachmentId), description)
+    await this.ctx.pkwNotes.update(noteId, next)
+    this.ctx.logger.info(`[pkw.knowledge] companion-summary attachment=${String(attachmentId)} note=${String(noteId)}`)
+    return true
+  }
+
+  /** Best-effort sweep: materialize summaries for every attachment with a Companion Note. */
+  async drainCompanionSummaries(): Promise<void> {
+    for (const rec of this.ctx.pkwAttachments.list({})) {
+      if (rec.companionNoteId === undefined) continue
+      try { await this.materializeCompanionSummary(rec.id) } catch { /* retry next drain */ }
+    }
   }
 
   getMapping(noteId: NoteIdT): MappingRecord | undefined {

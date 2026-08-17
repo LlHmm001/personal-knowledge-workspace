@@ -209,6 +209,8 @@ export interface AttachmentRecord {
   deletedAt?: string
   /** When false, the attachment stays local and is never projected to WeKnora. */
   indexable?: boolean
+  /** The Companion Note (Direct Upload) that owns this attachment's summary block. */
+  companionNoteId?: NoteId
 }
 
 export interface AttachmentRef {
@@ -310,6 +312,7 @@ export interface PkwAttachmentsService {
   remove(attachmentId: AttachmentId): Promise<void>
   restore(attachmentId: AttachmentId): Promise<AttachmentRecord>
   purge(attachmentId: AttachmentId): Promise<void>
+  setCompanionNote(attachmentId: AttachmentId, noteId: NoteId | null): Promise<void>
   reconcile(): Promise<ReconcileReport>
 }
 

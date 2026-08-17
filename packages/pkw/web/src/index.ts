@@ -555,6 +555,10 @@ export class PkwWebService extends Service {
         const rec = await this.attachments.importFile({ content, filename: String(args.filename), mimeType: String(args.mimeType), ...(args.indexable !== undefined ? { indexable: args.indexable === true } : {}) })
         return { attachmentId: String(rec.id), filename: rec.filename, sizeBytes: rec.sizeBytes }
       }
+      case 'setCompanionNote': {
+        await this.attachments.setCompanionNote(AttachmentId(String(args.attachmentId)), args.noteId !== undefined && args.noteId !== null ? NoteId(String(args.noteId)) : null)
+        return { ok: true }
+      }
       case 'deleteAttachment': {
         await this.attachments.remove(AttachmentId(String(args.attachmentId)))
         return { deleted: true }
