@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
 import { renderMarkdownToHtml } from '../src/lute.ts'
 
 /**
@@ -69,5 +70,49 @@ describe('lute markdown renderer (Host Reading)', () => {
     const html = await renderMarkdownToHtml('[[<script>alert(1)</script>]]')
     expect(html).not.toContain('<script>alert')
     expect(html).toContain('data-wiki="&lt;script&gt;alert(1)&lt;/script&gt;"')
+  })
+
+  it('renders the full editor-compatibility fixture with no drift', async () => {
+    const md = readFileSync(new URL('../../../../fixtures/editor-compatibility.md', import.meta.url), 'utf8')
+    const html = await renderMarkdownToHtml(md)
+    // Headings + inline.
+    expect(html).toContain('<h1>H1</h1>')
+    expect(html).toContain('<h4>H4</h4>')
+    expect(html).toContain('<strong>bold</strong>')
+    expect(html).toContain('<em>italic</em>')
+    expect(html).toContain('<del>strike</del>')
+    expect(html).toContain('<mark>highlight</mark>')
+    // Lists + task list.
+    expect(html).toContain('<li>Bullet item one</li>')
+    expect(html).toContain('<li>Ordered two</li>')
+    expect(html).toContain('class="vditor-task"')
+    expect(html).toContain('vditor-task--done')
+    // Blockquote + all 9 callout subtypes.
+    expect(html).toContain('<blockquote>')
+    for (const type of ['NOTE', 'TIP', 'INFO', 'IMPORTANT', 'WARNING', 'QUESTION', 'EXAMPLE', 'SUCCESS', 'DANGER']) {
+      expect(html).toContain(`data-subtype="${type}"`)
+    }
+    // Links, wiki link, image + managed attachment (rewritten).
+    expect(html).toContain('<a href="https://example.com">A normal link</a>')
+    expect(html).toContain('<a class="wikilink" data-wiki="Wiki Link">Wiki Link</a>')
+    expect(html).toContain('<img src="/pkw/attachment/abc" alt="Image alt" />')
+    expect(html).toContain('<a href="/pkw/attachment/abc">Managed Attachment</a>')
+    // GFM table with column alignment.
+    expect(html).toContain('<table>')
+    expect(html).toContain('<th>Col A</th>')
+    expect(html).toContain('align="center"')
+    expect(html).toContain('align="right"')
+    // Inline code + fenced code (js/python/bash languages preserved).
+    expect(html).toContain('Inline <code>code</code> here.')
+    expect(html).toContain('<code class="language-js">')
+    expect(html).toContain('<code class="language-python">')
+    expect(html).toContain('<code class="language-bash">')
+    // Horizontal rule + footnote.
+    expect(html).toContain('<hr')
+    expect(html).toContain('footnotes-ref')
+    expect(html).toContain('footnotes-defs-div')
+    // No raw wiki syntax or unresolved attachment path leaks through.
+    expect(html).not.toContain('[[Wiki')
+    expect(html).not.toContain('attachments/abc/')
   })
 })
