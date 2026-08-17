@@ -1495,6 +1495,16 @@ let activeTaskDetailSession = 0
 let taskDetailRefreshSubtasks = null
 let taskDetailRequestClose = null
 let taskDetailToggleSubtask = null
+// Subtask data cache (parentTaskId → Task[]) + request dedup map. UI-only fast
+// projection; the Task Store remains canonical authority.
+const subtaskCache = new Map()
+const subtaskInflight = new Map()
+function fetchSubtasks(parentTaskId){
+  if (subtaskInflight.has(parentTaskId)) return subtaskInflight.get(parentTaskId)
+  const p = api('listSubtasks', { parentTaskId }).then(list => { subtaskCache.set(parentTaskId, list); return list }).finally(() => { subtaskInflight.delete(parentTaskId) })
+  subtaskInflight.set(parentTaskId, p)
+  return p
+}
 function inlineEditSubtask(span, taskId){
   const cur = span.textContent
   const input = document.createElement('input')
@@ -1581,7 +1591,7 @@ function taskDetailDialog(taskId){
     let parentDirty = false
     let saving = false
     let subtaskSubmitting = false
-    const isDirty = () => parentDirty || Object.keys(subtaskDraft).some(k => subtaskBaseline[k] !== subtaskDraft[k])
+    const isDirty = () => parentDirty
     const updateState = () => {
       const st = qs('#tdState')
       const sv = qs('#tdSave')
@@ -1599,9 +1609,24 @@ function taskDetailDialog(taskId){
     const toggleSubtask = (subId) => {
       const s = subtaskList.find(x => x.taskId === subId)
       if (!s) return
-      subtaskDraft = { ...subtaskDraft, [subId]: !proj(s) }
+      const target = !proj(s)
+      // Optimistic local flip (auto-save, not Parent Save-managed draft).
+      subtaskDraft = { ...subtaskDraft, [subId]: target }
       renderSubtaskSection()
-      updateState()
+      const op = target ? api('completeTask', { taskId: subId }) : api('reopenTask', { taskId: subId })
+      op.then(() => {
+        if (!isActive()) return
+        subtaskBaseline[subId] = target
+        delete subtaskDraft[subId]
+        const c = subtaskCache.get(taskId)
+        if (c) { const i = c.findIndex(x => x.taskId === subId); if (i >= 0) c[i] = { ...c[i], status: target ? 'completed' : 'open' } }
+        renderSubtaskSection()
+      }).catch(e => {
+        if (!isActive()) return
+        delete subtaskDraft[subId] // rollback optimistic flip
+        renderSubtaskSection()
+        toast(t('genericError') + ': ' + e.message, 'err')
+      })
     }
     taskDetailToggleSubtask = toggleSubtask
     let guardEl = null
@@ -1624,23 +1649,29 @@ function taskDetailDialog(taskId){
     }
     taskDetailRequestClose = requestClose
     // Re-fetch + patch ONLY the #tdSubtasks section (never the whole modal).
-    const refreshSubtasks = () => api('listSubtasks', { parentTaskId: taskId }).then(list => {
-      if (!isActive()) return
+    const applyList = (list) => {
+      const prevKey = subtaskList.map(s => s.taskId + ':' + s.status + ':' + s.title).join('|')
+      const nextKey = list.map(s => s.taskId + ':' + s.status + ':' + s.title).join('|')
       subtaskList = list
       subtaskBaseline = {}
       for (const s of list) subtaskBaseline[s.taskId] = (s.status === 'completed')
       // Prune pending entries for children that no longer exist (deleted).
       for (const k of Object.keys(subtaskDraft)) if (!(k in subtaskBaseline)) delete subtaskDraft[k]
-      renderSubtaskSection()
-    })
+      if (prevKey !== nextKey) renderSubtaskSection()
+    }
+    // Cache-first + stale-while-revalidate + dedup (no duplicate in-flight request).
+    const refreshSubtasks = () => {
+      const cached = subtaskCache.get(taskId)
+      if (cached) applyList(cached) // render cached immediately, then revalidate
+      return fetchSubtasks(taskId).then(list => { if (isActive()) applyList(list) })
+    }
     taskDetailRefreshSubtasks = refreshSubtasks
     const doSave = (andClose) => {
       if (!isActive() || saving) return
       saving = true
       updateState()
       const q = Number(qs('#tdQuad').value)
-      const changes = Object.keys(subtaskDraft).filter(k => subtaskBaseline[k] !== subtaskDraft[k]).map(k => ({ taskId: k, completed: subtaskDraft[k] }))
-      const parent = api('updateTask', { taskId, patch: {
+      api('updateTask', { taskId, patch: {
         title: qs('#tdTitle').value.trim(),
         description: qs('#tdDesc').value,
         status: qs('#tdStatus').value,
@@ -1650,13 +1681,9 @@ function taskDetailDialog(taskId){
         ...(qs('#tdSched').value ? { scheduledAt: qs('#tdSched').value } : {}),
         ...(qs('#tdDue').value ? { dueAt: qs('#tdDue').value } : {}),
         tags: (qs('#tdTags').value || '').split(',').map(s => s.trim()).filter(Boolean),
-      } })
-      const childOps = changes.map(c => c.completed ? api('completeTask', { taskId: c.taskId }) : api('reopenTask', { taskId: c.taskId }))
-      Promise.all([parent, ...childOps]).then(() => {
+      } }).then(() => {
         if (!isActive()) return
         parentDirty = false
-        for (const c of changes) subtaskBaseline[c.taskId] = c.completed
-        subtaskDraft = {}
         saving = false
         updateState()
         renderTasks()
