@@ -190,6 +190,8 @@ aside.right h3:first-child{margin-top:0}
 .sel-toolbar{position:fixed;z-index:89;background:var(--panel);border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 14px rgba(0,0,0,.18);padding:3px;display:flex;gap:2px}
 .sel-btn{padding:4px 7px;font-size:12px;cursor:pointer;border-radius:5px;color:var(--ink);min-width:20px;text-align:center}.sel-btn:hover{background:var(--bg-hover)}
 .task-card.dragging{opacity:.45}
+.task-card.selected{background:var(--bg-selected);border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.marquee{position:fixed;border:1px solid var(--accent);background:var(--accent-soft);z-index:85;pointer-events:none}
 .drop-over{outline:2px dashed var(--accent);outline-offset:-2px;background:var(--co-note-bg)}
 .task-src{margin-left:6px;cursor:pointer;opacity:.65}.task-src:hover{opacity:1}
 .task-mv{margin-left:auto;display:inline-flex;gap:2px;opacity:.55}.task-mv span{cursor:pointer;padding:0 5px;border-radius:4px}.task-mv span:hover{background:var(--bg-hover);opacity:1}
@@ -255,6 +257,7 @@ const STR = {
     copyWikiLink:'复制 Wiki 链接', taskComplete:'完成', taskReopen:'重新打开', taskDuplicate:'复制任务', taskDelete:'删除任务', matrixArchive:'归档', matrixRemove:'删除四象限', matrixRemoveConfirm:'删除该四象限？其全部任务将移回 Inbox。',
     matrixDeleting:'正在删除四象限', matrixMovingTasks:'正在将 {n} 个任务移回 Inbox，然后删除该四象限…', matrixDeleted:'已将 {n} 个任务移回 Inbox，并删除四象限。', matrixDeleteFailed:'删除四象限失败', retry:'重试',
     matrixTasksCount:'该四象限中共有 {n} 项任务。', matrixMoveToInbox:'移动到 Inbox', matrixMoveToInboxHint:'保留任务，只移除四象限归属', matrixDeleteTasks:'删除这些任务', matrixDeleteTasksHint:'删除四象限时同时删除其中任务（删除后无法恢复）', matrixDeletingTasks:'正在删除 {n} 项任务，然后删除四象限…', matrixDeletedTasks:'已删除 {n} 项任务和该四象限。',
+    batchComplete:'标记完成', batchReopen:'重新打开', batchDelete:'删除 {n} 项任务', batchDeleteConfirm:'删除 {n} 项任务？', batchDeleteHint:'这些任务删除后无法恢复。', batchDone:'已处理 {n} 项', batchPartial:'已处理 {n} 项，{m} 项失败',
     themeSystem:'跟随系统', themeLight:'浅色', themeDark:'深色',
     knowledge:'知识库', knowledgeIndexed:'已索引', knowledgePending:'待索引', knowledgeNotIndexed:'未索引', knowledgeParseFailed:'解析失败', relatedNotes:'相关笔记', refAttachments:'引用附件', mime:'类型',
     companionNote:'建立伴随笔记', noteLocation:'笔记位置', kbIndex:'知识库索引', kbIndexHint:'索引可解析附件', uploadedNoNote:'文件已上传，但伴随笔记创建失败', uploadedCompanion:'已生成 {n} 篇伴随笔记',
@@ -308,6 +311,7 @@ const STR = {
     copyWikiLink:'Copy wiki link', taskComplete:'Complete', taskReopen:'Reopen', taskDuplicate:'Duplicate task', taskDelete:'Delete task', matrixArchive:'Archive', matrixRemove:'Delete matrix', matrixRemoveConfirm:'Delete this matrix? All its tasks will move back to Inbox.',
     matrixDeleting:'Deleting matrix', matrixMovingTasks:'Moving {n} tasks back to Inbox, then deleting this matrix…', matrixDeleted:'Moved {n} tasks back to Inbox and deleted the matrix.', matrixDeleteFailed:'Failed to delete matrix', retry:'Retry',
     matrixTasksCount:'This matrix has {n} tasks.', matrixMoveToInbox:'Move to Inbox', matrixMoveToInboxHint:'Keep tasks, only remove the matrix', matrixDeleteTasks:'Delete these tasks', matrixDeleteTasksHint:'Delete the tasks together with the matrix (cannot be undone)', matrixDeletingTasks:'Deleting {n} tasks, then deleting this matrix…', matrixDeletedTasks:'Deleted {n} tasks and the matrix.',
+    batchComplete:'Mark complete', batchReopen:'Reopen', batchDelete:'Delete {n} tasks', batchDeleteConfirm:'Delete {n} tasks?', batchDeleteHint:'These tasks cannot be restored after deletion.', batchDone:'Processed {n} items', batchPartial:'Processed {n} items, {m} failed',
     themeSystem:'Follow system', themeLight:'Light', themeDark:'Dark',
     knowledge:'Knowledge', knowledgeIndexed:'Indexed', knowledgePending:'Pending', knowledgeNotIndexed:'Not indexed', knowledgeParseFailed:'Parse failed', relatedNotes:'Related notes', refAttachments:'Referenced attachments', mime:'Type',
     companionNote:'Create companion note', noteLocation:'Note location', kbIndex:'Knowledge indexing', kbIndexHint:'Index parseable attachments', uploadedNoNote:'File uploaded, but companion note creation failed', uploadedCompanion:'Created {n} companion notes',
@@ -380,6 +384,7 @@ const state = {
   trashFilter: 'all',
   trashBusy: false,
   inspectorCollapsed: false,
+  selectedTaskIds: new Set(),
 }
 // ── View switching: navigation guard + single-flight + instrumentation ──────
 let viewSeq = 0
@@ -1324,6 +1329,9 @@ function renderTasksFrom(matrices, all){
     '<div class="tree-row" data-action="new-matrix"><span class="ic">＋</span><span class="nm">' + esc(t('newMatrix')) + '</span></div>'
   if (state.taskView === 'all' || state.taskView === 'today' || state.taskView === 'upcoming' || state.taskView === 'completed' || state.taskView === 'inbox') renderTaskList(matrices, all, state.taskView)
   else renderMatrixGrid(matrices, all, state.taskView)
+  // Reconcile selection with the freshly rendered visible root tasks (intersection).
+  reconcileTaskSelection(all.filter(x => x.parentTaskId === null).map(x => x.taskId))
+  applyTaskSelectionVisual()
   restoreScroll()
 }
 async function renderTasks(){
@@ -1656,6 +1664,95 @@ function showTaskContextMenu(x, y, taskId, completed){
     { label: '🗑 ' + t('taskDelete'), action: 'task-delete', id: taskId, danger: true },
   ])
 }
+// ── Task multi-selection (marquee + Ctrl/Cmd toggle + batch context menu) ────
+let taskMarquee = null
+function applyTaskSelectionVisual(){
+  document.querySelectorAll('#main .task-card').forEach(card => { card.classList.toggle('selected', state.selectedTaskIds.has(card.dataset.id)) })
+}
+function clearTaskSelection(){ state.selectedTaskIds.clear(); applyTaskSelectionVisual() }
+function toggleTaskSelection(id){ if (state.selectedTaskIds.has(id)) state.selectedTaskIds.delete(id); else state.selectedTaskIds.add(id); applyTaskSelectionVisual() }
+function reconcileTaskSelection(visibleIds){
+  const set = new Set(visibleIds)
+  let changed = false
+  for (const id of Array.from(state.selectedTaskIds)) if (!set.has(id)) { state.selectedTaskIds.delete(id); changed = true }
+  if (changed) applyTaskSelectionVisual()
+}
+function marqueeIntersect(rect){
+  const cards = document.querySelectorAll('#main .task-card')
+  cards.forEach(card => {
+    const r = card.getBoundingClientRect()
+    const hit = !(r.right < rect.left || r.left > rect.right || r.bottom < rect.top || r.top > rect.bottom)
+    if (hit) state.selectedTaskIds.add(card.dataset.id)
+  })
+  applyTaskSelectionVisual()
+}
+function startTaskMarquee(x, y){
+  clearTaskSelection()
+  taskMarquee = { x0: x, y0: y, el: document.createElement('div') }
+  taskMarquee.el.className = 'marquee'
+  document.body.appendChild(taskMarquee.el)
+}
+function updateTaskMarquee(x, y){
+  if (!taskMarquee) return
+  const l = Math.min(taskMarquee.x0, x), t = Math.min(taskMarquee.y0, y)
+  const w = Math.abs(x - taskMarquee.x0), h = Math.abs(y - taskMarquee.y0)
+  taskMarquee.el.style.left = l + 'px'; taskMarquee.el.style.top = t + 'px'
+  taskMarquee.el.style.width = w + 'px'; taskMarquee.el.style.height = h + 'px'
+  marqueeIntersect({ left: l, top: t, right: l + w, bottom: t + h })
+}
+function endTaskMarquee(){ if (taskMarquee) { taskMarquee.el.remove(); taskMarquee = null } }
+async function batchTaskOp(op){
+  const ids = Array.from(state.selectedTaskIds)
+  const settled = await Promise.allSettled(ids.map(id => api(op, { taskId: id })))
+  const ok = [], failed = []
+  settled.forEach((r, i) => { (r.status === 'fulfilled' ? ok : failed).push(ids[i]) })
+  return { ok, failed }
+}
+function batchTaskCompleteOrReopen(op){
+  batchTaskOp(op).then(({ ok, failed }) => {
+    for (const id of ok) state.selectedTaskIds.delete(id)
+    if (failed.length === 0) toast(t('batchDone', { n: ok.length }), 'ok')
+    else toast(t('batchPartial', { n: ok.length, m: failed.length }), 'warn')
+    refreshTasks()
+  }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
+}
+function confirmBatchTaskDelete(){
+  const n = state.selectedTaskIds.size
+  trashConfirmDialog(t('batchDeleteConfirm', { n }), esc(t('batchDeleteHint')), t('batchDelete', { n }), () => {
+    batchTaskOp('deleteTask').then(({ ok, failed }) => {
+      for (const id of ok) state.selectedTaskIds.delete(id)
+      if (failed.length === 0) toast(t('batchDone', { n: ok.length }), 'ok')
+      else toast(t('batchPartial', { n: ok.length, m: failed.length }), 'warn')
+      refreshTasks()
+    }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
+  })
+}
+function showBatchTaskMenu(x, y){
+  const n = state.selectedTaskIds.size
+  dismissContextMenu()
+  const menu = document.createElement('div')
+  menu.className = 'ctx-menu'; menu.id = 'ctxMenu'
+  menu.style.left = Math.min(x, window.innerWidth - 220) + 'px'
+  menu.style.top = Math.min(y, window.innerHeight - 140) + 'px'
+  const items = [
+    ['✓ ' + t('batchComplete'), () => batchTaskCompleteOrReopen('completeTask')],
+    ['↩ ' + t('batchReopen'), () => batchTaskCompleteOrReopen('reopenTask')],
+    ['🗑 ' + t('batchDelete', { n }), () => confirmBatchTaskDelete()],
+  ]
+  menu.innerHTML = items.map((it, i) => '<div class="ctx-item' + (i === 2 ? ' danger' : '') + '" data-edit-idx="' + i + '">' + esc(it[0]) + '</div>').join('')
+  menu.addEventListener('click', (e) => { const it = e.target.closest('[data-edit-idx]'); if (it) { const fn = items[Number(it.dataset.editIdx)][1]; dismissContextMenu(); fn() } })
+  document.body.appendChild(menu)
+}
+document.addEventListener('mousedown', (e) => {
+  if (e.button !== 0 || state.view !== 'tasks') return
+  if (e.target.closest('.task-card') || e.target.closest('button') || e.target.closest('input') || e.target.closest('.ctx-menu') || e.target.closest('a')) return
+  if (!e.target.closest('#main')) return
+  if (e.ctrlKey || e.metaKey) return
+  startTaskMarquee(e.clientX, e.clientY)
+})
+document.addEventListener('mousemove', (e) => { if (taskMarquee) updateTaskMarquee(e.clientX, e.clientY) })
+document.addEventListener('mouseup', () => { endTaskMarquee() })
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { clearTaskSelection(); dismissContextMenu() } })
 function showMatrixContextMenu(x, y, matrixId){
   showContextMenu(x, y, [
     { label: '✏️ ' + t('renameFolder'), action: 'matrix-rename', id: matrixId },
@@ -1993,7 +2090,17 @@ document.addEventListener('contextmenu', (e) => {
   const folderRow = e.target.closest('.tree-row.folder[data-action="select-folder"]')
   if (folderRow) { e.preventDefault(); showFolderContextMenu(e.clientX, e.clientY, folderRow.dataset.path); return }
   const taskRow = e.target.closest('[data-action="toggle-task"]') || e.target.closest('.task-card[data-action="open-task-detail"]')
-  if (taskRow) { e.preventDefault(); showTaskContextMenu(e.clientX, e.clientY, taskRow.dataset.id, taskRow.dataset.completed === '1'); return }
+  if (taskRow) {
+    e.preventDefault()
+    const tid = taskRow.dataset.id
+    if (state.selectedTaskIds.has(tid) && state.selectedTaskIds.size > 1) {
+      showBatchTaskMenu(e.clientX, e.clientY) // keep the whole selection
+    } else {
+      clearTaskSelection(); state.selectedTaskIds.add(tid); applyTaskSelectionVisual()
+      showTaskContextMenu(e.clientX, e.clientY, tid, taskRow.dataset.completed === '1')
+    }
+    return
+  }
   const matrixRow = e.target.closest('[data-action="task-view"][data-view]')
   if (matrixRow && !['all', 'today', 'upcoming', 'completed', 'inbox'].includes(matrixRow.dataset.view)) {
     e.preventDefault(); showMatrixContextMenu(e.clientX, e.clientY, matrixRow.dataset.view); return
@@ -2092,6 +2199,12 @@ document.addEventListener('click', (e) => {
   const wiki = e.target.closest('[data-wiki]')
   if (wiki) { openWikiTarget(wiki.dataset.wiki); return }
   const nav = e.target.closest('.nav button'); if (nav) { setView(nav.dataset.view); return }
+  // Ctrl/Cmd + click toggles task selection (multi-select intent, not open detail).
+  if ((e.ctrlKey || e.metaKey) && e.target.closest('.task-card')) {
+    toggleTaskSelection(e.target.closest('.task-card').dataset.id)
+    e.preventDefault()
+    return
+  }
   const el = e.target.closest('[data-action]'); if (!el) return
   const act = el.dataset.action, id = el.dataset.id, path = el.dataset.path, mode = el.dataset.mode
   if (act === 'new-note') newNote()

@@ -132,4 +132,16 @@ describe('PKW web UI (served page)', () => {
     expect(js).toContain('img[src^="attachments/"]')
     expect(js).toContain("'/pkw/attachment/'")
   })
+
+  it('wires task marquee multi-selection + batch context menu', () => {
+    const js = script()
+    expect(js).toContain('selectedTaskIds')
+    expect(js).toContain('startTaskMarquee')
+    expect(js).toContain('showBatchTaskMenu')
+    expect(js).toContain('batchTaskOp')
+    expect(js).toContain('confirmBatchTaskDelete')
+    expect(js).toContain('toggleTaskSelection')
+    expect(js).toContain('reconcileTaskSelection')
+    expect(renderPage()).toContain('.task-card.selected')
+  })
 })
