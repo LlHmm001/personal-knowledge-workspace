@@ -557,12 +557,12 @@ export class NotesService extends Service {
     }
   }
 
-  /** Permanently purge a trashed folder: remove archived files + descendant note projections. */
+  /** Permanently purge a trashed folder: remove the physical archive directory + descendant note projections. */
   async purgeFolder(relativePath: string): Promise<void> {
     this.assertFolderPath(relativePath)
-    // The fs seam has no recursive directory delete; remove every file, leaving
-    // empty directories behind (harmless in archive).
-    await this.removeDirFilesRecursive(await this.ctx.fs.resolve(this.handle.archivePath(relativePath)))
+    // Remove the whole archive directory tree so no ghost empty directory can
+    // later reappear in listTrashFolders / reconcile.
+    await this.ctx.fs.removeDir(await this.ctx.fs.resolve(this.handle.archivePath(relativePath)), { recursive: true })
     const prefix = `${relativePath}/`
     for (const [path, id] of [...this.requirePaths().entries()]) {
       if (path !== relativePath && !path.startsWith(prefix)) continue
@@ -582,15 +582,6 @@ export class NotesService extends Service {
     }
     await this.requireOrder().delete(this.orderKey(relativePath))
     await this.removeChildFromOrder(parentOf(relativePath), 'folder', posix.basename(relativePath))
-  }
-
-  private async removeDirFilesRecursive(target: import('@deepseek-ai/dsh-fs').FsTarget): Promise<void> {
-    const info = await this.ctx.fs.stat(target)
-    if (info === undefined) return
-    if (info.type !== 'directory') { try { await this.ctx.fs.remove(target) } catch { /* already gone */ } return }
-    for (const entry of await this.ctx.fs.listDir(target)) {
-      await this.removeDirFilesRecursive(entry.target)
-    }
   }
 
   /** Trash a whole folder (even non-empty): archive the directory + mark descendant notes deleted. */

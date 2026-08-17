@@ -323,6 +323,9 @@ describe('pkw notes + attachments core', () => {
     expect(notes.get(a.noteId)).toBeUndefined()
     expect(notes.get(b.noteId)).toBeUndefined()
     expect(notes.list({ includeDeleted: true }).some(n => n.noteId === a.noteId || n.noteId === b.noteId)).toBe(false)
+    // The physical archive directory must be gone — no ghost folder in Trash.
+    expect(await notes.listTrashFolders()).not.toContain('项目')
+    expect(await notes.listTrashFolders()).not.toContain('项目/sub')
   })
 
   it('deletes an empty folder but rejects a non-empty one', async () => {
