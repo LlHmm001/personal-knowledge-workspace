@@ -102,6 +102,8 @@ aside.right h3:first-child{margin-top:0}
 .quad-head{display:flex;align-items:center;gap:8px;padding-bottom:6px;border-bottom:1px solid var(--border);margin-bottom:6px;font-size:13px}
 .quad-head .count{margin-left:auto;font-size:12px;color:var(--muted)}
 .quad .empty.small{padding:8px;font-size:12px}
+.task-src{margin-left:6px;cursor:pointer;opacity:.65}.task-src:hover{opacity:1}
+mark{background:#ffe9a8;border-radius:2px;padding:0 2px}
 @media (max-width:760px){.quad-grid{grid-template-columns:1fr}}
 .wikilink-suggest{position:absolute;z-index:80;background:var(--panel);border:1px solid var(--border);border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.15);max-height:240px;overflow:auto;min-width:240px}
 .wikilink-suggest .item{padding:7px 12px;cursor:pointer;font-size:13px}.wikilink-suggest .item:hover,.wikilink-suggest .item.sel{background:#eef2f8}
@@ -218,6 +220,7 @@ const state = {
   collapsed: new Set(),
   editor: { noteId: null, persistedMarkdown: '', dirty: false, saving: false, mode: localStorage.getItem('pkw-editor-mode') || 'live' },
   taskView: localStorage.getItem('pkw-task-view') || 'all',
+  highlightText: '',
 }
 
 function toast(msg, kind){ const el = $('#toast'); el.innerHTML = '<div class="toast ' + (kind || 'ok') + '">' + esc(msg) + '</div>'; el.style.display = 'block'; clearTimeout(toast._t); toast._t = setTimeout(() => { el.style.display = 'none' }, 3200) }
@@ -510,6 +513,24 @@ function renderPreview(){
   const fm = parseFrontmatterClient(state.editor.persistedMarkdown || '')
   const pv = $('#preview')
   if (pv) pv.innerHTML = renderMarkdown(fm.body) || '<span class="muted">' + esc(t('emptyPreview')) + '</span>'
+  const q = state.highlightText
+  if (q && pv) {
+    const walker = document.createTreeWalker(pv, NodeFilter.SHOW_TEXT)
+    let n
+    while ((n = walker.nextNode())) {
+      const i = n.nodeValue.indexOf(q)
+      if (i >= 0) {
+        const mark = document.createElement('mark')
+        mark.textContent = q
+        const tail = n.splitText(i + q.length)
+        const head = n.splitText(i)
+        head.parentNode.replaceChild(mark, head)
+        mark.scrollIntoView({ block: 'center' })
+        break
+      }
+    }
+    state.highlightText = ''
+  }
 }
 async function openWikiTarget(target){
   // resolve [[Note]] target to a stable NoteId via the tree/title index.
@@ -760,7 +781,9 @@ function taskRow(x, matrices){
   const due = x.dueAt ? '<span class="muted mono">' + esc(dueLabel(x.dueAt)) + '</span>' : ''
   const pri = x.priority !== undefined ? '<span class="badge warn">P' + x.priority + '</span>' : ''
   const badge = x.matrixId ? '<span class="badge">' + esc(matrixName(matrices, x.matrixId)) + '</span>' : ''
-  return '<div class="tree-row" data-action="toggle-task" data-completed="' + (x.status === 'completed' ? '1' : '0') + '" data-id="' + esc(x.taskId) + '"><span class="ic">' + (x.status === 'completed' ? '☑' : '☐') + '</span><span class="nm">' + esc(x.title) + '</span>' + badge + pri + due + '</div>'
+  const src = x.sourceRefs && x.sourceRefs[0] && x.sourceRefs[0].noteId
+    ? '<span class="task-src" data-action="open-task-source" data-id="' + esc(x.sourceRefs[0].noteId) + '" data-exact="' + esc(x.sourceRefs[0].exact || '') + '" title="' + esc(t('openNote')) + '">📄</span>' : ''
+  return '<div class="tree-row" data-action="toggle-task" data-completed="' + (x.status === 'completed' ? '1' : '0') + '" data-id="' + esc(x.taskId) + '"><span class="ic">' + (x.status === 'completed' ? '☑' : '☐') + '</span><span class="nm">' + esc(x.title) + '</span>' + badge + pri + due + src + '</div>'
 }
 async function renderTasks(){
   $('#list').innerHTML = ''; $('#treeToolbar').innerHTML = ''; $('#detail').innerHTML = ''
@@ -934,6 +957,7 @@ document.addEventListener('click', (e) => {
   else if (act === 'task-view') setTaskView(el.dataset.view)
   else if (act === 'note-to-task') quickTaskDialog(null, [{ kind: 'note', noteId: id }])
   else if (act === 'selection-to-task') { const ref = selectionSourceRef(); if (ref) quickTaskDialog(null, [ref]); else toast(t('taskNoTasks'), 'warn') }
+  else if (act === 'open-task-source') { state.highlightText = el.dataset.exact || ''; setView('notes'); openNote(id) }
   else if (act === 'toggle-task') { const t = el.dataset.completed === '1' ? api('reopenTask', { taskId: id }) : api('completeTask', { taskId: id }); t.then(() => renderTasks()) }
   else if (act === 'restore-note') { api('restoreNote', { noteId: id }).then(() => renderTrash()).then(refreshHeader) }
   else if (act === 'purge-note') { if (confirm(t('delNoteConfirm'))) api('purgeNote', { noteId: id }).then(() => renderTrash()).then(refreshHeader) }
