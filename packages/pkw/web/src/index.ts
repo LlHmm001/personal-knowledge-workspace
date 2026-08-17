@@ -21,12 +21,13 @@ import { posix, extname, resolve as pathResolve } from 'node:path'
 import { readFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import z from '@deepseek-ai/schemastery'
-import { AttachmentId, NoteId } from '@deepseek-ai/dsh-pkw-domain'
+import { AttachmentId, NoteId, TaskId, TaskMatrixId } from '@deepseek-ai/dsh-pkw-domain'
 import type { OrderChild } from '@deepseek-ai/dsh-pkw-notes'
 import PkwEventStoreService from '@deepseek-ai/dsh-pkw-events'
 import PkwWorkspaceService from '@deepseek-ai/dsh-pkw-workspace'
 import NotesService, { splitFrontmatter } from '@deepseek-ai/dsh-pkw-notes'
 import AttachmentsService from '@deepseek-ai/dsh-pkw-attachments'
+import TasksService from '@deepseek-ai/dsh-pkw-tasks'
 import WeKnoraClient from '@deepseek-ai/dsh-pkw-weknora'
 import WeKnoraSyncService from '@deepseek-ai/dsh-pkw-weknora-sync'
 import { renderPage } from './ui.ts'
@@ -144,6 +145,7 @@ export class PkwWebService extends Service {
   private attachments!: AttachmentsService
   private weknora!: WeKnoraClient
   private sync!: WeKnoraSyncService
+  private tasks!: TasksService
 
   constructor(ctx: Context, private readonly config: Config) {
     super(ctx, 'pkwWeb')
@@ -161,6 +163,7 @@ export class PkwWebService extends Service {
     await this.ctx.plugin(PkwWorkspaceService)
     await this.ctx.plugin(NotesService, { workspaceId: this.workspaceId })
     await this.ctx.plugin(AttachmentsService, { workspaceId: this.workspaceId })
+    await this.ctx.plugin(TasksService, { workspaceId: this.workspaceId })
     await this.ctx.plugin(WeKnoraClient, {
       baseUrl: this.config.weknoraBaseUrl,
       apiKey: this.config.weknoraApiKey,
@@ -182,6 +185,7 @@ export class PkwWebService extends Service {
     this.attachments = this.ctx.get('pkwAttachments') as AttachmentsService
     this.weknora = this.ctx.get('pkwWeKnora') as WeKnoraClient
     this.sync = this.ctx.get('pkwWeKnoraSync') as WeKnoraSyncService
+    this.tasks = this.ctx.get('pkwTasks') as TasksService
 
     // Route surface. Disposers are owned by this fiber via ctx.effect.
     this.ctx.effect(() => this.ctx.webServer.register({
@@ -431,6 +435,33 @@ export class PkwWebService extends Service {
         await this.notes.setOrder(String(args.parentPath), children.map(c => ({ kind: c.kind === 'folder' ? 'folder' : 'note', id: c.id })))
         return { ordered: true }
       }
+      // ── tasks ─────────────────────────────────────────────────────────────
+      case 'listMatrices': return this.tasks.listMatrices({ includeArchived: args.includeArchived === true })
+      case 'createMatrix': return this.tasks.createMatrix({ name: String(args.name), ...(args.description !== undefined ? { description: String(args.description) } : {}), ...(args.icon !== undefined ? { icon: String(args.icon) } : {}), ...(args.color !== undefined ? { color: String(args.color) } : {}) })
+      case 'renameMatrix': return this.tasks.renameMatrix(TaskMatrixId(String(args.matrixId)), String(args.name))
+      case 'archiveMatrix': return this.tasks.archiveMatrix(TaskMatrixId(String(args.matrixId))).then(() => ({ archived: true }))
+      case 'listTasks': return this.tasks.listTasks({
+        ...(args.matrixId !== undefined && args.matrixId !== null ? { matrixId: TaskMatrixId(String(args.matrixId)) } : {}),
+        ...(args.status !== undefined ? { status: String(args.status) as never } : {}),
+        includeDeleted: args.includeDeleted === true,
+      })
+      case 'createTask': return this.tasks.createTask({
+        title: String(args.title),
+        ...(args.matrixId !== undefined && args.matrixId !== null ? { matrixId: TaskMatrixId(String(args.matrixId)) } : {}),
+        ...(args.description !== undefined ? { description: String(args.description) } : {}),
+        ...(args.important !== undefined ? { important: args.important === true } : {}),
+        ...(args.urgent !== undefined ? { urgent: args.urgent === true } : {}),
+        ...(args.priority !== undefined ? { priority: Number(args.priority) } : {}),
+        ...(args.dueAt !== undefined ? { dueAt: String(args.dueAt) } : {}),
+        ...(args.tags !== undefined ? { tags: Array.isArray(args.tags) ? args.tags.map(String) : [] } : {}),
+        ...(args.sourceRefs !== undefined ? { sourceRefs: Array.isArray(args.sourceRefs) ? args.sourceRefs : [] } : {}),
+      })
+      case 'updateTask': return this.tasks.updateTask(TaskId(String(args.taskId)), (args.patch ?? {}) as never)
+      case 'completeTask': return this.tasks.completeTask(TaskId(String(args.taskId)))
+      case 'reopenTask': return this.tasks.reopenTask(TaskId(String(args.taskId)))
+      case 'moveTaskToMatrix': return this.tasks.moveTaskToMatrix(TaskId(String(args.taskId)), args.matrixId !== undefined && args.matrixId !== null ? TaskMatrixId(String(args.matrixId)) : null)
+      case 'deleteTask': return this.tasks.deleteTask(TaskId(String(args.taskId))).then(() => ({ deleted: true }))
+      case 'restoreTask': return this.tasks.restoreTask(TaskId(String(args.taskId)))
       default: throw new Error(`unknown pkw method: ${method}`)
     }
   }
