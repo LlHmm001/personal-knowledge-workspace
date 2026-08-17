@@ -207,6 +207,8 @@ export interface AttachmentRecord {
   indexedAt: string
   createdAt: string
   deletedAt?: string
+  /** When false, the attachment stays local and is never projected to WeKnora. */
+  indexable?: boolean
 }
 
 export interface AttachmentRef {
@@ -289,6 +291,8 @@ export interface ImportAttachmentInput {
   content: Uint8Array
   filename: string
   mimeType: string
+  /** Default true; false keeps the attachment local (no WeKnora projection). */
+  indexable?: boolean
 }
 
 export interface AttachmentListFilter {

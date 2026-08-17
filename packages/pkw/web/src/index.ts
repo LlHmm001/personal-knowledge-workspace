@@ -513,7 +513,7 @@ export class PkwWebService extends Service {
       }
       case 'uploadAttachment': {
         const content = Buffer.from(String(args.contentBase64), 'base64')
-        const rec = await this.attachments.importFile({ content, filename: String(args.filename), mimeType: String(args.mimeType) })
+        const rec = await this.attachments.importFile({ content, filename: String(args.filename), mimeType: String(args.mimeType), ...(args.indexable !== undefined ? { indexable: args.indexable === true } : {}) })
         return { attachmentId: String(rec.id), filename: rec.filename, sizeBytes: rec.sizeBytes }
       }
       case 'deleteAttachment': {

@@ -123,6 +123,7 @@ export class AttachmentsService extends Service {
       observedRevision: 1,
       indexedAt: now,
       createdAt: now,
+      indexable: input.indexable !== false,
     }
     const payload: AttachmentEventPayload = {
       attachmentId: String(attachmentId),

@@ -327,4 +327,11 @@ describe('PKW Web Host Bridge (real Core integration)', () => {
     const tasks = await web.call('listTasks', {}) as Array<{ matrixId: string | null }>
     expect(tasks.some(t => t.matrixId === null)).toBe(true)
   })
+
+  it('uploadAttachment indexable:false stays local (sync is skipped)', async () => {
+    const { web } = await boot()
+    const up = await web.call('uploadAttachment', { filename: 'x.txt', mimeType: 'text/plain', contentBase64: Buffer.from('hi').toString('base64'), indexable: false }) as { attachmentId: string }
+    // Force-sync a non-indexable attachment → skipped (no KnowledgeId), so it rejects.
+    await expect(web.call('syncEntity', { entityType: 'attachment', entityId: up.attachmentId })).rejects.toThrow(/did not converge/)
+  })
 })

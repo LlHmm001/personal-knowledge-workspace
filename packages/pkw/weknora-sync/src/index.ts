@@ -786,6 +786,12 @@ export class WeKnoraSyncService extends Service {
     const record = this.ctx.pkwAttachments.get(attachmentId)
     if (record === undefined) return undefined
 
+    // Non-indexable attachments stay local and are never projected to WeKnora.
+    if (record.indexable === false) {
+      await this.clearDirty(key)
+      return undefined
+    }
+
     const mapping = this.reqMappings().get(key)
     if (record.deletedAt !== undefined) {
       await this.runRemoteDelete(ENTITY_ATTACHMENT, String(attachmentId), key, mapping)

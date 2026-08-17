@@ -215,6 +215,7 @@ mark{background:var(--mark-bg);border-radius:2px;padding:0 2px}
     <span class="badge" id="localBadge">Local: …</span>
     <button id="langBtn" class="langbtn" title="Switch language / 切换语言">EN</button>
     <button id="themeBtn" class="langbtn" title="Appearance / 外观">◐</button>
+    <button id="inspectorToggle" class="langbtn" title="Toggle inspector / 收起侧栏">⟩</button>
   </header>
   <aside>
     <div class="nav">
@@ -372,6 +373,7 @@ const state = {
   trashSelection: new Set(),
   trashFilter: 'all',
   trashBusy: false,
+  inspectorCollapsed: false,
 }
 // ── View switching: navigation guard + single-flight + instrumentation ──────
 let viewSeq = 0
@@ -1142,11 +1144,11 @@ async function openAttachment(id){
     await refreshAttachments()
   } catch (e) { toast(t('genericError') + ': ' + e.message, 'err') }
 }
-async function uploadFileBinary(file){
+async function uploadFileBinary(file, indexable){
   const buf = new Uint8Array(await file.arrayBuffer())
   let bin = ''
   for (let i = 0; i < buf.length; i++) bin += String.fromCharCode(buf[i])
-  return api('uploadAttachment', { filename: file.name, mimeType: file.type || 'application/octet-stream', contentBase64: btoa(bin) })
+  return api('uploadAttachment', { filename: file.name, mimeType: file.type || 'application/octet-stream', contentBase64: btoa(bin), ...(indexable === false ? { indexable: false } : {}) })
 }
 function sanitizeNoteBase(base){
   const ok = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .-_()[]#@'
@@ -1174,11 +1176,11 @@ async function createCompanionNote(up, file, folder){
   await api('createNote', { relativePath: notePath, markdown: '# ' + base + '\\n\\n' + refMd + '\\n' })
   return notePath
 }
-async function uploadFilesWithCompanion(files, withNote, folder){
+async function uploadFilesWithCompanion(files, withNote, folder, index){
   let ok = 0, noteOk = 0, noteFail = 0
   for (const file of files) {
     try {
-      const up = await uploadFileBinary(file)
+      const up = await uploadFileBinary(file, index)
       ok++
       if (withNote) {
         try { await createCompanionNote(up, file, folder); noteOk++ } catch (e) { noteFail++ }
@@ -1215,8 +1217,9 @@ function uploadDialog(){
     if (!files.length) { toast(t('uploadFailed'), 'warn'); return }
     const withNote = q('#upNote').checked
     const folder = q('#upFolder').value || ''
+    const index = q('#upIndex').checked
     overlay.remove()
-    uploadFilesWithCompanion(files, withNote, folder)
+    uploadFilesWithCompanion(files, withNote, folder, index)
   })
 }
 async function downloadAttachment(id){
@@ -2484,6 +2487,7 @@ document.addEventListener('keydown', (e) => {
 })
 $('#langBtn').addEventListener('click', () => { lang = lang === 'zh' ? 'en' : 'zh'; localStorage.setItem('pkw-lang', lang); render() })
 $('#themeBtn').addEventListener('click', (e) => { e.stopPropagation(); const r = e.target.getBoundingClientRect(); showAppearanceMenu(r.left, r.bottom + 4) })
+$('#inspectorToggle').addEventListener('click', () => toggleInspector())
 window.addEventListener('beforeunload', (e) => { if (state.editor.dirty && state.selectedNoteId !== null) { e.preventDefault(); e.returnValue = '' } })
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { refreshHeader(); if (state.view === 'notes') { renderTree(); if (state.selectedNoteId) kickSyncPoll({ pending: true }) } } })
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (currentThemeMode() === 'system') applyTheme('system') })
@@ -2493,8 +2497,11 @@ function syncInspector(){
   const detail = $('#detail')
   const has = detail && detail.innerHTML.trim() !== ''
   const app = $('#app')
-  if (app) app.classList.toggle('no-inspector', !has)
+  if (app) app.classList.toggle('no-inspector', !has || state.inspectorCollapsed)
+  const btn = $('#inspectorToggle')
+  if (btn) btn.textContent = state.inspectorCollapsed ? '⟨' : '⟩'
 }
+function toggleInspector(){ state.inspectorCollapsed = !state.inspectorCollapsed; syncInspector() }
 if ($('#detail')) new MutationObserver(syncInspector).observe($('#detail'), { childList: true, subtree: true, characterData: true })
 syncInspector()
 

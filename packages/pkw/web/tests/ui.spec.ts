@@ -121,5 +121,7 @@ describe('PKW web UI (served page)', () => {
     expect(js).toContain('currentThemeMode')
     expect(js).toContain('syncInspector')
     expect(js).toContain('theme-system')
+    expect(js).toContain('toggleInspector')
+    expect(js).toContain('inspectorCollapsed')
   })
 })
