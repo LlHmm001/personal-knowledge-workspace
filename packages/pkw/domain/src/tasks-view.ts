@@ -34,23 +34,27 @@ function taskDate(t: Task): Date | undefined {
  * `today`, `upcoming`; `completed` returns completed tasks.
  */
 export function filterTasksForView(tasks: Task[], view: TaskView, now: Date = new Date()): Task[] {
+  // Root-only: subtasks (parentTaskId != null) never appear as peer cards in the
+  // main Matrix/Inbox/All/Today/Upcoming/Completed views — they live under their
+  // parent's detail. Applied first, before the view-specific predicates.
+  const roots = tasks.filter(t => t.parentTaskId === null)
   let list: Task[]
   switch (view) {
     case 'completed':
-      list = tasks.filter(x => x.status === 'completed')
+      list = roots.filter(x => x.status === 'completed')
       break
     case 'inbox':
-      list = tasks.filter(x => x.matrixId === null && x.status === 'open')
+      list = roots.filter(x => x.matrixId === null && x.status === 'open')
       break
     case 'today':
-      list = tasks.filter(x => {
+      list = roots.filter(x => {
         if (x.status !== 'open') return false
         const d = taskDate(x)
         return d !== undefined && (isSameDay(d, now) || d < now)
       })
       break
     case 'upcoming':
-      list = tasks.filter(x => {
+      list = roots.filter(x => {
         if (x.status !== 'open') return false
         const d = taskDate(x)
         return d !== undefined && d > now
@@ -58,7 +62,7 @@ export function filterTasksForView(tasks: Task[], view: TaskView, now: Date = ne
       break
     case 'all':
     default:
-      list = tasks.filter(x => x.status === 'open')
+      list = roots.filter(x => x.status === 'open')
   }
   // Stable order: soonest due first, then tasks without a date keep their manual order.
   return list.sort((a, b) => {

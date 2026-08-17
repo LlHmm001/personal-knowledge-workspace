@@ -173,7 +173,7 @@ const STR = {
     untitled:'untitled', notSynced:'未同步', synced:'已同步', syncing:'同步中', pending:'待同步', failed:'失败', stale:'已过期', deleted:'已删除',
     upload:'上传文件', emptyAttachments:'还没有附件。', attachmentsDesc:'管理笔记中上传的文件。', size:'大小', download:'下载', delAttachmentConfirm:'删除该附件？', attachmentDetailHint:'选中附件查看详情。',
     newMatrix:'新建四象限', smartViews:'智能视图', matrices:'四象限',
-    copyWikiLink:'复制 Wiki 链接', taskComplete:'完成', taskReopen:'重新打开', matrixArchive:'归档', matrixRemove:'删除四象限', matrixRemoveConfirm:'删除该四象限？其全部任务将移回 Inbox。',
+    copyWikiLink:'复制 Wiki 链接', taskComplete:'完成', taskReopen:'重新打开', taskDuplicate:'复制任务', taskDelete:'删除任务', matrixArchive:'归档', matrixRemove:'删除四象限', matrixRemoveConfirm:'删除该四象限？其全部任务将移回 Inbox。',
     uploadProgress:'上传中…', uploadSuccess:'已上传', uploadFailed:'上传失败', searching:'搜索中…', noHits:'没有命中「{q}」。', searchHint:'输入关键词搜索本地笔记与附件（经 WeKnora hybrid search）。',
     score:'得分', openNote:'打开笔记', openAttachment:'打开附件', externalWeKnora:'WeKnora 外部', noteLabel:'笔记', attachmentLabel:'附件',
     details:'详情', noteId:'NoteId', attachmentId:'AttachmentId', path:'路径', revision:'版本', updated:'更新时间', lastError:'最近错误', maintenance:'维护', advanced:'高级',
@@ -209,7 +209,7 @@ const STR = {
     untitled:'untitled', notSynced:'Not synced', synced:'Synced', syncing:'Syncing', pending:'Pending', failed:'Failed', stale:'Stale', deleted:'Deleted',
     upload:'Upload file', emptyAttachments:'No attachments yet.', attachmentsDesc:'Manage files uploaded in notes.', size:'Size', download:'Download', delAttachmentConfirm:'Delete this attachment?', attachmentDetailHint:'Select an attachment to view details.',
     newMatrix:'New matrix', smartViews:'Smart views', matrices:'Matrices',
-    copyWikiLink:'Copy wiki link', taskComplete:'Complete', taskReopen:'Reopen', matrixArchive:'Archive', matrixRemove:'Delete matrix', matrixRemoveConfirm:'Delete this matrix? All its tasks will move back to Inbox.',
+    copyWikiLink:'Copy wiki link', taskComplete:'Complete', taskReopen:'Reopen', taskDuplicate:'Duplicate task', taskDelete:'Delete task', matrixArchive:'Archive', matrixRemove:'Delete matrix', matrixRemoveConfirm:'Delete this matrix? All its tasks will move back to Inbox.',
     uploadProgress:'Uploading…', uploadSuccess:'Uploaded', uploadFailed:'Upload failed', searching:'Searching…', noHits:'No hits for 「{q}」.', searchHint:'Type a query to search notes & attachments (via WeKnora hybrid search).',
     score:'score', openNote:'Open note', openAttachment:'Open attachment', externalWeKnora:'external WeKnora', noteLabel:'Note', attachmentLabel:'Attachment',
     details:'Details', noteId:'NoteId', attachmentId:'AttachmentId', path:'Path', revision:'Revision', updated:'Updated', lastError:'Last error', maintenance:'Maintenance', advanced:'Advanced',
@@ -1020,12 +1020,13 @@ async function renderTasks(){
   } catch (e) { $('#main').innerHTML = '<div class="empty">' + esc(t('genericError')) + ': ' + esc(e.message) + '</div>' }
 }
 function filterTaskList(all, filter){
+  const roots = all.filter(x => x.parentTaskId === null)
   const isToday = d => { const n = new Date(d); const now = new Date(); return n.getFullYear() === now.getFullYear() && n.getMonth() === now.getMonth() && n.getDate() === now.getDate() }
-  if (filter === 'completed') return all.filter(x => x.status === 'completed')
-  if (filter === 'inbox') return all.filter(x => x.matrixId === null && x.status === 'open')
-  if (filter === 'today') return all.filter(x => x.status === 'open' && (x.dueAt || x.scheduledAt) && (isToday(x.dueAt || x.scheduledAt) || new Date(x.dueAt || x.scheduledAt) < new Date()))
-  if (filter === 'upcoming') return all.filter(x => x.status === 'open' && (x.dueAt || x.scheduledAt) && new Date(x.dueAt || x.scheduledAt) > new Date())
-  return all.filter(x => x.status === 'open')
+  if (filter === 'completed') return roots.filter(x => x.status === 'completed')
+  if (filter === 'inbox') return roots.filter(x => x.matrixId === null && x.status === 'open')
+  if (filter === 'today') return roots.filter(x => x.status === 'open' && (x.dueAt || x.scheduledAt) && (isToday(x.dueAt || x.scheduledAt) || new Date(x.dueAt || x.scheduledAt) < new Date()))
+  if (filter === 'upcoming') return roots.filter(x => x.status === 'open' && (x.dueAt || x.scheduledAt) && new Date(x.dueAt || x.scheduledAt) > new Date())
+  return roots.filter(x => x.status === 'open')
 }
 function renderTaskList(matrices, all, filter){
   const list = filterTaskList(all, filter)
@@ -1038,8 +1039,8 @@ function renderTaskList(matrices, all, filter){
 function renderMatrixGrid(matrices, all, matrixId){
   const m = matrices.find(x => x.matrixId === matrixId)
   const name = m ? m.name : matrixId
-  const open = all.filter(x => x.status === 'open' && x.matrixId === matrixId)
-  const done = all.filter(x => x.status === 'completed' && x.matrixId === matrixId)
+  const open = all.filter(x => x.status === 'open' && x.matrixId === matrixId && x.parentTaskId === null)
+  const done = all.filter(x => x.status === 'completed' && x.matrixId === matrixId && x.parentTaskId === null)
   const cells = [[1, 'Q1', t('q1')], [2, 'Q2', t('q2')], [3, 'Q3', t('q3')], [4, 'Q4', t('q4')]]
   const grid = cells.map(([q, label, title]) => {
     const items = open.filter(x => quadrantOf(x) === q)
@@ -1184,9 +1185,10 @@ function showFolderContextMenu(x, y, path){
 }
 function showTaskContextMenu(x, y, taskId, completed){
   showContextMenu(x, y, [
+    { label: '📄 ' + t('taskDetail'), action: 'open-task-detail', id: taskId },
     { label: completed ? '↩ ' + t('taskReopen') : '✓ ' + t('taskComplete'), action: 'toggle-task', id: taskId, attrs: { 'data-completed': completed ? '1' : '0' } },
-    { label: '📅 ' + t('taskDue'), action: 'task-due', id: taskId },
-    { label: '🗑 ' + t('trashFolder'), action: 'task-delete', id: taskId, danger: true },
+    { label: '⧉ ' + t('taskDuplicate'), action: 'task-duplicate', id: taskId },
+    { label: '🗑 ' + t('taskDelete'), action: 'task-delete', id: taskId, danger: true },
   ])
 }
 function showMatrixContextMenu(x, y, matrixId){
@@ -1398,6 +1400,7 @@ document.addEventListener('click', (e) => {
   else if (act === 'open-task-detail') taskDetailDialog(id)
   else if (act === 'task-due') { const due = prompt(t('taskDue'), ''); if (due !== null) api('updateTask', { taskId: id, patch: { dueAt: due } }).then(() => renderTasks()) }
   else if (act === 'task-delete') { api('deleteTask', { taskId: id }).then(() => renderTasks()) }
+  else if (act === 'task-duplicate') { const t = (state.tasksCache || []).find(x => x.taskId === id); if (t) api('createTask', { title: t.title + ' (copy)', ...(t.matrixId ? { matrixId: t.matrixId } : {}), important: t.important, urgent: t.urgent, ...(t.description ? { description: t.description } : {}), ...(t.dueAt ? { dueAt: t.dueAt } : {}), tags: t.tags || [] }).then(() => renderTasks()) }
   else if (act === 'matrix-rename') { const name = prompt(t('folderRenamePrompt'), ''); if (name && name.trim()) api('renameMatrix', { matrixId: id, name: name.trim() }).then(() => renderTasks()) }
   else if (act === 'matrix-archive') { api('archiveMatrix', { matrixId: id }).then(() => renderTasks()) }
   else if (act === 'matrix-remove') { if (confirm(t('matrixRemoveConfirm'))) api('removeMatrix', { matrixId: id, reassignTo: null }).then(() => renderTasks()).catch(e => toast(e.message, 'err')) }
@@ -1454,6 +1457,9 @@ function selectionSourceRef(){
 function taskDetailDialog(taskId){
   const task = (state.tasksCache || []).find(t => t.taskId === taskId)
   if (!task) return
+  // Single-modal invariant: remove any previous dialog first, otherwise duplicate
+  // #taskDetailModal overlays stack and the top one never gets its listeners.
+  const prev = $('#taskDetailModal'); if (prev) prev.remove()
   Promise.all([api('listMatrices'), api('listSubtasks', { parentTaskId: taskId })]).then(([matrices, subtasks]) => {
     const mOpts = '<option value="">' + esc(t('taskInbox')) + '</option>' + matrices.map(m => '<option value="' + esc(m.matrixId) + '"' + (m.matrixId === task.matrixId ? ' selected' : '') + '>' + esc(m.name) + '</option>').join('')
     const quad = quadrantOf(task)

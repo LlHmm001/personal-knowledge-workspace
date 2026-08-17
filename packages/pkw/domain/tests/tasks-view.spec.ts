@@ -79,4 +79,11 @@ describe('filterTasksForView', () => {
     const dueTitles = got.filter(t => t.dueAt).map(t => t.title)
     expect(dueTitles).toEqual(['overdue', 'work today', 'life upcoming'])
   })
+
+  it('excludes subtasks from main views (root-only)', () => {
+    const parent = mk({ title: 'parent' })
+    const child = mk({ title: 'child', parentTaskId: parent.taskId })
+    const got = filterTasksForView([parent, child], 'all', now)
+    expect(got.map(t => t.title)).toEqual(['parent'])
+  })
 })
