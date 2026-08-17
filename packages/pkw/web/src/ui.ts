@@ -176,6 +176,7 @@ const STR = {
     slashH1:'一级标题', slashH2:'二级标题', slashH3:'三级标题', slashList:'无序列表', slashTask:'任务列表', slashQuote:'引用', slashCalloutNote:'提示框', slashCalloutWarning:'警告框', slashTable:'表格', slashHr:'分割线',
     slashInlineCode:'行内代码', slashCodeBlock:'代码块', slashLink:'链接', slashWikiLink:'Wiki 链接', slashImage:'图片', slashFootnote:'脚注', slashCallout:'提示框',
     editorLoading:'正在加载编辑器…', buildInfo:'构建信息', bold:'加粗', italic:'斜体', strike:'删除线',
+    taskDetail:'任务详情', description:'描述', taskStatus:'状态', taskOpen:'进行中',
   },
   en: {
     overview:'Overview', notes:'Notes', attachments:'Attachment library', tasks:'Tasks', trash:'Trash', search:'Search',
@@ -211,6 +212,7 @@ const STR = {
     slashH1:'Heading 1', slashH2:'Heading 2', slashH3:'Heading 3', slashList:'Bullet list', slashTask:'Task list', slashQuote:'Quote', slashCalloutNote:'Callout', slashCalloutWarning:'Warning', slashTable:'Table', slashHr:'Divider',
     slashInlineCode:'Inline code', slashCodeBlock:'Code block', slashLink:'Link', slashWikiLink:'Wiki link', slashImage:'Image', slashFootnote:'Footnote', slashCallout:'Callout',
     editorLoading:'Loading editor…', buildInfo:'Build info', bold:'Bold', italic:'Italic', strike:'Strikethrough',
+    taskDetail:'Task detail', description:'Description', taskStatus:'Status', taskOpen:'Open',
   },
 }
 const PKW_BUILD = '1d93f55'
@@ -924,7 +926,10 @@ function taskRow(x, matrices){
   const src = x.sourceRefs && x.sourceRefs[0] && x.sourceRefs[0].noteId
     ? '<span class="task-src" data-action="open-task-source" data-id="' + esc(x.sourceRefs[0].noteId) + '" data-exact="' + esc(x.sourceRefs[0].exact || '') + '" title="' + esc(t('openNote')) + '">📄</span>' : ''
   const mv = '<span class="task-mv"><span data-action="task-up" data-id="' + esc(x.taskId) + '" title="' + esc(t('moveUp')) + '">↑</span><span data-action="task-down" data-id="' + esc(x.taskId) + '" title="' + esc(t('moveDown')) + '">↓</span></span>'
-  return '<div class="tree-row" data-action="toggle-task" data-completed="' + (x.status === 'completed' ? '1' : '0') + '" data-id="' + esc(x.taskId) + '"><span class="ic">' + (x.status === 'completed' ? '☑' : '☐') + '</span><span class="nm">' + esc(x.title) + '</span>' + badge + due + src + mv + '</div>'
+  // Card click → detail; checkbox click → complete/reopen.
+  return '<div class="tree-row task-card" data-action="open-task-detail" data-id="' + esc(x.taskId) + '">' +
+    '<span class="ic" data-action="toggle-task" data-completed="' + (x.status === 'completed' ? '1' : '0') + '" data-id="' + esc(x.taskId) + '">' + (x.status === 'completed' ? '☑' : '☐') + '</span>' +
+    '<span class="nm">' + esc(x.title) + '</span>' + badge + due + src + mv + '</div>'
 }
 function moveTaskOrder(taskId, dir){
   const all = state.tasksCache || []
@@ -1270,6 +1275,7 @@ document.addEventListener('click', (e) => {
   else if (act === 'selection-to-task') { const ref = selectionSourceRef(); if (ref) quickTaskDialog(null, [ref]); else toast(t('taskNoTasks'), 'warn') }
   else if (act === 'open-task-source') { state.highlightText = el.dataset.exact || ''; setView('notes'); openNote(id) }
   else if (act === 'toggle-task') { const t = el.dataset.completed === '1' ? api('reopenTask', { taskId: id }) : api('completeTask', { taskId: id }); t.then(() => renderTasks()) }
+  else if (act === 'open-task-detail') taskDetailDialog(id)
   else if (act === 'task-due') { const due = prompt(t('taskDue'), ''); if (due !== null) api('updateTask', { taskId: id, patch: { dueAt: due } }).then(() => renderTasks()) }
   else if (act === 'task-delete') { api('deleteTask', { taskId: id }).then(() => renderTasks()) }
   else if (act === 'matrix-rename') { const name = prompt(t('folderRenamePrompt'), ''); if (name && name.trim()) api('renameMatrix', { matrixId: id, name: name.trim() }).then(() => renderTasks()) }
@@ -1324,6 +1330,44 @@ function selectionSourceRef(){
     ...(rev !== undefined ? { noteRevision: rev } : {}),
     ...(hash ? { contentHash: hash } : {}),
   }
+}
+function taskDetailDialog(taskId){
+  const task = (state.tasksCache || []).find(t => t.taskId === taskId)
+  if (!task) return
+  api('listMatrices').then(matrices => {
+    const mOpts = '<option value="">' + esc(t('taskInbox')) + '</option>' + matrices.map(m => '<option value="' + esc(m.matrixId) + '"' + (m.matrixId === task.matrixId ? ' selected' : '') + '>' + esc(m.name) + '</option>').join('')
+    const quad = quadrantOf(task)
+    const srcNote = task.sourceRefs && task.sourceRefs[0] ? '<div class="form"><label>' + esc(t('noteLabel')) + '</label><span class="v mono" data-action="open-task-source" data-id="' + esc(task.sourceRefs[0].noteId) + '" data-exact="' + esc(task.sourceRefs[0].exact || '') + '" style="cursor:pointer">📄 ' + esc(task.sourceRefs[0].noteId) + '</span></div>' : ''
+    document.body.insertAdjacentHTML('beforeend',
+      '<div class="modal-overlay" id="taskDetailModal"><div class="modal"><h3>' + esc(t('taskDetail')) + '</h3>' +
+      '<div class="form"><label>' + esc(t('taskTitle')) + '</label><input id="tdTitle" value="' + esc(task.title) + '" /></div>' +
+      '<div class="form"><label>' + esc(t('description')) + '</label><textarea id="tdDesc" rows="5">' + esc(task.description || '') + '</textarea></div>' +
+      '<div class="form"><label>' + esc(t('taskStatus')) + '</label><select id="tdStatus"><option value="open"' + (task.status === 'open' ? ' selected' : '') + '>' + esc(t('taskOpen')) + '</option><option value="completed"' + (task.status === 'completed' ? ' selected' : '') + '>' + esc(t('taskCompleted')) + '</option></select></div>' +
+      '<div class="form"><label>' + esc(t('matrices')) + '</label><select id="tdMatrix">' + mOpts + '</select></div>' +
+      '<div class="form"><label>' + esc(t('taskQuadrant')) + '</label><select id="tdQuad">' +
+        '<option value="1"' + (quad === 1 ? ' selected' : '') + '>Q1 · ' + esc(t('q1')) + '</option><option value="2"' + (quad === 2 ? ' selected' : '') + '>Q2 · ' + esc(t('q2')) + '</option><option value="3"' + (quad === 3 ? ' selected' : '') + '>Q3 · ' + esc(t('q3')) + '</option><option value="4"' + (quad === 4 ? ' selected' : '') + '>Q4 · ' + esc(t('q4')) + '</option></select></div>' +
+      '<div class="form"><label>' + esc(t('taskDue')) + '</label><input type="date" id="tdDue" value="' + esc((task.dueAt || '').slice(0, 10)) + '" /></div>' +
+      '<div class="form"><label>' + esc(t('tags')) + '</label><input id="tdTags" value="' + esc((task.tags || []).join(', ')) + '" /></div>' +
+      srcNote +
+      '<div class="toolbar"><button class="btn primary" id="tdSave">' + esc(t('taskSave')) + '</button><button class="btn" id="tdCancel">' + esc(t('taskCancel')) + '</button></div></div></div>'
+    )
+    const modal = $('#taskDetailModal')
+    $('#tdCancel').addEventListener('click', () => modal.remove())
+    $('#tdSave').addEventListener('click', () => {
+      const q = Number($('#tdQuad').value)
+      api('updateTask', { taskId, patch: {
+        title: $('#tdTitle').value.trim(),
+        description: $('#tdDesc').value,
+        status: $('#tdStatus').value,
+        matrixId: $('#tdMatrix').value || null,
+        important: q === 1 || q === 2,
+        urgent: q === 1 || q === 3,
+        ...($('#tdDue').value ? { dueAt: $('#tdDue').value } : {}),
+        tags: ($('#tdTags').value || '').split(',').map(s => s.trim()).filter(Boolean),
+      } }).then(() => { modal.remove(); renderTasks() }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
+    })
+    modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove() })
+  }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
 }
 function quickTaskDialog(matrixId, sourceRefs){
   const lastMatrix = localStorage.getItem('pkw-task-last-matrix') || ''
