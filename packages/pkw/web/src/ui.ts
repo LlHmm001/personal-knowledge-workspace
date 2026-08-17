@@ -102,6 +102,9 @@ aside.right h3:first-child{margin-top:0}
 .quad-head{display:flex;align-items:center;gap:8px;padding-bottom:6px;border-bottom:1px solid var(--border);margin-bottom:6px;font-size:13px}
 .quad-head .count{margin-left:auto;font-size:12px;color:var(--muted)}
 .quad .empty.small{padding:8px;font-size:12px}
+.ctx-menu{position:fixed;z-index:90;background:var(--panel);border:1px solid var(--border);border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.15);min-width:160px;padding:4px}
+.ctx-item{padding:7px 12px;font-size:13px;cursor:pointer;border-radius:6px}.ctx-item:hover{background:#eef2f8}.ctx-item.danger{color:var(--err)}
+.sel-task-btn{position:fixed;z-index:89;background:var(--accent);color:#fff;padding:4px 10px;border-radius:6px;font-size:12px;cursor:pointer;box-shadow:0 3px 10px rgba(0,0,0,.2)}.sel-task-btn:hover{filter:brightness(1.08)}
 .task-src{margin-left:6px;cursor:pointer;opacity:.65}.task-src:hover{opacity:1}
 .task-mv{margin-left:auto;display:inline-flex;gap:2px;opacity:.55}.task-mv span{cursor:pointer;padding:0 5px;border-radius:4px}.task-mv span:hover{background:#eef2f8;opacity:1}
 mark{background:#ffe9a8;border-radius:2px;padding:0 2px}
@@ -168,7 +171,8 @@ const STR = {
     q1:'重要且紧急', q2:'重要不紧急', q3:'紧急不重要', q4:'不紧急不重要',
     taskQuickAdd:'快速添加任务', taskTitle:'标题', taskMatrix:'矩阵', taskQuadrant:'象限', taskPriority:'优先级', taskDue:'截止日期', taskSave:'创建', taskCancel:'取消',
     noteToTask:'笔记 → 待办', selectionToTask:'选区 → 待办', taskNoTasks:'暂无任务。', taskTomorrow:'明天', taskYesterday:'昨天', taskOverdue:'已逾期',
-    slashH1:'一级标题', slashH2:'二级标题', slashList:'无序列表', slashTask:'任务列表', slashQuote:'引用', slashCalloutNote:'提示框', slashCalloutWarning:'警告框', slashTable:'表格', slashHr:'分割线',
+    slashH1:'一级标题', slashH2:'二级标题', slashH3:'三级标题', slashList:'无序列表', slashTask:'任务列表', slashQuote:'引用', slashCalloutNote:'提示框', slashCalloutWarning:'警告框', slashTable:'表格', slashHr:'分割线',
+    slashInlineCode:'行内代码', slashCodeBlock:'代码块', slashLink:'链接', slashWikiLink:'Wiki 链接', slashImage:'图片', slashFootnote:'脚注', slashCallout:'提示框',
   },
   en: {
     overview:'Overview', notes:'Notes', attachments:'Attachments', tasks:'Tasks', trash:'Trash', search:'Search',
@@ -198,7 +202,8 @@ const STR = {
     q1:'Important & Urgent', q2:'Important, Not Urgent', q3:'Urgent, Not Important', q4:'Not Urgent, Not Important',
     taskQuickAdd:'Quick add task', taskTitle:'Title', taskMatrix:'Matrix', taskQuadrant:'Quadrant', taskPriority:'Priority', taskDue:'Due date', taskSave:'Create', taskCancel:'Cancel',
     noteToTask:'Note → Task', selectionToTask:'Selection → Task', taskNoTasks:'No tasks yet.', taskTomorrow:'Tomorrow', taskYesterday:'Yesterday', taskOverdue:'Overdue',
-    slashH1:'Heading 1', slashH2:'Heading 2', slashList:'Bullet list', slashTask:'Task list', slashQuote:'Quote', slashCalloutNote:'Callout', slashCalloutWarning:'Warning', slashTable:'Table', slashHr:'Divider',
+    slashH1:'Heading 1', slashH2:'Heading 2', slashH3:'Heading 3', slashList:'Bullet list', slashTask:'Task list', slashQuote:'Quote', slashCalloutNote:'Callout', slashCalloutWarning:'Warning', slashTable:'Table', slashHr:'Divider',
+    slashInlineCode:'Inline code', slashCodeBlock:'Code block', slashLink:'Link', slashWikiLink:'Wiki link', slashImage:'Image', slashFootnote:'Footnote', slashCallout:'Callout',
   },
 }
 let lang = localStorage.getItem('pkw-lang') === 'en' ? 'en' : 'zh'
@@ -404,7 +409,7 @@ async function openNote(noteId){
   $('#main').innerHTML = '<div class="empty">' + esc(t('loading')) + '</div>'
   try {
     const d = await api('getNote', { noteId })
-    state.editor = { noteId, persistedMarkdown: d.markdown, body: d.body || '', frontmatter: d.frontmatter || '', dirty: false, saving: false, mode: localStorage.getItem('pkw-editor-mode') || 'live' }
+    state.editor = { noteId, persistedMarkdown: d.markdown, body: d.body || '', frontmatter: d.frontmatter || '', dirty: false, saving: false, mode: localStorage.getItem('pkw-editor-mode') || 'live', observedRevision: d.note && d.note.observedRevision, contentHash: d.note && d.note.contentHash }
     $('#main').innerHTML = renderEditorShell(d)
     bindEditor()
     $('#detail').innerHTML = detailNote(d)
@@ -488,14 +493,27 @@ function initVditor(){
   })
 }
 function slashMenu(){
+  const callout = (type) => ({ html: '💡 ' + esc(t('slashCallout')) + '·' + type, value: '> [!' + type + ']\\n> ' })
   return [
     { html: 'Ｈ1 · ' + esc(t('slashH1')), value: '# ' },
     { html: 'Ｈ2 · ' + esc(t('slashH2')), value: '## ' },
+    { html: 'Ｈ3 · ' + esc(t('slashH3')), value: '### ' },
     { html: '• ' + esc(t('slashList')), value: '- ' },
     { html: '☐ ' + esc(t('slashTask')), value: '- [ ] ' },
     { html: '❝ ' + esc(t('slashQuote')), value: '> ' },
-    { html: '💡 ' + esc(t('slashCalloutNote')), value: '> [!NOTE]\\n> ' },
-    { html: '⚠️ ' + esc(t('slashCalloutWarning')), value: '> [!WARNING]\\n> ' },
+    { html: '⟨⟩ ' + esc(t('slashInlineCode')), value: '\\u0060code\\u0060' },
+    { html: '⟨⟩⟨⟩ ' + esc(t('slashCodeBlock')), value: '\\u0060\\u0060\\u0060\\n\\u0060\\u0060\\u0060' },
+    { html: '🔗 ' + esc(t('slashLink')), value: '[text](url)' },
+    { html: '🔗 ' + esc(t('slashWikiLink')), value: '[[note]]' },
+    { html: '🖼 ' + esc(t('slashImage')), value: '![alt](url)' },
+    { html: '① ' + esc(t('slashFootnote')), value: '[^1]' },
+    callout('NOTE'),
+    callout('TIP'),
+    callout('INFO'),
+    callout('IMPORTANT'),
+    callout('QUESTION'),
+    callout('EXAMPLE'),
+    callout('WARNING'),
     { html: '⊞ ' + esc(t('slashTable')), value: '|  |  |\\n| --- | --- |\\n|  |  |\\n' },
     { html: '— ' + esc(t('slashHr')), value: '---\\n' },
   ]
@@ -676,20 +694,22 @@ async function newNote(){
     await openNote(r.noteId); refreshHeader()
   } catch (e) { toast(t('genericError') + ': ' + e.message, 'err') }
 }
-async function renameNote(){
-  if (state.selectedNoteId === null) return
-  const cur = await api('getNote', { noteId: state.selectedNoteId })
+async function renameNote(noteId){
+  const id = noteId || state.selectedNoteId
+  if (id === null) return
+  const cur = await api('getNote', { noteId: id })
   const rel = prompt(t('renamePrompt'), cur.note.relativePath)
   if (!rel || rel === cur.note.relativePath) return
-  try { await api('moveNote', { noteId: state.selectedNoteId, relativePath: rel }); await renderTree(); await openNote(state.selectedNoteId) }
+  try { await api('moveNote', { noteId: id, relativePath: rel }); await renderTree(); if (state.selectedNoteId === id) await openNote(id) }
   catch (e) { toast(t('genericError') + ': ' + e.message, 'err') }
 }
-async function delNote(){
-  if (state.selectedNoteId === null) return
+async function delNote(noteId){
+  const id = noteId || state.selectedNoteId
+  if (id === null) return
   if (!confirm(t('delNoteConfirm'))) return
   try {
-    await api('deleteNote', { noteId: state.selectedNoteId })
-    state.selectedNoteId = null; state.editor = { noteId: null, persistedMarkdown: '', dirty: false, saving: false, mode: 'live' }
+    await api('deleteNote', { noteId: id })
+    if (state.selectedNoteId === id) { state.selectedNoteId = null; state.editor = { noteId: null, persistedMarkdown: '', dirty: false, saving: false, mode: 'live' } }
     toast(t('deletedMsg'), 'ok'); render()
   } catch (e) { toast(t('genericError') + ': ' + e.message, 'err') }
 }
@@ -966,9 +986,56 @@ function insertAtCursor(el, text){
   el.dispatchEvent(new Event('input'))
 }
 
+// ── Note tree context menu (right-click → 添加到待办 / 移动 / 重命名 / 删除) ──
+function dismissContextMenu(){ const m = $('#ctxMenu'); if (m) m.remove() }
+function showNoteContextMenu(x, y, noteId){
+  dismissContextMenu()
+  const menu = document.createElement('div')
+  menu.className = 'ctx-menu'; menu.id = 'ctxMenu'
+  menu.style.left = Math.min(x, window.innerWidth - 200) + 'px'
+  menu.style.top = Math.min(y, window.innerHeight - 180) + 'px'
+  menu.innerHTML =
+    '<div class="ctx-item" data-action="note-to-task" data-id="' + esc(noteId) + '">📝 ' + esc(t('noteToTask')) + '</div>' +
+    '<div class="ctx-item" data-action="move-note" data-id="' + esc(noteId) + '">📁 ' + esc(t('moveNoteTo')) + '</div>' +
+    '<div class="ctx-item" data-action="rename-note" data-id="' + esc(noteId) + '">✏️ ' + esc(t('renameMove')) + '</div>' +
+    '<div class="ctx-item danger" data-action="delete-note" data-id="' + esc(noteId) + '">🗑 ' + esc(t('del')) + '</div>'
+  document.body.appendChild(menu)
+}
+document.addEventListener('contextmenu', (e) => {
+  const noteRow = e.target.closest('.tree-row.note[data-action="open-note"]')
+  if (!noteRow) { dismissContextMenu(); return }
+  e.preventDefault()
+  showNoteContextMenu(e.clientX, e.clientY, noteRow.dataset.id)
+})
+
+// ── Selection → floating "add to task" (appears next to the selection) ──────
+let pendingSelectionRef = null
+function dismissSelButton(){ const b = $('#selTaskBtn'); if (b) b.remove() }
+document.addEventListener('mouseup', (e) => {
+  if (state.view !== 'notes' || state.selectedNoteId === null) return
+  const within = e.target.closest('#editorPane')
+  const sel = window.getSelection()
+  const text = sel ? sel.toString().trim() : ''
+  if (!within || !text) { dismissSelButton(); pendingSelectionRef = null; return }
+  pendingSelectionRef = selectionSourceRef()
+  if (!pendingSelectionRef) { dismissSelButton(); return }
+  const rect = sel.getRangeAt(0).getBoundingClientRect()
+  dismissSelButton()
+  const btn = document.createElement('div')
+  btn.className = 'sel-task-btn'; btn.id = 'selTaskBtn'
+  btn.textContent = '→ ' + t('taskQuickAdd')
+  btn.style.left = Math.max(8, rect.left + rect.width / 2 - 40) + 'px'
+  btn.style.top = Math.max(8, rect.top - 36) + 'px'
+  btn.addEventListener('mousedown', (ev) => ev.preventDefault())
+  btn.addEventListener('click', () => { dismissSelButton(); quickTaskDialog(null, pendingSelectionRef ? [pendingSelectionRef] : null) })
+  document.body.appendChild(btn)
+})
+
 // ── Delegated events ────────────────────────────────────────────────────────
 document.addEventListener('click', (e) => {
   if (!e.target.closest('#wikiSuggest')) dismissWikiSuggest()
+  if (!e.target.closest('#ctxMenu')) dismissContextMenu()
+  if (!e.target.closest('#selTaskBtn')) dismissSelButton()
   const nav = e.target.closest('.nav button'); if (nav) { setView(nav.dataset.view); return }
   const el = e.target.closest('[data-action]'); if (!el) return
   const act = el.dataset.action, id = el.dataset.id, path = el.dataset.path, mode = el.dataset.mode
@@ -982,9 +1049,9 @@ document.addEventListener('click', (e) => {
   else if (act === 'toggle-folder') { if (state.collapsed.has(path)) state.collapsed.delete(path); else state.collapsed.add(path); const c = document.querySelector('.tree-children[data-folder="' + CSS.escape(path) + '"]'); if (c) { c.style.display = state.collapsed.has(path) ? 'none' : ''; el.textContent = state.collapsed.has(path) ? '▸' : '▾' } }
   else if (act === 'save-note') saveNote()
   else if (act === 'set-mode') { state.editor.mode = mode; localStorage.setItem('pkw-editor-mode', mode); const d = state.editor.noteId; if (d) openNote(d) }
-  else if (act === 'rename-note') renameNote()
+  else if (act === 'rename-note') renameNote(id)
   else if (act === 'move-note') moveNote(id)
-  else if (act === 'delete-note') delNote()
+  else if (act === 'delete-note') delNote(id)
   else if (act === 'rename-folder') renameFolder(path)
   else if (act === 'delete-folder') deleteFolder(path)
   else if (act === 'sync-note') syncEntity('note', id)
@@ -1012,18 +1079,43 @@ document.addEventListener('click', (e) => {
 })
 function selectionSourceRef(){
   if (state.selectedNoteId === null) return null
+  const rev = state.editor.observedRevision
+  const hash = state.editor.contentHash
+  // Source mode: raw textarea gives canonical markdown offsets + surrounding text.
+  if (state.editor.mode === 'source') {
+    const el = $('#editor')
+    if (!el) return null
+    const start = el.selectionStart, end = el.selectionEnd
+    const exact = el.value.slice(start, end)
+    if (!exact.trim() || exact.length > 500) return null
+    const prefix = el.value.slice(Math.max(0, start - 80), start)
+    const suffix = el.value.slice(end, end + 80)
+    return {
+      kind: 'selection', noteId: state.selectedNoteId, exact,
+      ...(prefix ? { prefix } : {}), ...(suffix ? { suffix } : {}),
+      start, end,
+      ...(rev !== undefined ? { noteRevision: rev } : {}),
+      ...(hash ? { contentHash: hash } : {}),
+    }
+  }
+  // IR/Reading: DOM selection — semantic context only; markdown offset unreliable.
   const sel = window.getSelection()
-  const text = sel ? sel.toString().trim() : ''
-  if (!text || text.length > 500) return null
+  const exact = sel ? sel.toString() : ''
+  if (!exact.trim() || exact.length > 500) return null
   let prefix = '', suffix = ''
   const node = sel.anchorNode
   if (node && node.textContent) {
     const full = node.textContent
     const off = sel.anchorOffset
     prefix = full.slice(Math.max(0, off - 80), off)
-    suffix = full.slice(off + text.length, off + text.length + 80)
+    suffix = full.slice(off + exact.length, off + exact.length + 80)
   }
-  return { kind: 'selection', noteId: state.selectedNoteId, exact: text, ...(prefix ? { prefix } : {}), ...(suffix ? { suffix } : {}) }
+  return {
+    kind: 'selection', noteId: state.selectedNoteId, exact,
+    ...(prefix ? { prefix } : {}), ...(suffix ? { suffix } : {}),
+    ...(rev !== undefined ? { noteRevision: rev } : {}),
+    ...(hash ? { contentHash: hash } : {}),
+  }
 }
 function quickTaskDialog(matrixId, sourceRefs){
   const lastMatrix = localStorage.getItem('pkw-task-last-matrix') || ''

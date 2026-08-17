@@ -266,7 +266,7 @@ export class PkwWebService extends Service {
         const doc = await this.notes.getDocument(noteId)
         const { frontmatterRaw, body } = splitFrontmatter(doc.markdown)
         return {
-          note: { noteId: String(doc.note.noteId), relativePath: doc.note.relativePath, title: doc.note.title, tags: doc.note.tags, updatedAt: doc.note.updatedAt, observedRevision: doc.note.observedRevision },
+          note: { noteId: String(doc.note.noteId), relativePath: doc.note.relativePath, title: doc.note.title, tags: doc.note.tags, updatedAt: doc.note.updatedAt, observedRevision: doc.note.observedRevision, contentHash: doc.note.contentHash },
           markdown: doc.markdown,
           frontmatter: frontmatterRaw,
           body,
