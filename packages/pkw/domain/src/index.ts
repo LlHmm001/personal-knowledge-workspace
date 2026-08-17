@@ -17,6 +17,8 @@ export { CALLOUT_TYPES, CODE_LANGUAGES, buildSelectionSourceRef, calloutMarkdown
 export type { CalloutType } from './editor-commands.ts'
 export { isReorderOnly, resolveTaskDrop } from './tasks-drag.ts'
 export type { TaskDropTarget, TaskMutationIntent } from './tasks-drag.ts'
+export { parseAttachmentReference, parseCalloutBlock, parseWikiLink, serializeCalloutBlock } from './markdown-semantics.ts'
+export type { AttachmentRef, CalloutBlock, WikiLink } from './markdown-semantics.ts'
 export { addColumnLeft, addColumnRight, addRowAbove, addRowBelow, deleteColumn, deleteRow, deleteTable, findTableBlock, parseTableBlock, serializeTableBlock, setColumnAlign } from './table.ts'
 export type { ColumnAlign, TableBlock } from './table.ts'
 export { parseNoteId } from './frontmatter.ts'

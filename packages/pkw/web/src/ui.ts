@@ -116,6 +116,8 @@ aside.right h3:first-child{margin-top:0}
 .ctx-menu{position:fixed;z-index:90;background:var(--panel);border:1px solid var(--border);border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.15);min-width:160px;padding:4px}
 .ctx-item{padding:7px 12px;font-size:13px;cursor:pointer;border-radius:6px}.ctx-item:hover{background:#eef2f8}.ctx-item.danger{color:var(--err)}
 .sel-task-btn{position:fixed;z-index:89;background:var(--accent);color:#fff;padding:4px 10px;border-radius:6px;font-size:12px;cursor:pointer;box-shadow:0 3px 10px rgba(0,0,0,.2)}.sel-task-btn:hover{filter:brightness(1.08)}
+.sel-toolbar{position:fixed;z-index:89;background:var(--panel);border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 14px rgba(0,0,0,.18);padding:3px;display:flex;gap:2px}
+.sel-btn{padding:4px 7px;font-size:12px;cursor:pointer;border-radius:5px;color:var(--ink);min-width:20px;text-align:center}.sel-btn:hover{background:#eef2f8}
 .task-src{margin-left:6px;cursor:pointer;opacity:.65}.task-src:hover{opacity:1}
 .task-mv{margin-left:auto;display:inline-flex;gap:2px;opacity:.55}.task-mv span{cursor:pointer;padding:0 5px;border-radius:4px}.task-mv span:hover{background:#eef2f8;opacity:1}
 mark{background:#ffe9a8;border-radius:2px;padding:0 2px}
@@ -187,7 +189,7 @@ const STR = {
     noteToTask:'笔记 → 待办', selectionToTask:'选区 → 待办', taskNoTasks:'暂无任务。', taskTomorrow:'明天', taskYesterday:'昨天', taskOverdue:'已逾期',
     slashH1:'一级标题', slashH2:'二级标题', slashH3:'三级标题', slashList:'无序列表', slashTask:'任务列表', slashQuote:'引用', slashCalloutNote:'提示框', slashCalloutWarning:'警告框', slashTable:'表格', slashHr:'分割线',
     slashInlineCode:'行内代码', slashCodeBlock:'代码块', slashLink:'链接', slashWikiLink:'Wiki 链接', slashImage:'图片', slashFootnote:'脚注', slashCallout:'提示框',
-    editorLoading:'正在加载编辑器…', buildInfo:'构建信息', bold:'加粗', italic:'斜体', strike:'删除线',
+    editorLoading:'正在加载编辑器…', buildInfo:'构建信息', bold:'加粗', italic:'斜体', strike:'删除线', highlight:'高亮',
     taskDetail:'任务详情', description:'描述', taskStatus:'状态', taskOpen:'进行中', taskScheduled:'计划日期', taskCreated:'创建',
   },
   en: {
@@ -223,7 +225,7 @@ const STR = {
     noteToTask:'Note → Task', selectionToTask:'Selection → Task', taskNoTasks:'No tasks yet.', taskTomorrow:'Tomorrow', taskYesterday:'Yesterday', taskOverdue:'Overdue',
     slashH1:'Heading 1', slashH2:'Heading 2', slashH3:'Heading 3', slashList:'Bullet list', slashTask:'Task list', slashQuote:'Quote', slashCalloutNote:'Callout', slashCalloutWarning:'Warning', slashTable:'Table', slashHr:'Divider',
     slashInlineCode:'Inline code', slashCodeBlock:'Code block', slashLink:'Link', slashWikiLink:'Wiki link', slashImage:'Image', slashFootnote:'Footnote', slashCallout:'Callout',
-    editorLoading:'Loading editor…', buildInfo:'Build info', bold:'Bold', italic:'Italic', strike:'Strikethrough',
+    editorLoading:'Loading editor…', buildInfo:'Build info', bold:'Bold', italic:'Italic', strike:'Strikethrough', highlight:'Highlight',
     taskDetail:'Task detail', description:'Description', taskStatus:'Status', taskOpen:'Open', taskScheduled:'Scheduled', taskCreated:'Created',
   },
 }
@@ -1275,14 +1277,26 @@ document.addEventListener('mouseup', (e) => {
   if (!pendingSelectionRef) { dismissSelButton(); return }
   const rect = sel.getRangeAt(0).getBoundingClientRect()
   dismissSelButton()
-  const btn = document.createElement('div')
-  btn.className = 'sel-task-btn'; btn.id = 'selTaskBtn'
-  btn.textContent = '→ ' + t('taskQuickAdd')
-  btn.style.left = Math.max(8, rect.left + rect.width / 2 - 40) + 'px'
-  btn.style.top = Math.max(8, rect.top - 36) + 'px'
-  btn.addEventListener('mousedown', (ev) => ev.preventDefault())
-  btn.addEventListener('click', () => { dismissSelButton(); const r = pendingSelectionRef; if (r) quickTaskDialog(null, [r], { title: r.exact.replace(/\\n/g, " ").trim().slice(0, 60), description: r.exact }) })
-  document.body.appendChild(btn)
+  const bar = document.createElement('div')
+  bar.className = 'sel-toolbar'; bar.id = 'selTaskBtn'
+  bar.style.left = Math.max(8, rect.left + rect.width / 2 - 150) + 'px'
+  bar.style.top = Math.max(8, rect.top - 40) + 'px'
+  const btns = [
+    ['B', 'bold', () => editorWrap('**', '**')],
+    ['I', 'italic', () => editorWrap('*', '*')],
+    ['S', 'strike', () => editorWrap('~~', '~~')],
+    ['H', 'highlight', () => editorWrap('==', '==')],
+    ['⟨⟩', 'slashInlineCode', () => editorWrap('\\u0060', '\\u0060')],
+    ['🔗', 'slashLink', () => editorWrap('[', '](url)')],
+    ['[[', 'slashWikiLink', () => editorWrap('[[', ']]')],
+    ['📝', 'noteToTask', () => { const r = pendingSelectionRef; if (r) quickTaskDialog(null, [r], { title: r.exact.replace(/\\n/g, ' ').trim().slice(0, 60), description: r.exact }) }],
+  ]
+  bar.innerHTML = btns.map(b => '<span class="sel-btn" title="' + esc(t(b[1])) + '">' + b[0] + '</span>').join('')
+  bar.querySelectorAll('.sel-btn').forEach((el2, i) => {
+    el2.addEventListener('mousedown', (ev) => ev.preventDefault())
+    el2.addEventListener('click', () => { dismissSelButton(); btns[i][2]() })
+  })
+  document.body.appendChild(bar)
 })
 
 // ── Delegated events ────────────────────────────────────────────────────────
