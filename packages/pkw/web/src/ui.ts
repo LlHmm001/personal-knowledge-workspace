@@ -325,6 +325,7 @@ const state = {
   attachmentsCache: [],
   trashCache: null,
   summaryCache: null,
+  scroll: { main: {}, list: {} },
 }
 // ── View switching: navigation guard + single-flight + instrumentation ──────
 let viewSeq = 0
@@ -348,6 +349,18 @@ function refreshAttachments(){ invalidateLoad('listAttachments'); renderAttachme
 function refreshTrash(){ invalidateLoad('listTrash'); invalidateLoad('listTrashAttachments'); invalidateLoad('listTrashFolders'); renderTrash() }
 function viewMark(phase, extra){
   console.debug('[pkw.view] view=' + state.view + ' phase=' + phase + ' ms=' + Math.round(performance.now() - viewStart) + (extra ? ' ' + extra : ''))
+}
+// Per-view scroll memory: a view is a projection, so switching back should
+// restore where the user was (main + left list), not reset to top.
+function saveScroll(view){
+  const m = $('#main'), l = $('#list')
+  state.scroll.main[view] = m ? m.scrollTop : 0
+  state.scroll.list[view] = l ? l.scrollTop : 0
+}
+function restoreScroll(){
+  const m = $('#main'), l = $('#list')
+  if (m && state.scroll.main[state.view] !== undefined) m.scrollTop = state.scroll.main[state.view]
+  if (l && state.scroll.list[state.view] !== undefined) l.scrollTop = state.scroll.list[state.view]
 }
 
 function toast(msg, kind){ const el = $('#toast'); el.innerHTML = '<div class="toast ' + (kind || 'ok') + '">' + esc(msg) + '</div>'; el.style.display = 'block'; clearTimeout(toast._t); toast._t = setTimeout(() => { el.style.display = 'none' }, 3200) }
@@ -378,6 +391,7 @@ async function refreshHeader(){
 }
 
 function setView(v){
+  saveScroll(state.view)
   state.view = v
   viewSeq++
   viewStart = performance.now()
@@ -413,6 +427,7 @@ function renderOverviewFrom(s){
     '<div class="toolbar"><button class="btn primary" data-action="new-note">+ ' + esc(t('newNote')) + '</button><button class="btn" data-action="sync-now">' + esc(t('syncNow')) + '</button><button class="btn" data-action="reconcile">' + esc(t('reconcile')) + '</button></div>' +
     '<div class="stats">' + rows.join('') + '</div><h2>' + esc(t('overviewIntegration')) + '</h2>' + integBadge + '<h2 style="margin-top:16px">' + esc(t('overviewRecent')) + '</h2>' + recentHtml
   $('#detail').innerHTML = detailWorkspace(s)
+  restoreScroll()
 }
 async function renderOverview(){
   const seq = viewSeq
@@ -447,6 +462,7 @@ async function renderTree(){
     const tree = await api('getTree', { sortMode: state.sortMode })
     state.treeRoot = tree.root || []
     $('#list').innerHTML = renderTreeNodes(state.treeRoot, '') || '<div class="empty">' + esc(t('emptyNotes')) + '<div class="cta"><button class="btn primary" data-action="new-note">+ ' + esc(t('emptyNotesCta')) + '</button></div></div>'
+    restoreScroll()
   } catch (e) { if (state.treeRoot.length === 0) $('#list').innerHTML = '<div class="empty">' + esc(t('genericError')) + '</div>' }
 }
 function renderTreeNodes(nodes){ if (!nodes.length) return ''; return nodes.map(n => n.kind === 'folder' ? renderFolderNode(n) : renderNoteNode(n)).join('') }
@@ -1024,6 +1040,7 @@ function renderAttachmentsFrom(list){
   $('#treeToolbar').innerHTML = ''
   $('#list').innerHTML = list.length ? list.map(a => '<div class="tree-row ' + (a.attachmentId === state.selectedAttachmentId ? 'active' : '') + '" data-action="open-attachment" data-id="' + esc(a.attachmentId) + '"><span class="tw"></span><span class="ic">📎</span><span class="nm">' + esc(a.filename) + '</span> ' + syncBadgeHtml(a.sync) + '</div>').join('') : '<div class="empty">' + esc(t('emptyAttachments')) + '</div>'
   $('#main').innerHTML = '<h2>' + esc(t('attachments')) + '</h2><p class="muted">' + esc(t('attachmentsDesc')) + '</p><div class="toolbar"><input type="file" id="file" /> <button class="btn primary" data-action="upload-attachment">' + esc(t('upload')) + '</button></div>'
+  restoreScroll()
 }
 async function renderAttachments(){
   const seq = viewSeq
@@ -1132,6 +1149,7 @@ function renderTasksFrom(matrices, all){
     '<div class="tree-row" data-action="new-matrix"><span class="ic">＋</span><span class="nm">' + esc(t('newMatrix')) + '</span></div>'
   if (state.taskView === 'all' || state.taskView === 'today' || state.taskView === 'upcoming' || state.taskView === 'completed' || state.taskView === 'inbox') renderTaskList(matrices, all, state.taskView)
   else renderMatrixGrid(matrices, all, state.taskView)
+  restoreScroll()
 }
 async function renderTasks(){
   const seq = viewSeq
@@ -1193,6 +1211,7 @@ function renderTrashFrom(notes, atts, folders){
   for (const a of atts) rows.push('<div class="tree-row"><span class="ic">📎</span><span class="nm">' + esc(a.filename) + '</span><button class="btn small" data-action="restore-attachment" data-id="' + esc(a.attachmentId) + '">' + esc(t('reconcile')) + '</button><button class="btn small danger" data-action="purge-attachment" data-id="' + esc(a.attachmentId) + '">' + esc(t('del')) + '</button></div>')
   $('#list').innerHTML = '<div class="list-head">' + esc(t('trash')) + '</div>'
   $('#main').innerHTML = '<h2>' + esc(t('trash')) + '</h2>' + (rows.length ? rows.join('') : '<div class="empty">' + esc(t('noRecent')) + '</div>')
+  restoreScroll()
 }
 async function renderTrash(){
   const seq = viewSeq

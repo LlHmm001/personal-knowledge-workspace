@@ -74,5 +74,7 @@ describe('PKW web UI (served page)', () => {
     expect(js).toContain('viewMark')
     expect(js).toContain('cache=hit')
     expect(js).toContain('stale navigation guard')
+    expect(js).toContain('saveScroll')
+    expect(js).toContain('restoreScroll')
   })
 })
