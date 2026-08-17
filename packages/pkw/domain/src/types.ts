@@ -408,6 +408,7 @@ export interface PkwTasksService {
   archiveMatrix(matrixId: TaskMatrixId): Promise<void>
   reassignMatrixTasks(fromMatrixId: TaskMatrixId, toMatrixId: TaskMatrixId | null): Promise<{ moved: number }>
   removeMatrix(matrixId: TaskMatrixId, opts?: { reassignTo?: TaskMatrixId | null }): Promise<{ removed: boolean; moved: number }>
+  removeMatrixWithTasks(matrixId: TaskMatrixId): Promise<{ removed: boolean; deleted: number }>
   listTasks(filter?: { matrixId?: TaskMatrixId | null; status?: TaskStatus; includeDeleted?: boolean }): Task[]
   listSubtasks(parentTaskId: TaskId): Task[]
   createTask(input: CreateTaskInput): Promise<Task>

@@ -162,6 +162,28 @@ export class TasksService extends Service {
     return { removed: true, moved: tasks.length }
   }
 
+  /**
+   * Remove a matrix and soft-delete EVERY task in it (root + subtasks, since
+   * subtasks inherit the parent matrixId). No child promotion — the whole
+   * affected set is trashed together, so the user never sees children silently
+   * promoted to Inbox after choosing "delete tasks with the matrix".
+   */
+  async removeMatrixWithTasks(matrixId: TaskMatrixId): Promise<{ removed: boolean; deleted: number }> {
+    const m = this.reqMatrices().get(matrixId)
+    if (m === undefined) return { removed: false, deleted: 0 }
+    const tasks = this.listTasks({ matrixId })
+    let deleted = 0
+    for (const t of tasks) {
+      if (t.deletedAt !== undefined) continue
+      await this.reqTasks().put(t.taskId, { ...t, matrixId: null, deletedAt: this.now(), updatedAt: this.now() })
+      await this.emit('task.deleted', TASK_AGG, String(t.taskId), { taskId: String(t.taskId), bulk: true })
+      deleted++
+    }
+    await this.reqMatrices().delete(matrixId)
+    await this.emit('task.matrix_deleted', MATRIX_AGG, String(matrixId), { matrixId: String(matrixId), moved: 0, deleted })
+    return { removed: true, deleted }
+  }
+
   // ── tasks ─────────────────────────────────────────────────────────────────
 
   listTasks(filter: { matrixId?: TaskMatrixId | null; status?: TaskStatus; includeDeleted?: boolean } = {}): Task[] {

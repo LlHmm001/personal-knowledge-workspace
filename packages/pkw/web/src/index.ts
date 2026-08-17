@@ -598,9 +598,19 @@ export class PkwWebService extends Service {
       case 'archiveMatrix': return this.tasks.archiveMatrix(TaskMatrixId(String(args.matrixId))).then(() => ({ archived: true }))
       case 'reassignMatrixTasks': return this.tasks.reassignMatrixTasks(TaskMatrixId(String(args.matrixId)), args.toMatrixId !== undefined && args.toMatrixId !== null ? TaskMatrixId(String(args.toMatrixId)) : null)
       case 'removeMatrix': {
-        // null → move tasks to Inbox (explicit); undefined → require empty (reject if not).
+        const matrixId = TaskMatrixId(String(args.matrixId))
+        // Explicit product contract: taskDisposition carries the intent (never null/undefined).
+        if (args.taskDisposition === 'delete-tasks') {
+          const r = await this.tasks.removeMatrixWithTasks(matrixId)
+          return { removed: r.removed, moved: 0, deleted: r.deleted }
+        }
+        if (args.taskDisposition === 'move-to-inbox') {
+          const r = await this.tasks.removeMatrix(matrixId, { reassignTo: null })
+          return { removed: r.removed, moved: r.moved, deleted: 0 }
+        }
+        // Backward-compatible reassignTo path (legacy callers only).
         const opts = args.reassignTo === undefined ? {} : { reassignTo: args.reassignTo === null ? null : TaskMatrixId(String(args.reassignTo)) }
-        return this.tasks.removeMatrix(TaskMatrixId(String(args.matrixId)), opts)
+        return this.tasks.removeMatrix(matrixId, opts)
       }
       case 'listTasks': return this.tasks.listTasks({
         ...(args.matrixId !== undefined && args.matrixId !== null ? { matrixId: TaskMatrixId(String(args.matrixId)) } : {}),

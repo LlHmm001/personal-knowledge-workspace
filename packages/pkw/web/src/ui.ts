@@ -136,6 +136,10 @@ aside.right h3:first-child{margin-top:0}
 @keyframes spin{to{transform:rotate(360deg)}}
 .check-row{display:flex;align-items:center;gap:6px;margin-bottom:8px;font-size:13px;cursor:pointer}
 .check-row input{margin:0}
+.radio-row{display:flex;align-items:flex-start;gap:8px;margin-bottom:8px;font-size:13px;cursor:pointer}
+.radio-row input{margin-top:3px}
+.radio-row b{font-weight:600}
+.danger-text{color:var(--danger)}
 .form-label{display:block;font-size:12px;color:var(--muted);margin-bottom:4px}
 .stats{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-bottom:16px}
 .stat{border:1px solid var(--border);border-radius:10px;padding:12px 14px;background:var(--panel)}.stat .n{font-size:22px;font-weight:700}.stat .l{font-size:12px;color:var(--muted)}
@@ -250,6 +254,7 @@ const STR = {
     newMatrix:'新建四象限', smartViews:'智能视图', matrices:'四象限',
     copyWikiLink:'复制 Wiki 链接', taskComplete:'完成', taskReopen:'重新打开', taskDuplicate:'复制任务', taskDelete:'删除任务', matrixArchive:'归档', matrixRemove:'删除四象限', matrixRemoveConfirm:'删除该四象限？其全部任务将移回 Inbox。',
     matrixDeleting:'正在删除四象限', matrixMovingTasks:'正在将 {n} 个任务移回 Inbox，然后删除该四象限…', matrixDeleted:'已将 {n} 个任务移回 Inbox，并删除四象限。', matrixDeleteFailed:'删除四象限失败', retry:'重试',
+    matrixTasksCount:'该四象限中共有 {n} 项任务。', matrixMoveToInbox:'移动到 Inbox', matrixMoveToInboxHint:'保留任务，只移除四象限归属', matrixDeleteTasks:'删除这些任务', matrixDeleteTasksHint:'删除四象限时同时删除其中任务（删除后无法恢复）', matrixDeletingTasks:'正在删除 {n} 项任务，然后删除四象限…', matrixDeletedTasks:'已删除 {n} 项任务和该四象限。',
     themeSystem:'跟随系统', themeLight:'浅色', themeDark:'深色',
     knowledge:'知识库', knowledgeIndexed:'已索引', knowledgePending:'待索引', knowledgeNotIndexed:'未索引', knowledgeParseFailed:'解析失败', relatedNotes:'相关笔记', refAttachments:'引用附件', mime:'类型',
     companionNote:'建立伴随笔记', noteLocation:'笔记位置', kbIndex:'知识库索引', kbIndexHint:'索引可解析附件', uploadedNoNote:'文件已上传，但伴随笔记创建失败', uploadedCompanion:'已生成 {n} 篇伴随笔记',
@@ -302,6 +307,7 @@ const STR = {
     newMatrix:'New matrix', smartViews:'Smart views', matrices:'Matrices',
     copyWikiLink:'Copy wiki link', taskComplete:'Complete', taskReopen:'Reopen', taskDuplicate:'Duplicate task', taskDelete:'Delete task', matrixArchive:'Archive', matrixRemove:'Delete matrix', matrixRemoveConfirm:'Delete this matrix? All its tasks will move back to Inbox.',
     matrixDeleting:'Deleting matrix', matrixMovingTasks:'Moving {n} tasks back to Inbox, then deleting this matrix…', matrixDeleted:'Moved {n} tasks back to Inbox and deleted the matrix.', matrixDeleteFailed:'Failed to delete matrix', retry:'Retry',
+    matrixTasksCount:'This matrix has {n} tasks.', matrixMoveToInbox:'Move to Inbox', matrixMoveToInboxHint:'Keep tasks, only remove the matrix', matrixDeleteTasks:'Delete these tasks', matrixDeleteTasksHint:'Delete the tasks together with the matrix (cannot be undone)', matrixDeletingTasks:'Deleting {n} tasks, then deleting this matrix…', matrixDeletedTasks:'Deleted {n} tasks and the matrix.',
     themeSystem:'Follow system', themeLight:'Light', themeDark:'Dark',
     knowledge:'Knowledge', knowledgeIndexed:'Indexed', knowledgePending:'Pending', knowledgeNotIndexed:'Not indexed', knowledgeParseFailed:'Parse failed', relatedNotes:'Related notes', refAttachments:'Referenced attachments', mime:'Type',
     companionNote:'Create companion note', noteLocation:'Note location', kbIndex:'Knowledge indexing', kbIndexHint:'Index parseable attachments', uploadedNoNote:'File uploaded, but companion note creation failed', uploadedCompanion:'Created {n} companion notes',
@@ -1658,32 +1664,41 @@ function showMatrixContextMenu(x, y, matrixId){
   ])
 }
 let matrixDeleting = false
-function matrixDeleteDialog(matrixId, name, count){
+function matrixDeleteDialog(matrixId, name){
   if (matrixDeleting) return
+  const tasks = (state.tasksCache || []).filter(x => x.matrixId === matrixId)
+  const total = tasks.length
   const overlay = document.createElement('div'); overlay.className = 'modal-overlay'
-  overlay.innerHTML = '<div class="modal"><h3>' + esc(t('matrixRemove')) + '</h3><p class="muted">' + esc(t('matrixRemoveConfirm')) + '</p><div class="toolbar" id="mdActions"><button class="btn" id="mdCancel">' + esc(t('cancel')) + '</button><button class="btn danger" id="mdOk">' + esc(t('del')) + '</button></div></div>'
+  overlay.innerHTML = '<div class="modal"><h3>' + esc(t('matrixRemove')) + (name ? '：' + esc(name) : '') + '</h3>' +
+    '<p class="muted">' + esc(t('matrixTasksCount', { n: total })) + '</p>' +
+    '<label class="radio-row"><input type="radio" name="mdDisp" value="move-to-inbox" checked><span><b>' + esc(t('matrixMoveToInbox')) + '</b><div class="muted small">' + esc(t('matrixMoveToInboxHint')) + '</div></span></label>' +
+    '<label class="radio-row"><input type="radio" name="mdDisp" value="delete-tasks"><span><b class="danger-text">' + esc(t('matrixDeleteTasks')) + '</b><div class="muted small">' + esc(t('matrixDeleteTasksHint')) + '</div></span></label>' +
+    '<div class="toolbar" id="mdActions" style="margin-top:12px"><button class="btn" id="mdCancel">' + esc(t('cancel')) + '</button><button class="btn danger" id="mdOk">' + esc(t('matrixRemove')) + '</button></div></div>'
   document.body.appendChild(overlay)
   const q = (s) => overlay.querySelector(s)
   q('#mdCancel').addEventListener('click', () => { if (!matrixDeleting) overlay.remove() })
   overlay.addEventListener('click', (e) => { if (e.target === overlay && !matrixDeleting) overlay.remove() })
   q('#mdOk').addEventListener('click', () => {
+    const disp = q('input[name="mdDisp"]:checked').value
     // Deleting state takes effect immediately; the visible busy state is delayed
     // so a fast delete never flashes a spinner (<250ms).
     matrixDeleting = true
     const okBtn = q('#mdOk'), cancelBtn = q('#mdCancel')
     if (okBtn) okBtn.disabled = true
     if (cancelBtn) cancelBtn.disabled = true
-    const showBusy = () => { q('#mdActions').innerHTML = '<div><span class="spinner"></span> <span class="muted">' + esc(t('matrixDeleting')) + '</span></div><p class="muted small">' + esc(t('matrixMovingTasks', { n: count })) + '</p>' }
+    const busyText = disp === 'delete-tasks' ? t('matrixDeletingTasks', { n: total }) : t('matrixMovingTasks', { n: total })
+    const showBusy = () => { q('#mdActions').innerHTML = '<div><span class="spinner"></span> <span class="muted">' + esc(t('matrixDeleting')) + '</span></div><p class="muted small">' + esc(busyText) + '</p>' }
     const busyTimer = setTimeout(showBusy, 200)
-    api('removeMatrix', { matrixId, reassignTo: null }).then(r => {
+    api('removeMatrix', { matrixId, taskDisposition: disp }).then(r => {
       clearTimeout(busyTimer); matrixDeleting = false; overlay.remove()
-      toast(t('matrixDeleted', { n: (r && r.moved) || 0 }), 'ok')
+      const doneText = disp === 'delete-tasks' ? t('matrixDeletedTasks', { n: (r && r.deleted) || 0 }) : t('matrixDeleted', { n: (r && r.moved) || 0 })
+      toast(doneText, 'ok')
       refreshTasks()
     }).catch(e => {
       clearTimeout(busyTimer); matrixDeleting = false
       q('#mdActions').innerHTML = '<p class="muted">' + esc(t('matrixDeleteFailed')) + ': ' + esc(e.message) + '</p><div class="toolbar"><button class="btn" id="mdClose">' + esc(t('taskClose')) + '</button><button class="btn danger" id="mdRetry">' + esc(t('retry')) + '</button></div>'
       q('#mdClose').addEventListener('click', () => overlay.remove())
-      q('#mdRetry').addEventListener('click', () => { overlay.remove(); matrixDeleteDialog(matrixId, name, count) })
+      q('#mdRetry').addEventListener('click', () => { overlay.remove(); matrixDeleteDialog(matrixId, name) })
     })
   })
 }
@@ -2128,7 +2143,7 @@ document.addEventListener('click', (e) => {
   else if (act === 'task-duplicate') { const t = (state.tasksCache || []).find(x => x.taskId === id); if (t) api('createTask', { title: t.title + ' (copy)', ...(t.matrixId ? { matrixId: t.matrixId } : {}), important: t.important, urgent: t.urgent, ...(t.description ? { description: t.description } : {}), ...(t.dueAt ? { dueAt: t.dueAt } : {}), tags: t.tags || [] }).then(() => refreshTasks()) }
   else if (act === 'matrix-rename') { const name = prompt(t('folderRenamePrompt'), ''); if (name && name.trim()) api('renameMatrix', { matrixId: id, name: name.trim() }).then(() => refreshTasks()) }
   else if (act === 'matrix-archive') { api('archiveMatrix', { matrixId: id }).then(() => refreshTasks()) }
-  else if (act === 'matrix-remove') { const count = (state.tasksCache || []).filter(x => x.matrixId === id).length; matrixDeleteDialog(id, count) }
+  else if (act === 'matrix-remove') { const m = (state.matricesCache || []).find(x => x.matrixId === id); matrixDeleteDialog(id, m ? m.name : '') }
   else if (act === 'copy-wikilink') { api('getNote', { noteId: id }).then(d => navigator.clipboard.writeText('[[' + (d.note.title || id) + ']]')).then(() => toast(t('ok'), 'ok')).catch(e => toast(t('genericError') + ': ' + e.message, 'err')) }
   else if (act === 'task-up') moveTaskOrder(id, -1)
   else if (act === 'task-down') moveTaskOrder(id, 1)

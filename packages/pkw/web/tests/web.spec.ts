@@ -328,6 +328,22 @@ describe('PKW Web Host Bridge (real Core integration)', () => {
     expect(tasks.some(t => t.matrixId === null)).toBe(true)
   })
 
+  it('removeMatrix taskDisposition:delete-tasks soft-deletes all matrix tasks (no child promotion)', async () => {
+    const { web } = await boot()
+    const m = await web.call('createMatrix', { name: 'm' }) as { matrixId: string }
+    const root = await web.call('createTask', { title: 'root', matrixId: m.matrixId }) as { taskId: string }
+    await web.call('createTask', { title: 'child', matrixId: m.matrixId, parentTaskId: root.taskId })
+    const r = await web.call('removeMatrix', { matrixId: m.matrixId, taskDisposition: 'delete-tasks' }) as { removed: boolean; deleted: number }
+    expect(r.removed).toBe(true)
+    expect(r.deleted).toBe(2)
+    const all = await web.call('listTasks', { includeDeleted: true }) as Array<{ matrixId: string | null; deletedAt?: string; parentTaskId: string | null }>
+    const trashed = all.filter(t => t.matrixId === null && t.deletedAt !== undefined)
+    expect(trashed).toHaveLength(2) // root + child both soft-deleted, child NOT promoted
+    // child parentTaskId preserved (not promoted to top-level)
+    const child = trashed.find(t => t.parentTaskId === root.taskId)
+    expect(child).toBeDefined()
+  })
+
   it('uploadAttachment indexable:false stays local (sync is skipped)', async () => {
     const { web } = await boot()
     const up = await web.call('uploadAttachment', { filename: 'x.txt', mimeType: 'text/plain', contentBase64: Buffer.from('hi').toString('base64'), indexable: false }) as { attachmentId: string }
