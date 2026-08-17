@@ -79,6 +79,24 @@ describe('pkw notes + attachments core', () => {
     expect(doc.markdown).toContain('id: ' + String(note.noteId))
   })
 
+  it('trash → restore preserves NoteId, then purge removes it permanently', async () => {
+    const { notes, dir } = await boot()
+    const note = await notes.create({ relativePath: 'life.md', markdown: '# life\n' })
+    const id = note.noteId
+    await notes.delete(id)
+    expect(notes.get(id)!.deletedAt).toBeDefined()
+    // restore
+    const rec = await notes.restore(id)
+    expect(rec.noteId).toBe(id)
+    expect(rec.deletedAt).toBeUndefined()
+    expect(notes.list().some(n => n.noteId === id)).toBe(true)
+    // trash again, then purge
+    await notes.delete(id)
+    await notes.purge(id)
+    expect(notes.get(id)).toBeUndefined()
+    expect(notes.list({ includeDeleted: true }).some(n => n.noteId === id)).toBe(false)
+  })
+
   it('re-injects the stable id when a source edit removes it', async () => {
     const { notes } = await boot()
     const note = await notes.create({ relativePath: 'guard.md', markdown: '# v1\n' })

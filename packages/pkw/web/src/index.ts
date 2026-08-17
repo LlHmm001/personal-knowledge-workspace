@@ -297,6 +297,24 @@ export class PkwWebService extends Service {
         await this.notes.delete(NoteId(String(args.noteId)))
         return { deleted: true }
       }
+      case 'restoreNote': {
+        const rec = await this.notes.restore(NoteId(String(args.noteId)))
+        return { noteId: String(rec.noteId), relativePath: rec.relativePath, deleted: false }
+      }
+      case 'purgeNote': {
+        await this.notes.purge(NoteId(String(args.noteId)))
+        return { purged: true }
+      }
+      case 'listTrash': {
+        const snap = this.syncSnapshot()
+        return this.notes.list({ includeDeleted: true })
+          .filter(n => n.deletedAt !== undefined)
+          .map(n => ({
+            noteId: String(n.noteId), relativePath: n.relativePath, folder: folderOf(n.relativePath),
+            title: n.title, updatedAt: n.updatedAt, deleted: true,
+            sync: this.syncView('note', String(n.noteId), snap),
+          }))
+      }
       case 'listAttachments': {
         const snap = this.syncSnapshot()
         return this.attachments.list().map(a => ({

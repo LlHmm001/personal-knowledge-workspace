@@ -18,6 +18,8 @@ import {
   NOTE_DISCOVERED,
   NOTE_IDENTITY_CONFLICT,
   NOTE_MOVED,
+  NOTE_PURGED,
+  NOTE_RESTORED,
   NOTE_UPDATED,
   NoteId,
   OperationId,
@@ -272,6 +274,49 @@ export class NotesService extends Service {
     }
     await this.commitEvent(NOTE_DELETED, String(noteId), payload)
     await this.putRecord({ ...existing, deletedAt: new Date().toISOString() }, existing.relativePath)
+  }
+
+  /** Restore a trashed (archived) note; NoteId is preserved. */
+  async restore(noteId: NoteId): Promise<NoteIndexRecord> {
+    const existing = this.requireTable().get(noteId)
+    if (existing === undefined || existing.deletedAt === undefined) {
+      throw new Error(`pkwNotes: note '${noteId}' is not trashed`)
+    }
+    await this.ctx.fs.rename(
+      await this.ctx.fs.resolve(this.handle.archivePath(existing.relativePath)),
+      await this.ctx.fs.resolve(this.handle.notePath(existing.relativePath)),
+    )
+    const observedRevision = existing.observedRevision + 1
+    const payload: NoteEventPayload = {
+      noteId: String(noteId),
+      relativePath: existing.relativePath,
+      contentHash: existing.contentHash,
+      observedRevision,
+      afterStateFingerprint: noteFingerprint(this.config.workspaceId, String(noteId), existing.relativePath, existing.contentHash, false),
+      beforeStateFingerprint: noteFingerprint(this.config.workspaceId, String(noteId), existing.relativePath, existing.contentHash, true),
+    }
+    await this.commitEvent(NOTE_RESTORED, String(noteId), payload)
+    const record = { ...existing, deletedAt: undefined, observedRevision, updatedAt: new Date().toISOString() }
+    await this.putRecord(record, existing.relativePath)
+    return record
+  }
+
+  /** Permanently purge a trashed note (and its archived file). */
+  async purge(noteId: NoteId): Promise<void> {
+    const existing = this.requireTable().get(noteId)
+    if (existing === undefined) return
+    try { await this.ctx.fs.remove(await this.ctx.fs.resolve(this.handle.archivePath(existing.relativePath))) } catch { /* already gone */ }
+    try { await this.ctx.fs.remove(await this.ctx.fs.resolve(this.handle.notePath(existing.relativePath))) } catch { /* already gone */ }
+    await this.commitEvent(NOTE_PURGED, String(noteId), {
+      noteId: String(noteId),
+      relativePath: existing.relativePath,
+      contentHash: existing.contentHash,
+      observedRevision: existing.observedRevision,
+      afterStateFingerprint: noteFingerprint(this.config.workspaceId, String(noteId), existing.relativePath, existing.contentHash, true),
+    })
+    await this.requireTable().delete(noteId)
+    await this.requirePaths().delete(existing.relativePath)
+    await this.removeChildFromOrder(parentOf(existing.relativePath), 'note', String(noteId))
   }
 
   async reconcile(): Promise<ReconcileReport> {

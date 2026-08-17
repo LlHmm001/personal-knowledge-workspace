@@ -253,6 +253,8 @@ export interface PkwNotesService {
   update(noteId: NoteId, markdown: string): Promise<NoteIndexRecord>
   move(noteId: NoteId, newRelativePath: string): Promise<NoteIndexRecord>
   delete(noteId: NoteId): Promise<void>
+  restore(noteId: NoteId): Promise<NoteIndexRecord>
+  purge(noteId: NoteId): Promise<void>
   reconcile(): Promise<ReconcileReport>
   getIdentityConflict(noteId: NoteId): NoteIdentityConflict | undefined
   listIdentityConflicts(): NoteIdentityConflict[]
@@ -300,6 +302,8 @@ export const NOTE_DISCOVERED = 'note.discovered'
 export const NOTE_UPDATED = 'note.updated'
 export const NOTE_MOVED = 'note.moved'
 export const NOTE_DELETED = 'note.deleted'
+export const NOTE_RESTORED = 'note.restored'
+export const NOTE_PURGED = 'note.purged'
 export const NOTE_IDENTITY_CONFLICT = 'note.identity_conflict.detected'
 export const ATTACHMENT_IMPORTED = 'attachment.imported'
 export const ATTACHMENT_UPDATED = 'attachment.updated'
