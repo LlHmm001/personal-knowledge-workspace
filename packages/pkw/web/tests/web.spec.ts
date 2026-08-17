@@ -77,7 +77,8 @@ async function boot() {
   const facility = new DomainFacility(ctx, { backend: 'sqlite', routes: {} })
   ctx.storage.mount('domain', facility)
   ctx.provide('storageDomain', facility)
-  ctx.provide('webServer', { register: () => () => {}, registerUpgrade: () => () => {}, registerFallback: () => () => {}, tapIndex: () => () => {} } as never)
+  const routes: Array<{ kind: string; path: string; handler: (req: unknown, res: unknown) => void }> = []
+  ctx.provide('webServer', { register: (opts: { kind: string; path: string; handler: (req: unknown, res: unknown) => void }) => { routes.push(opts); return () => {} }, registerUpgrade: () => () => {}, registerFallback: () => () => {}, tapIndex: () => () => {} } as never)
   ctx.provide('sessionPersistence', { list: async () => [], load: () => { throw new Error('unused') }, inspect: () => { throw new Error('unused') } } as never)
   await ctx.plugin(WorkspaceRegistry)
   await ctx.plugin(LocalFileSystem)
@@ -94,7 +95,7 @@ async function boot() {
     retryMaxMs: 10,
     recoveryGraceAttempts: 2,
   })
-  return { ctx, dir, web: ctx.pkwWeb, sync: ctx.pkwWeKnoraSync, fake }
+  return { ctx, dir, web: ctx.pkwWeb, sync: ctx.pkwWeKnoraSync, fake, routes }
 }
 
 describe('PKW Web Host Bridge (real Core integration)', () => {
@@ -220,5 +221,44 @@ describe('PKW Web Host Bridge (real Core integration)', () => {
     await web.call('renameFolder', { path: '工作/项目A', newPath: '工作/项目B' })
     const folders = await web.call('listFolders', {}) as string[]
     expect(folders).toContain('工作/项目B')
+  })
+
+  it('serves attachment bytes at /pkw/attachment/<id> with mime + disposition', async () => {
+    const { web, routes } = await boot()
+    const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])
+    const up = await web.call('uploadAttachment', { filename: 'p.png', mimeType: 'image/png', contentBase64: png.toString('base64') }) as { attachmentId: string }
+    const route = routes.find(r => r.path === '/pkw/attachment/')
+    expect(route).toBeDefined()
+    const captured: { status: number; headers: Record<string, string>; body: Buffer } = { status: 0, headers: {}, body: Buffer.alloc(0) }
+    let resolveEnd!: () => void
+    const ended = new Promise<void>(r => { resolveEnd = r })
+    const res = {
+      writeHead: (s: number, h: Record<string, string>) => { captured.status = s; captured.headers = h },
+      end: (b: unknown) => { captured.body = Buffer.from((b as Buffer) ?? Buffer.alloc(0)); resolveEnd() },
+    }
+    route!.handler({ url: '/pkw/attachment/' + up.attachmentId, method: 'GET' }, res)
+    await ended
+    expect(captured.status).toBe(200)
+    expect(captured.headers['Content-Type']).toBe('image/png')
+    expect(captured.headers['Content-Disposition']).toBe('inline')
+    expect(captured.body).toEqual(png)
+  })
+
+  it('404s unknown or malformed attachment ids', async () => {
+    const { routes } = await boot()
+    const route = routes.find(r => r.path === '/pkw/attachment/')
+    expect(route).toBeDefined()
+    const invoke = async (url: string): Promise<number> => {
+      let resolveEnd!: () => void
+      const ended = new Promise<void>(r => { resolveEnd = r })
+      const captured: { status: number } = { status: 0 }
+      const res = { writeHead: (s: number) => { captured.status = s }, end: () => resolveEnd() }
+      route!.handler({ url, method: 'GET' }, res)
+      await ended
+      return captured.status
+    }
+    expect(await invoke('/pkw/attachment/att_ffffffffffff')).toBe(404) // unknown
+    expect(await invoke('/pkw/attachment/../../etc/passwd')).toBe(404) // traversal
+    expect(await invoke('/pkw/attachment/')).toBe(404) // empty
   })
 })

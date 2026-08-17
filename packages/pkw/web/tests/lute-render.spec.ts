@@ -28,6 +28,8 @@ describe('lute markdown renderer (Host Reading)', () => {
       '```',
       '',
       'See [[Target]] and [[Target|Alias]] and ![[Embed]].',
+      '',
+      '![pic](attachments/att_a1b2c3d4e5f6/pic.png) and [file](attachments/att_a1b2c3d4e5f6/doc.pdf).',
     ].join('\n')
 
     const html = await renderMarkdownToHtml(md)
@@ -52,6 +54,9 @@ describe('lute markdown renderer (Host Reading)', () => {
     expect(html).toContain('<span class="wikilink" data-wiki="Embed">Embed</span>')
     // No raw wiki syntax leaks into the output.
     expect(html).not.toContain('[[Target')
+    // Managed attachments rewritten to the served byte URL.
+    expect(html).toContain('src="/pkw/attachment/att_a1b2c3d4e5f6"')
+    expect(html).toContain('href="/pkw/attachment/att_a1b2c3d4e5f6"')
   })
 
   it('keeps wiki links inside fenced code literal', async () => {

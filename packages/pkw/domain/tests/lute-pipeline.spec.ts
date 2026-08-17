@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { escapeHtml, protectWikiLinks, restoreWikiLinks } from '../src/index.ts'
+import { escapeHtml, protectWikiLinks, restoreWikiLinks, rewriteAttachmentUrls } from '../src/index.ts'
 
 describe('lute pipeline (wiki-link protect/restore)', () => {
   it('protects and restores plain + aliased + embed wiki links', () => {
@@ -42,5 +42,25 @@ describe('lute pipeline (wiki-link protect/restore)', () => {
 
   it('escapeHtml escapes the browser-escaped set only', () => {
     expect(escapeHtml('& < > " \'')).toBe('&amp; &lt; &gt; &quot; \'')
+  })
+
+  it('rewrites managed attachment srcs/hrefs, leaving external links + code untouched', () => {
+    const html = [
+      '<p><img src="attachments/abc/pic.png" alt="x" /></p>',
+      '<p><a href="attachments/abc/file.pdf">f</a></p>',
+      '<p><a href="https://x.com/attachments/a/b">ext</a></p>',
+      '<pre><code>attachments/abc/code.txt</code></pre>',
+    ].join('')
+    const out = rewriteAttachmentUrls(html, (id, _f) => '/pkw/attachment/' + encodeURIComponent(id))
+    expect(out).toContain('src="/pkw/attachment/abc"')
+    expect(out).toContain('href="/pkw/attachment/abc"')
+    expect(out).toContain('href="https://x.com/attachments/a/b"') // external untouched
+    expect(out).toContain('attachments/abc/code.txt') // code content untouched
+  })
+
+  it('passes attachmentId + filename to urlFor', () => {
+    const seen: Array<[string, string]> = []
+    rewriteAttachmentUrls('<img src="attachments/att_a1b2c3d4e5f6/pic.png">', (id, f) => { seen.push([id, f]); return 'X' })
+    expect(seen).toEqual([['att_a1b2c3d4e5f6', 'pic.png']])
   })
 })

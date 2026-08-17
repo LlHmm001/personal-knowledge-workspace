@@ -70,3 +70,15 @@ export function restoreWikiLinks(html: string, tokens: WikiLinkToken[]): string 
   }
   return out
 }
+
+/**
+ * Rewrite managed-attachment URLs (`attachments/<id>/<filename>`) in Lute HTML
+ * to a served URL via `urlFor(id, filename)`. Matches only `src`/`href`
+ * attributes with the relative `attachments/` prefix (never `https://…`), so
+ * ordinary links and code-block content are untouched.
+ */
+export function rewriteAttachmentUrls(html: string, urlFor: (attachmentId: string, filename: string) => string): string {
+  return html.replace(/((?:src|href)=")attachments\/([^/"]+)\/([^"]+)(")/g, (_m, pre: string, id: string, filename: string, post: string) => {
+    return pre + urlFor(id, filename) + post
+  })
+}

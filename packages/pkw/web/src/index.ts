@@ -220,6 +220,47 @@ export class PkwWebService extends Service {
         void this.serveVditorAsset(req, res, vditorRoot)
       },
     }), 'pkw.web.vditorAssets')
+
+    // Managed attachment bytes for Reading mode (`/pkw/attachment/<id>`).
+    // The renderer rewrites `attachments/<id>/<file>` srcs/hrefs to this URL;
+    // bytes stream with the stored mime + inline (image) / download (file).
+    this.ctx.effect(() => this.ctx.webServer.register({
+      kind: 'prefix', path: '/pkw/attachment/', handler: (req, res) => {
+        void this.serveAttachment(req, res)
+      },
+    }), 'pkw.web.attachment')
+  }
+
+  private async serveAttachment(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    try {
+      const url = new URL(req.url ?? '/', 'http://localhost')
+      const id = decodeURIComponent(url.pathname.slice('/pkw/attachment/'.length)).replace(/^\/+|\/+$/g, '')
+      if (!/^att_[0-9a-f]{12}$/.test(id)) {
+        res.writeHead(404, { 'Content-Type': 'text/plain' })
+        res.end('not found')
+        return
+      }
+      const rec = this.attachments.get(AttachmentId(id))
+      if (rec === undefined) {
+        res.writeHead(404, { 'Content-Type': 'text/plain' })
+        res.end('not found')
+        return
+      }
+      const bytes = await this.attachments.open(AttachmentId(id))
+      const mime = rec.mimeType || 'application/octet-stream'
+      const safeName = (rec.filename ?? 'attachment').replace(/["\r\n\\]/g, '_')
+      const disposition = mime.startsWith('image/') ? 'inline' : `attachment; filename="${safeName}"`
+      res.writeHead(200, {
+        'Content-Type': mime,
+        'Content-Disposition': disposition,
+        'Content-Length': String(bytes.length),
+        'Cache-Control': 'private, max-age=3600',
+      })
+      res.end(Buffer.from(bytes))
+    } catch {
+      res.writeHead(404, { 'Content-Type': 'text/plain' })
+      res.end('not found')
+    }
   }
 
   private async serveVditorAsset(req: IncomingMessage, res: ServerResponse, root: string): Promise<void> {
