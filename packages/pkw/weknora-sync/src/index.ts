@@ -259,6 +259,12 @@ export class WeKnoraSyncService extends Service {
     return new Date().toISOString()
   }
 
+  /** Lightweight structured observability — never logs user content. */
+  private logKnowledge(rec: { entityType: string; entityId: string; mime?: string; action: string; parser?: string; durationMs: number; result: string }): void {
+    const id = rec.entityId.length > 12 ? `${rec.entityId.slice(0, 12)}…` : rec.entityId
+    this.ctx.logger.info(`[pkw.knowledge] type=${rec.entityType} id=${id} mime=${rec.mime ?? '-'} action=${rec.action} parser=${rec.parser ?? '-'} ms=${rec.durationMs} result=${rec.result}`)
+  }
+
   // ── integration availability ───────────────────────────────────────────────
 
   async integrationState(): Promise<'ready' | 'unavailable'> {
@@ -587,8 +593,10 @@ export class WeKnoraSyncService extends Service {
     const key = this.entityKey(ENTITY_NOTE, String(noteId))
     const intent = await this.newIntent({ entityType: ENTITY_NOTE, entityId: String(noteId), remoteFingerprint: fingerprint, operationKind: 'create' })
     await this.armPending(intent)
+    const t0 = Date.now()
     try {
       const created = await this.ctx.pkwWeKnora.createManualKnowledge(this.config.kbId, { title, content: markdown })
+      this.logKnowledge({ entityType: ENTITY_NOTE, entityId: String(noteId), mime: 'text/markdown', action: 'note-manual', parser: 'manual', durationMs: Date.now() - t0, result: 'ok' })
       await this.putMapping(key, {
         workspaceId: this.config.workspaceId, entityType: ENTITY_NOTE, entityId: String(noteId),
         knowledgeId: created.id, remoteFingerprint: fingerprint, localObservedRevision: 0,
@@ -821,8 +829,10 @@ export class WeKnoraSyncService extends Service {
   private async uploadAttachment(attachmentId: AttachmentIdT, key: string, fingerprint: string, fileHash: string, bytes: Uint8Array, filename: string, mimeType: string, existingIntent?: IntentRecord): Promise<string | undefined> {
     const intent = existingIntent ?? await this.newIntent({ entityType: ENTITY_ATTACHMENT, entityId: String(attachmentId), remoteFingerprint: fingerprint, operationKind: 'upload' })
     if (existingIntent === undefined) await this.armPending(intent)
+    const t0 = Date.now()
     try {
       const uploaded = await this.ctx.pkwWeKnora.uploadFile(this.config.kbId, { content: bytes, filename, channel: 'pkw', mimeType })
+      this.logKnowledge({ entityType: ENTITY_ATTACHMENT, entityId: String(attachmentId), mime: mimeType, action: 'attachment-file', durationMs: Date.now() - t0, result: 'ok' })
       await this.putMapping(key, {
         workspaceId: this.config.workspaceId, entityType: ENTITY_ATTACHMENT, entityId: String(attachmentId),
         knowledgeId: uploaded.id, remoteFingerprint: fingerprint, remoteFileHash: fileHash,

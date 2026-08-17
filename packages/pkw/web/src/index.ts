@@ -477,6 +477,17 @@ export class PkwWebService extends Service {
           sync: this.syncView('attachment', String(a.id), snap),
         }))
       }
+      case 'attachmentRelatedNotes': {
+        // Note↔Attachment relation is derived from Markdown (no structural table).
+        const id = String(args.attachmentId)
+        const out: Array<{ noteId: string; title: string }> = []
+        for (const n of this.notes.list({})) {
+          if (n.deletedAt !== undefined) continue
+          const doc = await this.notes.getDocument(n.noteId)
+          if (doc.attachments.some(a => String(a.attachmentId) === id)) out.push({ noteId: String(n.noteId), title: n.title })
+        }
+        return out
+      }
       case 'getAttachment': {
         const id = AttachmentId(String(args.attachmentId))
         const rec = this.attachments.get(id)

@@ -250,6 +250,7 @@ const STR = {
     copyWikiLink:'复制 Wiki 链接', taskComplete:'完成', taskReopen:'重新打开', taskDuplicate:'复制任务', taskDelete:'删除任务', matrixArchive:'归档', matrixRemove:'删除四象限', matrixRemoveConfirm:'删除该四象限？其全部任务将移回 Inbox。',
     matrixDeleting:'正在删除四象限', matrixMovingTasks:'正在将 {n} 个任务移回 Inbox，然后删除该四象限…', matrixDeleted:'已将 {n} 个任务移回 Inbox，并删除四象限。', matrixDeleteFailed:'删除四象限失败', retry:'重试',
     themeSystem:'跟随系统', themeLight:'浅色', themeDark:'深色',
+    knowledge:'知识库', knowledgeIndexed:'已索引', knowledgePending:'待索引', knowledgeNotIndexed:'未索引', knowledgeParseFailed:'解析失败', relatedNotes:'相关笔记', refAttachments:'引用附件', mime:'类型',
     companionNote:'建立伴随笔记', noteLocation:'笔记位置', kbIndex:'知识库索引', kbIndexHint:'索引可解析附件', uploadedNoNote:'文件已上传，但伴随笔记创建失败', uploadedCompanion:'已生成 {n} 篇伴随笔记',
     uploadProgress:'上传中…', uploadSuccess:'已上传', uploadFailed:'上传失败', searching:'搜索中…', noHits:'没有命中「{q}」。', searchHint:'输入关键词搜索本地笔记与附件（经 WeKnora hybrid search）。',
     score:'得分', openNote:'打开笔记', openAttachment:'打开附件', externalWeKnora:'WeKnora 外部', noteLabel:'笔记', attachmentLabel:'附件',
@@ -301,6 +302,7 @@ const STR = {
     copyWikiLink:'Copy wiki link', taskComplete:'Complete', taskReopen:'Reopen', taskDuplicate:'Duplicate task', taskDelete:'Delete task', matrixArchive:'Archive', matrixRemove:'Delete matrix', matrixRemoveConfirm:'Delete this matrix? All its tasks will move back to Inbox.',
     matrixDeleting:'Deleting matrix', matrixMovingTasks:'Moving {n} tasks back to Inbox, then deleting this matrix…', matrixDeleted:'Moved {n} tasks back to Inbox and deleted the matrix.', matrixDeleteFailed:'Failed to delete matrix', retry:'Retry',
     themeSystem:'Follow system', themeLight:'Light', themeDark:'Dark',
+    knowledge:'Knowledge', knowledgeIndexed:'Indexed', knowledgePending:'Pending', knowledgeNotIndexed:'Not indexed', knowledgeParseFailed:'Parse failed', relatedNotes:'Related notes', refAttachments:'Referenced attachments', mime:'Type',
     companionNote:'Create companion note', noteLocation:'Note location', kbIndex:'Knowledge indexing', kbIndexHint:'Index parseable attachments', uploadedNoNote:'File uploaded, but companion note creation failed', uploadedCompanion:'Created {n} companion notes',
     uploadProgress:'Uploading…', uploadSuccess:'Uploaded', uploadFailed:'Upload failed', searching:'Searching…', noHits:'No hits for 「{q}」.', searchHint:'Type a query to search notes & attachments (via WeKnora hybrid search).',
     score:'score', openNote:'Open note', openAttachment:'Open attachment', externalWeKnora:'external WeKnora', noteLabel:'Note', attachmentLabel:'Attachment',
@@ -437,6 +439,13 @@ function syncBadgeHtml(sync){
   else if (sync.syncState === 'stale') { label = t('stale'); cls = 'warn' }
   else { label = sync.syncState || t('notSynced'); cls = 'warn' }
   return '<span class="badge ' + cls + '">' + esc(label) + '</span>'
+}
+function knowledgeBadge(s){
+  if (!s || (s.syncState === undefined && !s.pending && !s.error)) return '<span class="badge">' + esc(t('knowledgeNotIndexed')) + '</span>'
+  if (s.error || s.remoteParseStatus === 'failed') return '<span class="badge err">' + esc(t('knowledgeParseFailed')) + '</span>'
+  if (s.pending) return '<span class="badge warn">' + esc(t('knowledgePending')) + '</span>'
+  if (s.syncState === 'synced') return '<span class="badge ok">' + esc(t('knowledgeIndexed')) + '</span>'
+  return '<span class="badge">' + esc(t('knowledgeNotIndexed')) + '</span>'
 }
 function isTerminalSync(sync){ return !sync || (sync.syncState === 'synced' && !sync.pending) || sync.syncState === 'deleted' || sync.syncState === 'stale' }
 function fmtSize(n){ if (n < 1024) return n + ' B'; if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB'; return (n / 1024 / 1024).toFixed(1) + ' MB' }
@@ -921,6 +930,7 @@ function detailNote(d){
     (fm.title ? '<div class="kv"><b>' + esc(t('title')) + '</b> <span class="v">' + esc(fm.title) + '</span></div>' : '') +
     (fm.tags && fm.tags.length ? '<div class="kv"><b>' + esc(t('tags')) + '</b> <span class="v">' + esc(fm.tags.join(', ')) + '</span></div>' : '') +
     '<div class="kv"><b>' + esc(t('path')) + '</b> <span class="v mono">' + esc(d.note.relativePath) + '</span></div>' +
+    (d.attachments && d.attachments.length ? '<h3>' + esc(t('refAttachments')) + '</h3><div class="kv">' + d.attachments.length + '</div>' : '') +
     '<h3>' + esc(t('outline')) + '</h3><div class="outline" id="outlineBox">' + outlineHtml(d.markdown) + '</div>' +
     '<h3>' + esc(t('syncSection')) + '</h3><div id="detailSync">' + syncBadgeHtml(s) + '</div>' +
     (s && s.error ? '<div class="kv"><b>' + esc(t('lastError')) + '</b> <span class="v">' + esc(s.error) + '</span></div>' : '') +
@@ -1123,7 +1133,12 @@ async function openAttachment(id){
   try {
     const d = await api('getAttachment', { attachmentId: id })
     const a = d.attachment, s = d.sync
-    $('#detail').innerHTML = '<h3>' + esc(t('details')) + '</h3><div class="kv"><b>' + esc(t('attachmentId')) + '</b> <span class="v mono">' + esc(a.attachmentId) + '</span></div><div class="kv"><b>' + esc(t('size')) + '</b> ' + fmtSize(a.sizeBytes) + '</div><h3>' + esc(t('syncSection')) + '</h3>' + syncBadgeHtml(s) + '<h3>' + esc(t('maintenance')) + '</h3><button class="btn small" data-action="download-attachment" data-id="' + esc(id) + '">' + esc(t('download')) + '</button> <button class="btn small danger" data-action="delete-attachment" data-id="' + esc(id) + '">' + esc(t('del')) + '</button>'
+    const rel = await api('attachmentRelatedNotes', { attachmentId: id }).catch(() => [])
+    $('#detail').innerHTML = '<h3>' + esc(t('knowledge')) + '</h3>' + knowledgeBadge(s) +
+      '<div class="kv"><b>' + esc(t('mime')) + '</b> <span class="v mono">' + esc(a.mimeType) + '</span></div>' +
+      (s && s.knowledgeId ? '<div class="kv"><b>' + esc(t('knowledgeId')) + '</b> <span class="v mono">' + esc(s.knowledgeId) + '</span></div>' : '') +
+      (rel && rel.length ? '<h3>' + esc(t('relatedNotes')) + '</h3>' + rel.map(r => '<div class="tree-row" data-action="open-note" data-id="' + esc(r.noteId) + '"><span class="ic">📄</span><span class="nm">' + esc(r.title) + '</span></div>').join('') : '') +
+      '<h3>' + esc(t('details')) + '</h3><div class="kv"><b>' + esc(t('attachmentId')) + '</b> <span class="v mono">' + esc(a.attachmentId) + '</span></div><div class="kv"><b>' + esc(t('size')) + '</b> ' + fmtSize(a.sizeBytes) + '</div><h3>' + esc(t('syncSection')) + '</h3>' + syncBadgeHtml(s) + '<h3>' + esc(t('maintenance')) + '</h3><button class="btn small" data-action="download-attachment" data-id="' + esc(id) + '">' + esc(t('download')) + '</button> <button class="btn small danger" data-action="delete-attachment" data-id="' + esc(id) + '">' + esc(t('del')) + '</button>'
     await refreshAttachments()
   } catch (e) { toast(t('genericError') + ': ' + e.message, 'err') }
 }
