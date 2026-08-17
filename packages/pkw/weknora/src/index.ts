@@ -84,6 +84,10 @@ export interface Knowledge {
   file_size?: number
   error_message?: string
   knowledge_base_id?: string
+  /** WeKnora-generated summary (async; populated when summary_status = completed). */
+  description?: string
+  /** none | pending | processing | completed | failed */
+  summary_status?: string
 }
 
 /** Knowledge returned by file ingestion (`POST /knowledge-bases/:id/knowledge/file`). */

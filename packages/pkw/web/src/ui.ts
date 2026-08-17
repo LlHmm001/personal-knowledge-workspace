@@ -260,6 +260,7 @@ const STR = {
     batchComplete:'标记完成', batchReopen:'重新打开', batchDelete:'删除 {n} 项任务', batchDeleteConfirm:'删除 {n} 项任务？', batchDeleteHint:'这些任务删除后无法恢复。', batchDone:'已处理 {n} 项', batchPartial:'已处理 {n} 项，{m} 项失败',
     themeSystem:'跟随系统', themeLight:'浅色', themeDark:'深色',
     knowledge:'知识库', knowledgeIndexed:'已索引', knowledgePending:'待索引', knowledgeNotIndexed:'未索引', knowledgeParseFailed:'解析失败', relatedNotes:'相关笔记', refAttachments:'引用附件', mime:'类型',
+    parseStatus:'解析状态', summary:'摘要', reparse:'重新解析', reparseStarted:'已提交重新解析',
     companionNote:'建立伴随笔记', noteLocation:'笔记位置', kbIndex:'知识库索引', kbIndexHint:'索引可解析附件', uploadedNoNote:'文件已上传，但伴随笔记创建失败', uploadedCompanion:'已生成 {n} 篇伴随笔记',
     uploadProgress:'上传中…', uploadSuccess:'已上传', uploadFailed:'上传失败', searching:'搜索中…', noHits:'没有命中「{q}」。', searchHint:'输入关键词搜索本地笔记与附件（经 WeKnora hybrid search）。',
     score:'得分', openNote:'打开笔记', openAttachment:'打开附件', externalWeKnora:'WeKnora 外部', noteLabel:'笔记', attachmentLabel:'附件',
@@ -314,6 +315,7 @@ const STR = {
     batchComplete:'Mark complete', batchReopen:'Reopen', batchDelete:'Delete {n} tasks', batchDeleteConfirm:'Delete {n} tasks?', batchDeleteHint:'These tasks cannot be restored after deletion.', batchDone:'Processed {n} items', batchPartial:'Processed {n} items, {m} failed',
     themeSystem:'Follow system', themeLight:'Light', themeDark:'Dark',
     knowledge:'Knowledge', knowledgeIndexed:'Indexed', knowledgePending:'Pending', knowledgeNotIndexed:'Not indexed', knowledgeParseFailed:'Parse failed', relatedNotes:'Related notes', refAttachments:'Referenced attachments', mime:'Type',
+    parseStatus:'Parse status', summary:'Summary', reparse:'Reparse', reparseStarted:'Reparse submitted',
     companionNote:'Create companion note', noteLocation:'Note location', kbIndex:'Knowledge indexing', kbIndexHint:'Index parseable attachments', uploadedNoNote:'File uploaded, but companion note creation failed', uploadedCompanion:'Created {n} companion notes',
     uploadProgress:'Uploading…', uploadSuccess:'Uploaded', uploadFailed:'Upload failed', searching:'Searching…', noHits:'No hits for 「{q}」.', searchHint:'Type a query to search notes & attachments (via WeKnora hybrid search).',
     score:'score', openNote:'Open note', openAttachment:'Open attachment', externalWeKnora:'external WeKnora', noteLabel:'Note', attachmentLabel:'Attachment',
@@ -1170,9 +1172,15 @@ async function openAttachment(id){
     const d = await api('getAttachment', { attachmentId: id })
     const a = d.attachment, s = d.sync
     const rel = await api('attachmentRelatedNotes', { attachmentId: id }).catch(() => [])
+    const kn = await api('getAttachmentKnowledge', { attachmentId: id }).catch(() => ({}))
+    const summaryHtml = (kn && (kn.summaryStatus || kn.description))
+      ? '<div class="kv"><b>' + esc(t('parseStatus')) + '</b> <span class="v">' + esc(kn.summaryStatus === 'completed' ? t('knowledgeIndexed') : (kn.summaryStatus || kn.parseStatus || '—')) + '</span></div>' +
+        (kn.description ? '<div class="kv"><b>' + esc(t('summary')) + '</b> <span class="v">' + esc(kn.description) + '</span></div>' : '')
+      : ''
     $('#detail').innerHTML = '<h3>' + esc(t('knowledge')) + '</h3>' + knowledgeBadge(s) +
       '<div class="kv"><b>' + esc(t('mime')) + '</b> <span class="v mono">' + esc(a.mimeType) + '</span></div>' +
-      (s && s.knowledgeId ? '<div class="kv"><b>' + esc(t('knowledgeId')) + '</b> <span class="v mono">' + esc(s.knowledgeId) + '</span></div>' : '') +
+      summaryHtml +
+      (s && s.knowledgeId ? '<div class="kv"><b>' + esc(t('knowledgeId')) + '</b> <span class="v mono">' + esc(s.knowledgeId) + '</span></div>' + '<button class="btn small" data-action="reparse-attachment" data-id="' + esc(id) + '">' + esc(t('reparse')) + '</button>' : '') +
       (rel && rel.length ? '<h3>' + esc(t('relatedNotes')) + '</h3>' + rel.map(r => '<div class="tree-row" data-action="open-note" data-id="' + esc(r.noteId) + '"><span class="ic">📄</span><span class="nm">' + esc(r.title) + '</span></div>').join('') : '') +
       '<h3>' + esc(t('details')) + '</h3><div class="kv"><b>' + esc(t('attachmentId')) + '</b> <span class="v mono">' + esc(a.attachmentId) + '</span></div><div class="kv"><b>' + esc(t('size')) + '</b> ' + fmtSize(a.sizeBytes) + '</div><h3>' + esc(t('syncSection')) + '</h3>' + syncBadgeHtml(s) + '<h3>' + esc(t('maintenance')) + '</h3><button class="btn small" data-action="download-attachment" data-id="' + esc(id) + '">' + esc(t('download')) + '</button> <button class="btn small danger" data-action="delete-attachment" data-id="' + esc(id) + '">' + esc(t('del')) + '</button>'
     await refreshAttachments()
@@ -2227,6 +2235,7 @@ document.addEventListener('click', (e) => {
   else if (act === 'reconcile') reconcile()
   else if (act === 'upload-attachment') uploadDialog()
   else if (act === 'download-attachment') downloadAttachment(id)
+  else if (act === 'reparse-attachment') { api('reparseAttachmentKnowledge', { attachmentId: id }).then(() => { toast(t('reparseStarted'), 'ok'); openAttachment(id) }).catch(e => toast(t('genericError') + ': ' + e.message, 'err')) }
   else if (act === 'delete-attachment') delAttachment(id)
   else if (act === 'go-attachments') setView('attachments')
   else if (act === 'new-task') quickTaskDialog(null, null)

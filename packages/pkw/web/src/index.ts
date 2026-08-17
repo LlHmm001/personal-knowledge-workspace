@@ -488,6 +488,23 @@ export class PkwWebService extends Service {
         }
         return out
       }
+      case 'getAttachmentKnowledge': {
+        // Remote Attachment Knowledge projection (WeKnora-derived summary).
+        const mapping = this.sync.getAttachmentMapping(AttachmentId(String(args.attachmentId)))
+        if (mapping === undefined || mapping.knowledgeId === undefined) return { knowledgeId: undefined, parseStatus: undefined, summaryStatus: undefined, description: undefined }
+        try {
+          const k = await this.weknora.getKnowledge(mapping.knowledgeId)
+          return { knowledgeId: mapping.knowledgeId, parseStatus: k.parse_status, summaryStatus: k.summary_status, description: k.description, fileType: k.file_type }
+        } catch {
+          return { knowledgeId: mapping.knowledgeId, parseStatus: mapping.remoteParseStatus, summaryStatus: undefined, description: undefined }
+        }
+      }
+      case 'reparseAttachmentKnowledge': {
+        const mapping = this.sync.getAttachmentMapping(AttachmentId(String(args.attachmentId)))
+        if (mapping === undefined || mapping.knowledgeId === undefined) return { reparse: false }
+        await this.weknora.reparseKnowledge(mapping.knowledgeId)
+        return { reparse: true }
+      }
       case 'getAttachment': {
         const id = AttachmentId(String(args.attachmentId))
         const rec = this.attachments.get(id)
