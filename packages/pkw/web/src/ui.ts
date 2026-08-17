@@ -1110,7 +1110,7 @@ function showFolderPicker(currentPath, cb){
 // ── Attachments / Search / Maintenance ──────────────────────────────────────
 function renderAttachmentsFrom(list){
   $('#treeToolbar').innerHTML = ''
-  $('#list').innerHTML = list.length ? list.map(a => '<div class="tree-row ' + (a.attachmentId === state.selectedAttachmentId ? 'active' : '') + '" data-action="open-attachment" data-id="' + esc(a.attachmentId) + '"><span class="tw"></span><span class="ic">📎</span><span class="nm">' + esc(a.filename) + '</span> ' + syncBadgeHtml(a.sync) + '</div>').join('') : '<div class="empty">' + esc(t('emptyAttachments')) + '</div>'
+  $('#list').innerHTML = list.length ? list.map(a => '<div class="tree-row ' + (a.attachmentId === state.selectedAttachmentId ? 'active' : '') + '" data-action="open-attachment" data-id="' + esc(a.attachmentId) + '"><span class="tw"></span><span class="ic">📎</span><span class="nm">' + esc(a.filename) + '</span> ' + syncBadgeHtml(a.sync) + '</div>').join('') : '<div class="empty"><h3>' + esc(t('emptyAttachments')) + '</h3><p class="muted">' + esc(t('attachmentsDesc')) + '</p><div class="cta"><button class="btn primary" data-action="upload-attachment">+ ' + esc(t('upload')) + '</button></div></div>'
   $('#main').innerHTML = '<h2>' + esc(t('attachments')) + '</h2><p class="muted">' + esc(t('attachmentsDesc')) + '</p><div class="toolbar"><button class="btn primary" data-action="upload-attachment">+ ' + esc(t('upload')) + '</button></div>'
   restoreScroll()
 }
