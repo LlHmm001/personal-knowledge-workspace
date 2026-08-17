@@ -132,6 +132,9 @@ aside.right h3:first-child{margin-top:0}
 .empty{color:var(--muted);padding:28px;text-align:center}.empty .cta{margin-top:10px}
 .spinner{width:16px;height:16px;border:2px solid var(--border-strong);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite;display:inline-block;vertical-align:-3px}
 @keyframes spin{to{transform:rotate(360deg)}}
+.check-row{display:flex;align-items:center;gap:6px;margin-bottom:8px;font-size:13px;cursor:pointer}
+.check-row input{margin:0}
+.form-label{display:block;font-size:12px;color:var(--muted);margin-bottom:4px}
 .stats{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-bottom:16px}
 .stat{border:1px solid var(--border);border-radius:10px;padding:12px 14px;background:var(--panel)}.stat .n{font-size:22px;font-weight:700}.stat .l{font-size:12px;color:var(--muted)}
 #toast{position:fixed;top:60px;left:50%;transform:translateX(-50%);z-index:60;display:none}
@@ -235,6 +238,7 @@ const STR = {
     newMatrix:'新建四象限', smartViews:'智能视图', matrices:'四象限',
     copyWikiLink:'复制 Wiki 链接', taskComplete:'完成', taskReopen:'重新打开', taskDuplicate:'复制任务', taskDelete:'删除任务', matrixArchive:'归档', matrixRemove:'删除四象限', matrixRemoveConfirm:'删除该四象限？其全部任务将移回 Inbox。',
     matrixDeleting:'正在删除四象限', matrixMovingTasks:'正在将 {n} 个任务移回 Inbox，然后删除该四象限…', matrixDeleted:'已将 {n} 个任务移回 Inbox，并删除四象限。', matrixDeleteFailed:'删除四象限失败', retry:'重试',
+    companionNote:'建立伴随笔记', noteLocation:'笔记位置', kbIndex:'知识库索引', kbIndexHint:'索引可解析附件', uploadedNoNote:'文件已上传，但伴随笔记创建失败', uploadedCompanion:'已生成 {n} 篇伴随笔记',
     uploadProgress:'上传中…', uploadSuccess:'已上传', uploadFailed:'上传失败', searching:'搜索中…', noHits:'没有命中「{q}」。', searchHint:'输入关键词搜索本地笔记与附件（经 WeKnora hybrid search）。',
     score:'得分', openNote:'打开笔记', openAttachment:'打开附件', externalWeKnora:'WeKnora 外部', noteLabel:'笔记', attachmentLabel:'附件',
     details:'详情', noteId:'NoteId', attachmentId:'AttachmentId', path:'路径', revision:'版本', updated:'更新时间', lastError:'最近错误', maintenance:'维护', advanced:'高级',
@@ -284,6 +288,7 @@ const STR = {
     newMatrix:'New matrix', smartViews:'Smart views', matrices:'Matrices',
     copyWikiLink:'Copy wiki link', taskComplete:'Complete', taskReopen:'Reopen', taskDuplicate:'Duplicate task', taskDelete:'Delete task', matrixArchive:'Archive', matrixRemove:'Delete matrix', matrixRemoveConfirm:'Delete this matrix? All its tasks will move back to Inbox.',
     matrixDeleting:'Deleting matrix', matrixMovingTasks:'Moving {n} tasks back to Inbox, then deleting this matrix…', matrixDeleted:'Moved {n} tasks back to Inbox and deleted the matrix.', matrixDeleteFailed:'Failed to delete matrix', retry:'Retry',
+    companionNote:'Create companion note', noteLocation:'Note location', kbIndex:'Knowledge indexing', kbIndexHint:'Index parseable attachments', uploadedNoNote:'File uploaded, but companion note creation failed', uploadedCompanion:'Created {n} companion notes',
     uploadProgress:'Uploading…', uploadSuccess:'Uploaded', uploadFailed:'Upload failed', searching:'Searching…', noHits:'No hits for 「{q}」.', searchHint:'Type a query to search notes & attachments (via WeKnora hybrid search).',
     score:'score', openNote:'Open note', openAttachment:'Open attachment', externalWeKnora:'external WeKnora', noteLabel:'Note', attachmentLabel:'Attachment',
     details:'Details', noteId:'NoteId', attachmentId:'AttachmentId', path:'Path', revision:'Revision', updated:'Updated', lastError:'Last error', maintenance:'Maintenance', advanced:'Advanced',
@@ -1065,7 +1070,7 @@ function showFolderPicker(currentPath, cb){
 function renderAttachmentsFrom(list){
   $('#treeToolbar').innerHTML = ''
   $('#list').innerHTML = list.length ? list.map(a => '<div class="tree-row ' + (a.attachmentId === state.selectedAttachmentId ? 'active' : '') + '" data-action="open-attachment" data-id="' + esc(a.attachmentId) + '"><span class="tw"></span><span class="ic">📎</span><span class="nm">' + esc(a.filename) + '</span> ' + syncBadgeHtml(a.sync) + '</div>').join('') : '<div class="empty">' + esc(t('emptyAttachments')) + '</div>'
-  $('#main').innerHTML = '<h2>' + esc(t('attachments')) + '</h2><p class="muted">' + esc(t('attachmentsDesc')) + '</p><div class="toolbar"><input type="file" id="file" /> <button class="btn primary" data-action="upload-attachment">' + esc(t('upload')) + '</button></div>'
+  $('#main').innerHTML = '<h2>' + esc(t('attachments')) + '</h2><p class="muted">' + esc(t('attachmentsDesc')) + '</p><div class="toolbar"><button class="btn primary" data-action="upload-attachment">+ ' + esc(t('upload')) + '</button></div>'
   restoreScroll()
 }
 async function renderAttachments(){
@@ -1091,16 +1096,82 @@ async function openAttachment(id){
     await refreshAttachments()
   } catch (e) { toast(t('genericError') + ': ' + e.message, 'err') }
 }
-async function uploadAttachment(){
-  const fi = $('#file'); const file = fi && fi.files && fi.files[0]
-  if (!file) { toast(t('uploadFailed'), 'warn'); return }
-  toast(t('uploadProgress'), 'warn')
-  try {
-    const buf = new Uint8Array(await file.arrayBuffer()); let bin = ''
-    for (let i = 0; i < buf.length; i++) bin += String.fromCharCode(buf[i])
-    await api('uploadAttachment', { filename: file.name, mimeType: file.type || 'application/octet-stream', contentBase64: btoa(bin) })
-    toast(t('uploadSuccess'), 'ok'); await refreshAttachments(); refreshHeader()
-  } catch (e) { toast(t('uploadFailed') + ': ' + e.message, 'err') }
+async function uploadFileBinary(file){
+  const buf = new Uint8Array(await file.arrayBuffer())
+  let bin = ''
+  for (let i = 0; i < buf.length; i++) bin += String.fromCharCode(buf[i])
+  return api('uploadAttachment', { filename: file.name, mimeType: file.type || 'application/octet-stream', contentBase64: btoa(bin) })
+}
+function sanitizeNoteBase(base){
+  const ok = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .-_()[]#@'
+  let out = ''
+  for (const ch of String(base)) out += ok.indexOf(ch) >= 0 ? ch : '_'
+  return out.trim() || 'untitled'
+}
+async function uniqueNotePath(folder, base){
+  const safe = sanitizeNoteBase(base)
+  const notes = await api('listNotes')
+  const existing = new Set((notes || []).map(n => n.relativePath))
+  const prefix = folder ? folder + '/' : ''
+  let cand = prefix + safe + '.md'
+  let n = 2
+  while (existing.has(cand)) { cand = prefix + safe + ' ' + n + '.md'; n++ }
+  return cand
+}
+async function createCompanionNote(up, file, folder){
+  const dot = file.name.lastIndexOf('.')
+  const base = dot > 0 ? file.name.slice(0, dot) : file.name
+  const isImage = String(file.type || '').indexOf('image/') === 0
+  const ref = 'attachments/' + up.attachmentId + '/' + file.name
+  const refMd = isImage ? '![](' + ref + ')' : '[' + file.name + '](' + ref + ')'
+  const notePath = await uniqueNotePath(folder, base)
+  await api('createNote', { relativePath: notePath, markdown: '# ' + base + '\\n\\n' + refMd + '\\n' })
+  return notePath
+}
+async function uploadFilesWithCompanion(files, withNote, folder){
+  let ok = 0, noteOk = 0, noteFail = 0
+  for (const file of files) {
+    try {
+      const up = await uploadFileBinary(file)
+      ok++
+      if (withNote) {
+        try { await createCompanionNote(up, file, folder); noteOk++ } catch (e) { noteFail++ }
+      }
+    } catch (e) { /* attachment upload failed */ }
+  }
+  if (ok === 0) { toast(t('uploadFailed'), 'err'); return }
+  if (ok < files.length) { toast(t('uploadedCompanion', { n: ok }) + ' / ' + files.length, 'warn') }
+  else if (withNote) {
+    if (noteFail === 0) toast(t('uploadSuccess') + (ok > 1 ? ' · ' + t('uploadedCompanion', { n: noteOk }) : ''), 'ok')
+    else toast(t('uploadedNoNote'), 'warn')
+  } else toast(t('uploadSuccess'), 'ok')
+  await refreshAttachments(); refreshHeader()
+  if (withNote && noteOk > 0) { if (state.view === 'notes') renderTree() }
+}
+function uploadDialog(){
+  const overlay = document.createElement('div'); overlay.className = 'modal-overlay'
+  overlay.innerHTML = '<div class="modal"><h3>' + esc(t('upload')) + '</h3>' +
+    '<input type="file" id="upFiles" multiple style="margin-bottom:10px">' +
+    '<label class="check-row"><input type="checkbox" id="upNote" checked> ' + esc(t('companionNote')) + '</label>' +
+    '<label class="form-label">' + esc(t('noteLocation')) + '</label><select id="upFolder" style="margin-bottom:10px"></select>' +
+    '<label class="check-row"><input type="checkbox" id="upIndex" checked> ' + esc(t('kbIndex')) + ' <span class="muted small">' + esc(t('kbIndexHint')) + '</span></label>' +
+    '<div class="toolbar" style="margin-top:12px"><button class="btn" id="upCancel">' + esc(t('cancel')) + '</button><button class="btn primary" id="upOk">' + esc(t('upload')) + '</button></div></div>'
+  document.body.appendChild(overlay)
+  const q = (s) => overlay.querySelector(s)
+  api('listFolders').then(folders => {
+    const sel = q('#upFolder')
+    if (sel) sel.innerHTML = '<option value="">' + esc(t('rootFolder')) + '</option>' + (folders || []).map(f => '<option value="' + esc(f) + '">' + esc(f) + '</option>').join('')
+  }).catch(() => {})
+  q('#upCancel').addEventListener('click', () => overlay.remove())
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove() })
+  q('#upOk').addEventListener('click', () => {
+    const files = Array.prototype.slice.call(q('#upFiles').files || [])
+    if (!files.length) { toast(t('uploadFailed'), 'warn'); return }
+    const withNote = q('#upNote').checked
+    const folder = q('#upFolder').value || ''
+    overlay.remove()
+    uploadFilesWithCompanion(files, withNote, folder)
+  })
 }
 async function downloadAttachment(id){
   try {
@@ -1954,7 +2025,7 @@ document.addEventListener('click', (e) => {
   else if (act === 'sync-note') syncEntity('note', id)
   else if (act === 'sync-now') syncNow()
   else if (act === 'reconcile') reconcile()
-  else if (act === 'upload-attachment') uploadAttachment()
+  else if (act === 'upload-attachment') uploadDialog()
   else if (act === 'download-attachment') downloadAttachment(id)
   else if (act === 'delete-attachment') delAttachment(id)
   else if (act === 'go-attachments') setView('attachments')

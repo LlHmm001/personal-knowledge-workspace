@@ -97,4 +97,15 @@ describe('PKW web UI (served page)', () => {
     expect(js).toContain('matrixMovingTasks')
     expect(js).toContain('matrixDeleteFailed')
   })
+
+  it('wires direct upload → companion note workflow', () => {
+    const js = script()
+    expect(js).toContain('uploadDialog')
+    expect(js).toContain('createCompanionNote')
+    expect(js).toContain('uniqueNotePath')
+    expect(js).toContain('sanitizeNoteBase')
+    expect(js).toContain('uploadFilesWithCompanion')
+    expect(js).toContain("'![]('")
+    expect(js).toContain('lastIndexOf')
+  })
 })
