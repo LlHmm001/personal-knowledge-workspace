@@ -128,6 +128,9 @@ aside.right h3:first-child{margin-top:0}
 .task-detail-footer{display:flex;align-items:center;gap:8px;padding:12px 16px;border-top:1px solid var(--border)}
 .task-detail-footer .spacer{flex:1}
 #tdState.saved{color:var(--ok)}#tdState.dirty{color:var(--warn)}#tdState.saving{color:var(--muted)}
+.close-guard-overlay{z-index:95}
+.close-guard{width:400px;max-width:calc(100vw - 24px);padding:16px}
+.close-guard .toolbar{display:flex;gap:8px;justify-content:flex-end;margin-top:12px}
 .subtask-row{display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:6px;font-size:13px}
 .subtask-row:hover{background:#f3f6fb}
 .subtask-row .nm{flex:1;cursor:pointer}
@@ -219,7 +222,7 @@ const STR = {
     slashInlineCode:'行内代码', slashCodeBlock:'代码块', slashLink:'链接', slashWikiLink:'Wiki 链接', slashImage:'图片', slashFootnote:'脚注', slashCallout:'提示框',
     editorLoading:'正在加载编辑器…', buildInfo:'构建信息', bold:'加粗', italic:'斜体', strike:'删除线', highlight:'高亮',
     taskDetail:'任务详情', description:'描述', taskStatus:'状态', taskOpen:'进行中', taskScheduled:'计划日期', taskCreated:'创建', subtasks:'子任务', subtaskAdd:'添加子任务…',
-    descriptionPlaceholder:'添加描述…', tagsPlaceholder:'输入标签，用逗号分隔', organization:'组织', time:'时间', info:'信息', closeGuardTitle:'有未保存的修改', saveAndClose:'保存并关闭', discard:'放弃修改',
+    descriptionPlaceholder:'添加描述…', tagsPlaceholder:'输入标签，用逗号分隔', organization:'组织', time:'时间', info:'信息', closeGuardTitle:'有未保存的修改', closeGuardBody:'你对这个任务的修改还没有保存。', saveAndClose:'保存并关闭', discard:'放弃修改',
   },
   en: {
     overview:'Overview', notes:'Notes', attachments:'Attachment library', tasks:'Tasks', trash:'Trash', search:'Search',
@@ -256,7 +259,7 @@ const STR = {
     slashInlineCode:'Inline code', slashCodeBlock:'Code block', slashLink:'Link', slashWikiLink:'Wiki link', slashImage:'Image', slashFootnote:'Footnote', slashCallout:'Callout',
     editorLoading:'Loading editor…', buildInfo:'Build info', bold:'Bold', italic:'Italic', strike:'Strikethrough', highlight:'Highlight',
     taskDetail:'Task detail', description:'Description', taskStatus:'Status', taskOpen:'Open', taskScheduled:'Scheduled', taskCreated:'Created', subtasks:'Subtasks', subtaskAdd:'Add subtask…',
-    descriptionPlaceholder:'Add description…', tagsPlaceholder:'Enter tags, comma separated', organization:'Organization', time:'Time', info:'Info', closeGuardTitle:'Unsaved changes', saveAndClose:'Save & close', discard:'Discard changes',
+    descriptionPlaceholder:'Add description…', tagsPlaceholder:'Enter tags, comma separated', organization:'Organization', time:'Time', info:'Info', closeGuardTitle:'Unsaved changes', closeGuardBody:'Your changes to this task are not saved yet.', saveAndClose:'Save & close', discard:'Discard changes',
   },
 }
 const PKW_BUILD = '1d93f55'
@@ -1484,6 +1487,7 @@ function selectionSourceRef(){
 let taskDetailSessionSeq = 0
 let activeTaskDetailSession = 0
 let taskDetailRefreshSubtasks = null
+let taskDetailRequestClose = null
 function inlineEditSubtask(span, taskId){
   const cur = span.textContent
   const input = document.createElement('input')
@@ -1572,12 +1576,25 @@ function taskDetailDialog(taskId){
       if (sv) { sv.disabled = !dirty || saving; sv.textContent = saving ? t('saving') : t('taskSaveEdit') }
     }
     const markDirty = () => { if (!dirty) { dirty = true; updateState() } }
-    const close = () => { if (isActive()) activeTaskDetailSession = 0; taskDetailRefreshSubtasks = null; modal.remove() }
+    let guardEl = null
+    const dismissGuard = () => { if (guardEl) { guardEl.remove(); guardEl = null } }
+    const close = () => { dismissGuard(); if (isActive()) activeTaskDetailSession = 0; taskDetailRefreshSubtasks = null; taskDetailRequestClose = null; modal.remove() }
     const requestClose = () => {
+      if (saving) return
+      if (guardEl) { dismissGuard(); return } // Esc/backdrop on the guard → cancel, stay
       if (!dirty) { close(); return }
-      const go = confirm(t('closeGuardTitle') + '\\n[' + t('saveAndClose') + '] [' + t('discard') + '] [' + t('cancel') + ']')
-      if (go) doSave(true)
+      // Custom three-way close guard (session-scoped element ref, no global id).
+      const w = document.createElement('div')
+      w.innerHTML = '<div class="modal-overlay close-guard-overlay"><div class="modal close-guard"><h3>' + esc(t('closeGuardTitle')) + '</h3><p class="muted">' + esc(t('closeGuardBody')) + '</p><div class="toolbar"><button class="btn" id="cgCancel">' + esc(t('cancel')) + '</button><button class="btn danger" id="cgDiscard">' + esc(t('discard')) + '</button><button class="btn primary" id="cgSaveClose">' + esc(t('saveAndClose')) + '</button></div></div></div>'
+      guardEl = w.firstElementChild
+      document.body.appendChild(guardEl)
+      const gq = (s) => guardEl.querySelector(s)
+      gq('#cgCancel').addEventListener('click', dismissGuard)
+      gq('#cgDiscard').addEventListener('click', () => { dismissGuard(); close() })
+      gq('#cgSaveClose').addEventListener('click', () => { dismissGuard(); doSave(true) })
+      guardEl.addEventListener('click', (e) => { if (e.target === guardEl) dismissGuard() })
     }
+    taskDetailRequestClose = requestClose
     // Re-fetch + patch ONLY the #tdSubtasks section (never the whole modal).
     const refreshSubtasks = () => api('listSubtasks', { parentTaskId: taskId }).then(list => {
       if (!isActive()) return
@@ -1697,7 +1714,7 @@ function quickTaskDialog(matrixId, sourceRefs, prefill){
 }
 $('#search').addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.value.trim()) { state.view = 'search'; render(); runSearch(e.target.value.trim()) } })
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') { dismissContextMenu(); dismissSelButton(); dismissWikiSuggest(); return }
+  if (e.key === 'Escape') { if (taskDetailRequestClose) { taskDetailRequestClose(); return } dismissContextMenu(); dismissSelButton(); dismissWikiSuggest(); return }
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') { e.preventDefault(); if (state.view === 'notes' && state.selectedNoteId !== null) saveNote() }
   else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'o') { e.preventDefault(); quickSwitch() }
   else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'b' && $('#editor')) { e.preventDefault(); document.execCommand('insertText', false, '**bold**') }
