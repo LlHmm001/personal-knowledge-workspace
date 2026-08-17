@@ -103,6 +103,7 @@ aside.right h3:first-child{margin-top:0}
 .quad-head .count{margin-left:auto;font-size:12px;color:var(--muted)}
 .quad .empty.small{padding:8px;font-size:12px}
 .task-src{margin-left:6px;cursor:pointer;opacity:.65}.task-src:hover{opacity:1}
+.task-mv{margin-left:auto;display:inline-flex;gap:2px;opacity:.55}.task-mv span{cursor:pointer;padding:0 5px;border-radius:4px}.task-mv span:hover{background:#eef2f8;opacity:1}
 mark{background:#ffe9a8;border-radius:2px;padding:0 2px}
 @media (max-width:760px){.quad-grid{grid-template-columns:1fr}}
 .wikilink-suggest{position:absolute;z-index:80;background:var(--panel);border:1px solid var(--border);border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.15);max-height:240px;overflow:auto;min-width:240px}
@@ -221,6 +222,7 @@ const state = {
   editor: { noteId: null, persistedMarkdown: '', dirty: false, saving: false, mode: localStorage.getItem('pkw-editor-mode') || 'live' },
   taskView: localStorage.getItem('pkw-task-view') || 'all',
   highlightText: '',
+  tasksCache: [],
 }
 
 function toast(msg, kind){ const el = $('#toast'); el.innerHTML = '<div class="toast ' + (kind || 'ok') + '">' + esc(msg) + '</div>'; el.style.display = 'block'; clearTimeout(toast._t); toast._t = setTimeout(() => { el.style.display = 'none' }, 3200) }
@@ -783,7 +785,25 @@ function taskRow(x, matrices){
   const badge = x.matrixId ? '<span class="badge">' + esc(matrixName(matrices, x.matrixId)) + '</span>' : ''
   const src = x.sourceRefs && x.sourceRefs[0] && x.sourceRefs[0].noteId
     ? '<span class="task-src" data-action="open-task-source" data-id="' + esc(x.sourceRefs[0].noteId) + '" data-exact="' + esc(x.sourceRefs[0].exact || '') + '" title="' + esc(t('openNote')) + '">📄</span>' : ''
-  return '<div class="tree-row" data-action="toggle-task" data-completed="' + (x.status === 'completed' ? '1' : '0') + '" data-id="' + esc(x.taskId) + '"><span class="ic">' + (x.status === 'completed' ? '☑' : '☐') + '</span><span class="nm">' + esc(x.title) + '</span>' + badge + pri + due + src + '</div>'
+  const mv = '<span class="task-mv"><span data-action="task-up" data-id="' + esc(x.taskId) + '" title="' + esc(t('moveUp')) + '">↑</span><span data-action="task-down" data-id="' + esc(x.taskId) + '" title="' + esc(t('moveDown')) + '">↓</span></span>'
+  return '<div class="tree-row" data-action="toggle-task" data-completed="' + (x.status === 'completed' ? '1' : '0') + '" data-id="' + esc(x.taskId) + '"><span class="ic">' + (x.status === 'completed' ? '☑' : '☐') + '</span><span class="nm">' + esc(x.title) + '</span>' + badge + pri + due + src + mv + '</div>'
+}
+function moveTaskOrder(taskId, dir){
+  const all = state.tasksCache || []
+  const v = state.taskView
+  let scope
+  if (v === 'all' || v === 'today' || v === 'upcoming' || v === 'completed' || v === 'inbox') scope = filterTaskList(all, v).map(x => x.taskId)
+  else {
+    const t = all.find(x => x.taskId === taskId)
+    const q = t ? quadrantOf(t) : 0
+    scope = all.filter(x => x.status === 'open' && x.matrixId === v && quadrantOf(x) === q).map(x => x.taskId)
+  }
+  const i = scope.indexOf(taskId)
+  if (i < 0) return
+  const j = i + dir
+  if (j < 0 || j >= scope.length) return
+  const tmp = scope[i]; scope[i] = scope[j]; scope[j] = tmp
+  api('reorderTasks', { taskIds: scope }).then(() => renderTasks()).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
 }
 async function renderTasks(){
   $('#list').innerHTML = ''; $('#treeToolbar').innerHTML = ''; $('#detail').innerHTML = ''
@@ -791,6 +811,7 @@ async function renderTasks(){
   try {
     const matrices = await api('listMatrices')
     const all = await api('listTasks', {})
+    state.tasksCache = all
     const counts = {}
     for (const x of all) if (x.status === 'open') { const k = x.matrixId ?? 'inbox'; counts[k] = (counts[k] || 0) + 1 }
     const views = [['all', t('taskAll')], ['today', t('taskToday')], ['upcoming', t('taskUpcoming')], ['completed', t('taskCompleted')]]
@@ -805,14 +826,16 @@ async function renderTasks(){
     else renderMatrixGrid(matrices, all, state.taskView)
   } catch (e) { $('#main').innerHTML = '<div class="empty">' + esc(t('genericError')) + ': ' + esc(e.message) + '</div>' }
 }
-function renderTaskList(matrices, all, filter){
+function filterTaskList(all, filter){
   const isToday = d => { const n = new Date(d); const now = new Date(); return n.getFullYear() === now.getFullYear() && n.getMonth() === now.getMonth() && n.getDate() === now.getDate() }
-  let list
-  if (filter === 'completed') list = all.filter(x => x.status === 'completed')
-  else if (filter === 'inbox') list = all.filter(x => x.matrixId === null && x.status === 'open')
-  else if (filter === 'today') list = all.filter(x => x.status === 'open' && (x.dueAt || x.scheduledAt) && (isToday(x.dueAt || x.scheduledAt) || new Date(x.dueAt || x.scheduledAt) < new Date()))
-  else if (filter === 'upcoming') list = all.filter(x => x.status === 'open' && (x.dueAt || x.scheduledAt) && new Date(x.dueAt || x.scheduledAt) > new Date())
-  else list = all.filter(x => x.status === 'open')
+  if (filter === 'completed') return all.filter(x => x.status === 'completed')
+  if (filter === 'inbox') return all.filter(x => x.matrixId === null && x.status === 'open')
+  if (filter === 'today') return all.filter(x => x.status === 'open' && (x.dueAt || x.scheduledAt) && (isToday(x.dueAt || x.scheduledAt) || new Date(x.dueAt || x.scheduledAt) < new Date()))
+  if (filter === 'upcoming') return all.filter(x => x.status === 'open' && (x.dueAt || x.scheduledAt) && new Date(x.dueAt || x.scheduledAt) > new Date())
+  return all.filter(x => x.status === 'open')
+}
+function renderTaskList(matrices, all, filter){
+  const list = filterTaskList(all, filter)
   list.sort((a, b) => ((a.dueAt || a.scheduledAt) || '9999') < ((b.dueAt || b.scheduledAt) || '9999') ? -1 : 1)
   $('#main').innerHTML =
     '<h2>' + esc(t('tasks')) + '</h2>' +
@@ -959,6 +982,8 @@ document.addEventListener('click', (e) => {
   else if (act === 'selection-to-task') { const ref = selectionSourceRef(); if (ref) quickTaskDialog(null, [ref]); else toast(t('taskNoTasks'), 'warn') }
   else if (act === 'open-task-source') { state.highlightText = el.dataset.exact || ''; setView('notes'); openNote(id) }
   else if (act === 'toggle-task') { const t = el.dataset.completed === '1' ? api('reopenTask', { taskId: id }) : api('completeTask', { taskId: id }); t.then(() => renderTasks()) }
+  else if (act === 'task-up') moveTaskOrder(id, -1)
+  else if (act === 'task-down') moveTaskOrder(id, 1)
   else if (act === 'restore-note') { api('restoreNote', { noteId: id }).then(() => renderTrash()).then(refreshHeader) }
   else if (act === 'purge-note') { if (confirm(t('delNoteConfirm'))) api('purgeNote', { noteId: id }).then(() => renderTrash()).then(refreshHeader) }
   else if (act === 'restore-attachment') { api('restoreAttachment', { attachmentId: id }).then(() => renderTrash()).then(refreshHeader) }
