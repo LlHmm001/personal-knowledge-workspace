@@ -15,6 +15,9 @@ export function renderPage(): string {
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>PKW — Personal Knowledge Workspace</title>
+<link rel="stylesheet" href="/pkw/assets/vditor/index.css" />
+<script src="/pkw/assets/vditor/js/lute/lute.min.js"></script>
+<script src="/pkw/assets/vditor/index.min.js"></script>
 <style>
 :root{--bg:#f6f7f9;--panel:#fff;--border:#e3e6ea;--ink:#1c2330;--muted:#6b7280;--accent:#2f6fed;--ok:#178a4f;--warn:#b45309;--err:#b91c1c}
 *{box-sizing:border-box}body{margin:0;font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"PingFang SC","Microsoft YaHei",sans-serif;color:var(--ink);background:var(--bg)}
@@ -366,12 +369,16 @@ function renderMarkdown(body){
 }
 
 // ── Notes editor ────────────────────────────────────────────────────────────
+let vditor = null // active Vditor instance (Live mode only)
+function destroyVditor(){ if (vditor) { try { vditor.destroy() } catch (e) {} vditor = null } }
+
 async function openNote(noteId){
   state.selectedNoteId = noteId; state.selectedFolder = null
+  destroyVditor()
   $('#main').innerHTML = '<div class="empty">' + esc(t('loading')) + '</div>'
   try {
     const d = await api('getNote', { noteId })
-    state.editor = { noteId, persistedMarkdown: d.markdown, dirty: false, saving: false, mode: localStorage.getItem('pkw-editor-mode') || 'live' }
+    state.editor = { noteId, persistedMarkdown: d.markdown, body: d.body || '', frontmatter: d.frontmatter || '', dirty: false, saving: false, mode: localStorage.getItem('pkw-editor-mode') || 'live' }
     $('#main').innerHTML = renderEditorShell(d)
     bindEditor()
     $('#detail').innerHTML = detailNote(d)
@@ -382,7 +389,6 @@ async function openNote(noteId){
 function renderEditorShell(d){
   const mode = state.editor.mode
   const fm = parseFrontmatterClient(d.markdown)
-  const body = fm.body
   const modeBtn = (m, key) => '<button class="btn mode ' + (mode === m ? 'active' : '') + '" data-action="set-mode" data-mode="' + m + '">' + esc(t(key)) + '</button>'
   return '<div class="toolbar">' +
     '<button class="btn primary" data-action="save-note">' + esc(t('save')) + '</button>' +
@@ -395,26 +401,53 @@ function renderEditorShell(d){
     '</div>' +
     '<div class="editor-head"><span class="title">' + esc(fm.title || d.note.title || '') + '</span><span class="path">' + esc(d.note.relativePath) + '</span></div>' +
     '<div id="editorPane">' +
+      (mode === 'live' ? '<div id="vditor" style="min-height:56vh"></div>' : '') +
       (mode === 'source' ? '<textarea id="editor" aria-label="Markdown">' + esc(d.markdown) + '</textarea>' : '') +
-      (mode === 'live' ? '<textarea id="editor" aria-label="Markdown">' + esc(d.markdown) + '</textarea><div id="preview"></div>' : '') +
       (mode === 'reading' ? '<div id="preview"></div>' : '') +
     '</div>'
 }
 function bindEditor(){
-  const el = $('#editor')
-  if (el) el.addEventListener('input', onEditorInput)
-  const pv = $('#preview')
-  if (pv) pv.addEventListener('click', (e) => {
-    const w = e.target.closest('[data-wiki]')
-    if (w) openWikiTarget(w.dataset.wiki)
+  if (state.editor.mode === 'live') initVditor()
+  else if (state.editor.mode === 'source') { const el = $('#editor'); if (el) el.addEventListener('input', onEditorInput) }
+  else renderPreview()
+}
+function initVditor(){
+  const el = $('#vditor')
+  if (!el || typeof window.Vditor === 'undefined') return
+  if (vditor) { try { vditor.destroy() } catch (e) {} vditor = null }
+  vditor = new window.Vditor(el, {
+    mode: 'ir',
+    cache: { enable: false },
+    cdn: '/pkw/assets/vditor',
+    height: '56vh',
+    value: state.editor.body || '',
+    toolbar: ['undo', 'redo', '|', 'headings', 'bold', 'italic', 'strike', '|', 'list', 'ordered-list', 'check', '|', 'quote', 'inline-code', 'code', '|', 'link', 'table', '|', 'upload', '|', 'outline'],
+    upload: { handler: (files) => { uploadVditorFiles(files) } },
+    input: () => { onEditorInput() },
   })
-  if (state.editor.mode !== 'source') renderPreview()
+}
+function uploadVditorFiles(files){
+  for (const file of files) {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const base64 = String(reader.result).split(',')[1]
+      api('uploadAttachment', { filename: file.name, mimeType: file.type || 'application/octet-stream', contentBase64: base64 }).then(up => {
+        if (vditor) vditor.insertValue('![](attachments/' + up.attachmentId + '/' + file.name + ')')
+        refreshHeader()
+      }).catch(e => toast(t('uploadFailed') + ': ' + e.message, 'err'))
+    }
+    reader.readAsDataURL(file)
+  }
+}
+function getEditorValue(){
+  if (state.editor.mode === 'live' && vditor) return { kind: 'body', value: vditor.getValue() }
+  if (state.editor.mode === 'source') { const el = $('#editor'); return { kind: 'markdown', value: el ? el.value : '' } }
+  return { kind: 'body', value: state.editor.body || '' }
 }
 function onEditorInput(){
-  const el = $('#editor'); if (!el) return
-  const dirty = el.value !== state.editor.persistedMarkdown
+  const v = getEditorValue().value
+  const dirty = state.editor.mode === 'source' ? (v !== state.editor.persistedMarkdown) : (v !== state.editor.body)
   if (dirty !== state.editor.dirty) { state.editor.dirty = dirty; updateSaveStatus() }
-  if (state.editor.mode !== 'source') renderPreview()
   clearTimeout(onEditorInput._t)
   onEditorInput._t = setTimeout(autosave, 1500)
 }
@@ -425,9 +458,7 @@ function updateSaveStatus(){
   else { st.className = 'saved'; st.textContent = '✓ ' + t('saved') }
 }
 function renderPreview(){
-  const el = $('#editor')
-  const md = el ? el.value : (state.editor.persistedMarkdown || '')
-  const fm = parseFrontmatterClient(md)
+  const fm = parseFrontmatterClient(state.editor.persistedMarkdown || '')
   const pv = $('#preview')
   if (pv) pv.innerHTML = renderMarkdown(fm.body) || '<span class="muted">' + esc(t('emptyPreview')) + '</span>'
 }
@@ -478,12 +509,16 @@ function outlineHtml(md){
 
 async function saveNote(){
   if (state.selectedNoteId === null) return
-  const el = $('#editor'); if (!el) return
   const btn = document.querySelector('[data-action="save-note"]'); if (btn) btn.disabled = true
   state.editor.saving = true; updateSaveStatus()
   try {
-    const d = await api('saveNote', { noteId: state.selectedNoteId, markdown: el.value })
-    state.editor.persistedMarkdown = el.value; state.editor.dirty = false; state.editor.saving = false; updateSaveStatus()
+    const v = getEditorValue()
+    const d = v.kind === 'body'
+      ? await api('saveNoteBody', { noteId: state.selectedNoteId, body: v.value })
+      : await api('saveNote', { noteId: state.selectedNoteId, markdown: v.value })
+    if (v.kind === 'body') state.editor.body = v.value
+    else state.editor.persistedMarkdown = v.value
+    state.editor.dirty = false; state.editor.saving = false; updateSaveStatus()
     toast(t('localSavedR', { r: d.observedRevision }), 'ok')
     refreshHeader(); renderTree()
     kickSyncPoll({ pending: true })
@@ -492,11 +527,15 @@ async function saveNote(){
 }
 async function autosave(){
   if (!state.editor.dirty || state.selectedNoteId === null || state.editor.saving) return
-  const el = $('#editor'); if (!el) return
   state.editor.saving = true; updateSaveStatus()
   try {
-    const d = await api('saveNote', { noteId: state.selectedNoteId, markdown: el.value })
-    state.editor.persistedMarkdown = el.value; state.editor.dirty = false; state.editor.saving = false; updateSaveStatus()
+    const v = getEditorValue()
+    const d = v.kind === 'body'
+      ? await api('saveNoteBody', { noteId: state.selectedNoteId, body: v.value })
+      : await api('saveNote', { noteId: state.selectedNoteId, markdown: v.value })
+    if (v.kind === 'body') state.editor.body = v.value
+    else state.editor.persistedMarkdown = v.value
+    state.editor.dirty = false; state.editor.saving = false; updateSaveStatus()
     refreshHeader()
     kickSyncPoll({ pending: true })
   } catch (e) { state.editor.saving = false; updateSaveStatus(); toast(t('autosaveFailed'), 'err') }
@@ -695,7 +734,9 @@ function collectNotes(nodes, out){ for (const n of nodes) { if (n.kind === 'note
 
 // ── Paste image → attachment ────────────────────────────────────────────────
 document.addEventListener('paste', async (e) => {
-  if (state.view !== 'notes' || state.selectedNoteId === null) return
+  // Vditor (Live mode) handles paste via its own upload hook; this manual handler
+  // is for Source mode only (a raw textarea with no upload integration).
+  if (state.view !== 'notes' || state.selectedNoteId === null || state.editor.mode !== 'source') return
   const items = (e.clipboardData && e.clipboardData.items) || []
   for (const item of items) {
     if (item.type.indexOf('image/') === 0) {

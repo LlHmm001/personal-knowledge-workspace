@@ -15,18 +15,19 @@ describe('PKW web UI (served page)', () => {
     expect(js).not.toContain('id: __placeholder__')
   })
 
-  it('guards the editor preview binding so Source mode cannot throw on a missing #preview', () => {
+  it('integrates Vditor with cache disabled and a single-instance lifecycle', () => {
     const js = script()
-    // The regression was: $('#preview').addEventListener(...) with no null guard,
-    // which throws in Source mode (no preview div). The fix uses a guarded const.
-    expect(js).toContain('const pv = $(\'#preview\')')
-    expect(js).toContain('if (pv) pv.addEventListener')
+    expect(js).toContain("cache: { enable: false }")
+    expect(js).toContain('initVditor')
+    expect(js).toContain('destroyVditor')
+    expect(js).toContain("mode: 'ir'")
+    expect(js).toContain('saveNoteBody')
   })
 
   it('renders all three editor modes with the right surfaces', () => {
     const js = script()
+    expect(js).toContain("mode === 'live' ? '<div id=\"vditor\"")
     expect(js).toContain("mode === 'source' ? '<textarea id=\"editor\"")
-    expect(js).toContain("mode === 'live' ? '<textarea id=\"editor\"")
     expect(js).toContain("mode === 'reading' ? '<div id=\"preview\">")
     expect(js).toContain('set-mode')
     expect(js).toContain('pkw-editor-mode')
