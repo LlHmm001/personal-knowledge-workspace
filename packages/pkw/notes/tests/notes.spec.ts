@@ -69,6 +69,16 @@ describe('pkw notes + attachments core', () => {
     expect(doc.markdown).toContain('# Hello')
   })
 
+  it('mints a real NoteId instead of adopting a placeholder id', async () => {
+    const { notes } = await boot()
+    const note = await notes.create({ relativePath: 'p.md', markdown: '---\nid: __placeholder__\n---\n\n# P\n' })
+    expect(String(note.noteId)).not.toBe('__placeholder__')
+    expect(String(note.noteId).startsWith('note_')).toBe(true)
+    const doc = await notes.getDocument(note.noteId)
+    expect(doc.markdown).not.toContain('__placeholder__')
+    expect(doc.markdown).toContain('id: ' + String(note.noteId))
+  })
+
   it('reconcile discovers an external .md without id and injects a stable NoteId', async () => {
     const { notes, dir } = await boot()
     await mkdir(join(dir, 'notes', '随手'), { recursive: true })

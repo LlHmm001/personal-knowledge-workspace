@@ -75,6 +75,18 @@ export function injectNoteId(markdown: string, noteId: string): string {
   return markdown.slice(0, match.index + opening[0].length) + inserted + markdown.slice(match.index + opening[0].length)
 }
 
+/** Replace (or insert) the `id:` line with `noteId` — used when minting a real identity over a placeholder. */
+export function replaceNoteId(markdown: string, noteId: string): string {
+  const match = /^---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*\r?\n?/.exec(markdown)
+  if (match === null) return `---\nid: ${noteId}\n---\n\n${markdown}`
+  const block = match[0]
+  if (/^id:\s*[^\r\n]+$/m.test(block)) {
+    const replaced = block.replace(/^id:\s*[^\r\n]+$/m, `id: ${noteId}`)
+    return markdown.slice(0, match.index) + replaced + markdown.slice(match.index + block.length)
+  }
+  return injectNoteId(markdown, noteId)
+}
+
 /** Derive a display title: frontmatter.title → first H1 → filename. */
 export function deriveTitle(markdown: string, frontmatterTitle: string | undefined, filename: string): string {
   if (frontmatterTitle !== undefined && frontmatterTitle !== '') return frontmatterTitle

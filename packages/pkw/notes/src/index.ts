@@ -153,13 +153,15 @@ export class NotesService extends Service {
   }
 
   async create(input: CreateNoteInput): Promise<NoteIndexRecord> {
-    const { parseFrontmatter, injectNoteId, deriveTitle } = await import('./frontmatter.ts')
+    const { parseFrontmatter, injectNoteId, replaceNoteId, deriveTitle } = await import('./frontmatter.ts')
     const parsed = parseFrontmatter(input.markdown)
     let markdown = input.markdown
     let noteIdStr = parsed.frontmatter.id
-    if (noteIdStr === undefined || noteIdStr === '') {
+    if (noteIdStr === undefined || noteIdStr === '' || noteIdStr.includes('placeholder')) {
       noteIdStr = `note_${randomUUID().replaceAll('-', '').slice(0, 12)}`
-      markdown = injectNoteId(input.markdown, noteIdStr)
+      // A pre-embedded fake id (e.g. `id: __placeholder__`) must be replaced with
+      // the minted identity, never adopted as the stable NoteId.
+      markdown = replaceNoteId(input.markdown, noteIdStr)
     }
     const noteId = NoteId(noteIdStr)
     await this.ctx.fs.writeText(
