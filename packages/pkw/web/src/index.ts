@@ -410,6 +410,10 @@ export class PkwWebService extends Service {
         await this.notes.trashFolder(String(args.path))
         return { trashed: true }
       }
+      case 'restoreFolder': {
+        await this.notes.restoreFolder(String(args.path))
+        return { restored: true }
+      }
       case 'setOrder': {
         const children = Array.isArray(args.children) ? args.children as Array<{ kind: string; id: string }> : []
         await this.notes.setOrder(String(args.parentPath), children.map(c => ({ kind: c.kind === 'folder' ? 'folder' : 'note', id: c.id })))

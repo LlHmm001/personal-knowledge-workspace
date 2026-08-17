@@ -263,6 +263,7 @@ export interface PkwNotesService {
   renameFolder(oldPath: string, newPath: string): Promise<void>
   deleteFolder(relativePath: string): Promise<void>
   trashFolder(relativePath: string): Promise<void>
+  restoreFolder(relativePath: string): Promise<void>
   getOrder(parentPath: string): NoteOrderChild[]
   setOrder(parentPath: string, children: NoteOrderChild[]): Promise<void>
 }

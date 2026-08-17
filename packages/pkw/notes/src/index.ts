@@ -527,6 +527,29 @@ export class NotesService extends Service {
     await this.removeChildFromOrder(parentOf(relativePath), 'folder', posix.basename(relativePath))
   }
 
+  /** Restore a trashed folder and un-delete its descendant notes (NoteId preserved). */
+  async restoreFolder(relativePath: string): Promise<void> {
+    this.assertFolderPath(relativePath)
+    await this.ctx.fs.rename(
+      await this.ctx.fs.resolve(this.handle.archivePath(relativePath)),
+      await this.ctx.fs.resolve(this.handle.notePath(relativePath)),
+    )
+    const prefix = `${relativePath}/`
+    for (const [path, id] of [...this.requirePaths().entries()]) {
+      if (path !== relativePath && !path.startsWith(prefix)) continue
+      const record = this.requireTable().get(id)
+      if (record === undefined || record.deletedAt === undefined) continue
+      await this.commitEvent(NOTE_RESTORED, String(id), {
+        noteId: String(id),
+        relativePath: path,
+        contentHash: record.contentHash,
+        observedRevision: record.observedRevision + 1,
+        afterStateFingerprint: noteFingerprint(this.config.workspaceId, String(id), path, record.contentHash, false),
+      })
+      await this.putRecord({ ...record, deletedAt: undefined, observedRevision: record.observedRevision + 1, updatedAt: new Date().toISOString() }, path)
+    }
+  }
+
   /** Trash a whole folder (even non-empty): archive the directory + mark descendant notes deleted. */
   async trashFolder(relativePath: string): Promise<void> {
     this.assertFolderPath(relativePath)
