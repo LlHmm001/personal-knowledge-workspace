@@ -286,8 +286,11 @@ export class WeKnoraClient extends Service {
     return r.data
   }
 
-  async deleteKnowledge(knowledgeId: string): Promise<void> {
-    await this.request<unknown>('DELETE', `/knowledge/${knowledgeId}`)
+  async deleteKnowledge(knowledgeId: string): Promise<{ taskId?: string }> {
+    // WeKnora DELETE is ASYNC: 200 only means the asynq task was enqueued; the
+    // actual chunk/vector/keyword-index cleanup happens in a background worker.
+    const r = await this.request<{ data?: { task_id?: string } }>('DELETE', `/knowledge/${knowledgeId}`)
+    return { taskId: r.data?.task_id }
   }
 
   async reparseKnowledge(knowledgeId: string): Promise<Knowledge> {
