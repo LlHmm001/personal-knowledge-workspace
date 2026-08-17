@@ -263,6 +263,7 @@ export interface PkwNotesService {
   getIdentityConflict(noteId: NoteId): NoteIdentityConflict | undefined
   listIdentityConflicts(): NoteIdentityConflict[]
   listFolders(): Promise<string[]>
+  listTrashFolders(): Promise<string[]>
   createFolder(relativePath: string): Promise<void>
   renameFolder(oldPath: string, newPath: string): Promise<void>
   deleteFolder(relativePath: string): Promise<void>

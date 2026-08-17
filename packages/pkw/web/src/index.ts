@@ -319,6 +319,16 @@ export class PkwWebService extends Service {
             sync: this.syncView('note', String(n.noteId), snap),
           }))
       }
+      case 'listTrashAttachments': {
+        const snap = this.syncSnapshot()
+        return this.attachments.list({ includeDeleted: true })
+          .filter(a => a.deletedAt !== undefined)
+          .map(a => ({
+            attachmentId: String(a.id), filename: a.filename, mimeType: a.mimeType, sizeBytes: a.sizeBytes, deleted: true,
+            sync: this.syncView('attachment', String(a.id), snap),
+          }))
+      }
+      case 'listTrashFolders': return this.notes.listTrashFolders()
       case 'listAttachments': {
         const snap = this.syncSnapshot()
         return this.attachments.list().map(a => ({

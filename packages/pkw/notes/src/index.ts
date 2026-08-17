@@ -483,6 +483,13 @@ export class NotesService extends Service {
     return out.sort()
   }
 
+  /** List trashed folder relative paths (under `archive/`). */
+  async listTrashFolders(): Promise<string[]> {
+    const out: string[] = []
+    await this.collectFolders(await this.ctx.fs.resolve(this.handle.archivePath('')), '', out)
+    return out.sort()
+  }
+
   private async collectFolders(target: import('@deepseek-ai/dsh-fs').FsTarget, prefix: string, out: string[]): Promise<void> {
     const info = await this.ctx.fs.stat(target)
     if (info === undefined || info.type !== 'directory') return
