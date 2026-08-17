@@ -292,4 +292,28 @@ describe('PKW Web Host Bridge (real Core integration)', () => {
     expect(del.markdown).not.toContain('[^1]')
     expect(del.markdown).toContain('[^2]: two')
   })
+
+  it('batchRestoreTrash restores mixed kinds and reports per-item failures', async () => {
+    const { web } = await boot()
+    const note = await web.call('createNote', { relativePath: 'a.md', markdown: '# a\n' }) as { noteId: string }
+    await web.call('deleteNote', { noteId: note.noteId })
+    const up = await web.call('uploadAttachment', { filename: 'x.txt', mimeType: 'text/plain', contentBase64: Buffer.from('hi').toString('base64') }) as { attachmentId: string }
+    await web.call('deleteAttachment', { attachmentId: up.attachmentId })
+    const r = await web.call('batchRestoreTrash', { items: [{ key: 'note:' + note.noteId }, { key: 'attachment:' + up.attachmentId }, { key: 'folder:nonexistent' }] }) as { ok: string[]; failed: Array<{ key: string; error: string }> }
+    expect(r.ok).toContain('note:' + note.noteId)
+    expect(r.ok).toContain('attachment:' + up.attachmentId)
+    expect(r.failed).toHaveLength(1)
+    expect(r.failed[0]!.key).toBe('folder:nonexistent')
+    expect(r.failed[0]!.error).toBeTruthy()
+  })
+
+  it('batchPurgeTrash purges a trashed folder by stable trashEntryId', async () => {
+    const { web } = await boot()
+    await web.call('createNote', { relativePath: 'f/a.md', markdown: '# a\n' })
+    const entry = await web.call('trashFolder', { path: 'f' }) as { trashEntryId: string }
+    const r = await web.call('batchPurgeTrash', { items: [{ key: 'folder:' + entry.trashEntryId }, { key: 'bogus' }] }) as { ok: string[]; failed: Array<{ key: string; error: string }> }
+    expect(r.ok).toEqual(['folder:' + entry.trashEntryId])
+    expect(r.failed.map(f => f.key)).toEqual(['bogus'])
+    expect(r.failed[0]!.error).toContain('invalid trash key')
+  })
 })

@@ -21,7 +21,7 @@ import { posix, extname, resolve as pathResolve, sep } from 'node:path'
 import { readFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import z from '@deepseek-ai/schemastery'
-import { AttachmentId, FolderTrashEntryId, NoteId, TaskId, TaskMatrixId, addColumnLeft, addColumnRight, addRowAbove, addRowBelow, deleteColumn, deleteRow, deleteFootnote, deleteTable, editFootnoteDefinition, nextFootnoteKey, resolveTableCell, setColumnAlign } from '@deepseek-ai/dsh-pkw-domain'
+import { AttachmentId, FolderTrashEntryId, NoteId, TaskId, TaskMatrixId, addColumnLeft, addColumnRight, addRowAbove, addRowBelow, deleteColumn, deleteRow, deleteFootnote, deleteTable, editFootnoteDefinition, nextFootnoteKey, parseTrashItemKey, resolveTableCell, setColumnAlign, summarizeBatch } from '@deepseek-ai/dsh-pkw-domain'
 import type { ColumnAlign } from '@deepseek-ai/dsh-pkw-domain'
 import type { OrderChild } from '@deepseek-ai/dsh-pkw-notes'
 import PkwEventStoreService from '@deepseek-ai/dsh-pkw-events'
@@ -373,6 +373,42 @@ export class PkwWebService extends Service {
       case 'footnoteDelete': {
         return { markdown: deleteFootnote(String(args.markdown ?? ''), String(args.key ?? '')) }
       }
+      case 'batchRestoreTrash': {
+        const items = Array.isArray(args.items) ? args.items as Array<{ key?: string; kind?: string; id?: string }> : []
+        const results: Array<{ key: string; ok: boolean; error?: string }> = []
+        for (const it of items) {
+          const parsed = it.key !== undefined ? parseTrashItemKey(String(it.key)) : { kind: it.kind as never, id: String(it.id ?? '') }
+          const key = it.key !== undefined ? String(it.key) : String(it.kind) + ':' + String(it.id ?? '')
+          try {
+            if (parsed === undefined) throw new Error('invalid trash key')
+            if (parsed.kind === 'note') await this.notes.restore(NoteId(parsed.id))
+            else if (parsed.kind === 'attachment') await this.attachments.restore(AttachmentId(parsed.id))
+            else await this.notes.restoreFolder(FolderTrashEntryId(parsed.id))
+            results.push({ key, ok: true })
+          } catch (e) {
+            results.push({ key, ok: false, error: String(e instanceof Error ? e.message : e) })
+          }
+        }
+        return summarizeBatch(results)
+      }
+      case 'batchPurgeTrash': {
+        const items = Array.isArray(args.items) ? args.items as Array<{ key?: string; kind?: string; id?: string }> : []
+        const results: Array<{ key: string; ok: boolean; error?: string }> = []
+        for (const it of items) {
+          const parsed = it.key !== undefined ? parseTrashItemKey(String(it.key)) : { kind: it.kind as never, id: String(it.id ?? '') }
+          const key = it.key !== undefined ? String(it.key) : String(it.kind) + ':' + String(it.id ?? '')
+          try {
+            if (parsed === undefined) throw new Error('invalid trash key')
+            if (parsed.kind === 'note') await this.notes.purge(NoteId(parsed.id))
+            else if (parsed.kind === 'attachment') await this.attachments.purge(AttachmentId(parsed.id))
+            else await this.notes.purgeFolder(FolderTrashEntryId(parsed.id))
+            results.push({ key, ok: true })
+          } catch (e) {
+            results.push({ key, ok: false, error: String(e instanceof Error ? e.message : e) })
+          }
+        }
+        return summarizeBatch(results)
+      }
       case 'createNote': {
         const rec = await this.notes.create({ relativePath: String(args.relativePath), markdown: String(args.markdown) })
         return { noteId: String(rec.noteId), relativePath: rec.relativePath, title: rec.title }
@@ -414,7 +450,7 @@ export class PkwWebService extends Service {
           .filter(n => n.deletedAt !== undefined)
           .map(n => ({
             noteId: String(n.noteId), relativePath: n.relativePath, folder: folderOf(n.relativePath),
-            title: n.title, updatedAt: n.updatedAt, deleted: true,
+            title: n.title, updatedAt: n.updatedAt, deletedAt: n.deletedAt, deleted: true,
             sync: this.syncView('note', String(n.noteId), snap),
           }))
       }
@@ -423,7 +459,7 @@ export class PkwWebService extends Service {
         return this.attachments.list({ includeDeleted: true })
           .filter(a => a.deletedAt !== undefined)
           .map(a => ({
-            attachmentId: String(a.id), filename: a.filename, mimeType: a.mimeType, sizeBytes: a.sizeBytes, deleted: true,
+            attachmentId: String(a.id), filename: a.filename, mimeType: a.mimeType, sizeBytes: a.sizeBytes, deletedAt: a.deletedAt, deleted: true,
             sync: this.syncView('attachment', String(a.id), snap),
           }))
       }

@@ -27,6 +27,8 @@ export { addColumnLeft, addColumnRight, addRowAbove, addRowBelow, deleteColumn, 
 export type { ColumnAlign, TableBlock } from './table.ts'
 export { applyCompletionToggle, baselineFromSubtasks, completedCount, deriveCompletionChanges, deriveSubtaskSeed, isCompletionDirty, projectionOf, removeCompletionDraft } from './subtask-draft.ts'
 export type { CompletionDraft, SubtaskSeedItem, SubtaskSeedSource } from './subtask-draft.ts'
+export { deriveSelectAll, parseTrashItemKey, reconcileSelection, summarizeBatch, trashItemKey } from './trash.ts'
+export type { BatchResult, SelectAllState, TrashItemKind } from './trash.ts'
 export { parseNoteId } from './frontmatter.ts'
 export { attachmentDomainSpec, noteDomainSpec, operationCommitRecord, pkwDomainSpec, taskDomainSpec } from './spec.ts'
 export type { OperationCommitRecord } from './spec.ts'
