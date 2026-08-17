@@ -127,3 +127,63 @@ export const attachmentDomainSpec = defineDomain({
     attachments: domainTable<AttachmentId, z.infer<typeof attachmentRecordSchema>>(attachmentRecordSchema),
   },
 })
+
+// ── Phase C: tasks + matrices ───────────────────────────────────────────────
+
+const taskMatrixId = z.string().transform(value => value as import('./types.ts').TaskMatrixId)
+const taskId = z.string().transform(value => value as import('./types.ts').TaskId)
+
+const taskMatrixSchema = z.object({
+  matrixId: taskMatrixId,
+  workspaceId,
+  name: z.string(),
+  description: z.string().optional(),
+  icon: z.string().optional(),
+  color: z.string().optional(),
+  manualOrder: z.number().int().nonnegative(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  archivedAt: z.string().optional(),
+})
+
+const taskSourceRefSchema = z.object({
+  kind: z.enum(['note', 'selection']),
+  noteId: z.string(),
+  exact: z.string().optional(),
+  prefix: z.string().optional(),
+  suffix: z.string().optional(),
+  noteRevision: z.number().int().nonnegative().optional(),
+  contentHash: z.string().optional(),
+})
+
+const taskSchema = z.object({
+  taskId,
+  workspaceId,
+  matrixId: taskMatrixId.nullable(),
+  title: z.string(),
+  description: z.string().optional(),
+  status: z.enum(['open', 'completed', 'cancelled']),
+  important: z.boolean(),
+  urgent: z.boolean(),
+  priority: z.number().int().nonnegative().optional(),
+  dueAt: z.string().optional(),
+  scheduledAt: z.string().optional(),
+  tags: z.array(z.string()),
+  parentTaskId: taskId.nullable(),
+  sourceRefs: z.array(taskSourceRefSchema),
+  manualOrder: z.number().int().nonnegative(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  completedAt: z.string().optional(),
+  deletedAt: z.string().optional(),
+})
+
+/** Tasks domain: matrices (multiple Eisenhower scopes) + current-state Task Store. */
+export const taskDomainSpec = defineDomain({
+  name: 'pkw_tasks',
+  version: 1,
+  tables: {
+    matrices: domainTable<import('./types.ts').TaskMatrixId, z.infer<typeof taskMatrixSchema>>(taskMatrixSchema),
+    tasks: domainTable<import('./types.ts').TaskId, z.infer<typeof taskSchema>>(taskSchema),
+  },
+})

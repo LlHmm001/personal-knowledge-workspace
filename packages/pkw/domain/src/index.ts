@@ -10,7 +10,7 @@ import type { PkwEventCommitted, PkwEventStore } from './types.ts'
 
 export * from './types.ts'
 export { parseNoteId } from './frontmatter.ts'
-export { attachmentDomainSpec, noteDomainSpec, operationCommitRecord, pkwDomainSpec } from './spec.ts'
+export { attachmentDomainSpec, noteDomainSpec, operationCommitRecord, pkwDomainSpec, taskDomainSpec } from './spec.ts'
 export type { OperationCommitRecord } from './spec.ts'
 
 declare module '@deepseek-ai/cordis' {

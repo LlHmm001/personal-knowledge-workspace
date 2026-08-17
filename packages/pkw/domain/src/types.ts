@@ -15,12 +15,16 @@ export type AttachmentId = Branded<'AttachmentId'>
 export type EventId = Branded<'EventId'>
 export type OperationId = Branded<'OperationId'>
 export type CorrelationId = Branded<'CorrelationId'>
+export type TaskId = Branded<'TaskId'>
+export type TaskMatrixId = Branded<'TaskMatrixId'>
 
 export function NoteId(id: string): NoteId { return id as NoteId }
 export function AttachmentId(id: string): AttachmentId { return id as AttachmentId }
 export function EventId(id: string): EventId { return id as EventId }
 export function OperationId(id: string): OperationId { return id as OperationId }
 export function CorrelationId(id: string): CorrelationId { return id as CorrelationId }
+export function TaskId(id: string): TaskId { return id as TaskId }
+export function TaskMatrixId(id: string): TaskMatrixId { return id as TaskMatrixId }
 
 // ── operation context ────────────────────────────────────────────────────────
 
@@ -314,3 +318,81 @@ export const ATTACHMENT_IMPORTED = 'attachment.imported'
 export const ATTACHMENT_UPDATED = 'attachment.updated'
 export const ATTACHMENT_DELETED = 'attachment.deleted'
 export const ATTACHMENT_RESTORED = 'attachment.restored'
+
+// ── Phase C: tasks + matrices ───────────────────────────────────────────────
+
+export type TaskStatus = 'open' | 'completed' | 'cancelled'
+
+export interface TaskMatrix {
+  matrixId: TaskMatrixId
+  workspaceId: WorkspaceId
+  name: string
+  description?: string
+  icon?: string
+  color?: string
+  manualOrder: number
+  createdAt: string
+  updatedAt: string
+  archivedAt?: string
+}
+
+export interface TaskSourceRef {
+  kind: 'note' | 'selection'
+  noteId: string
+  exact?: string
+  prefix?: string
+  suffix?: string
+  noteRevision?: number
+  contentHash?: string
+}
+
+export interface Task {
+  taskId: TaskId
+  workspaceId: WorkspaceId
+  matrixId: TaskMatrixId | null
+  title: string
+  description?: string
+  status: TaskStatus
+  important: boolean
+  urgent: boolean
+  priority?: number
+  dueAt?: string
+  scheduledAt?: string
+  tags: string[]
+  parentTaskId: TaskId | null
+  sourceRefs: TaskSourceRef[]
+  manualOrder: number
+  createdAt: string
+  updatedAt: string
+  completedAt?: string
+  deletedAt?: string
+}
+
+export interface CreateTaskInput {
+  title: string
+  matrixId?: TaskMatrixId | null
+  description?: string
+  important?: boolean
+  urgent?: boolean
+  priority?: number
+  dueAt?: string
+  scheduledAt?: string
+  tags?: string[]
+  parentTaskId?: TaskId | null
+  sourceRefs?: TaskSourceRef[]
+}
+
+export interface PkwTasksService {
+  listMatrices(filter?: { includeArchived?: boolean }): TaskMatrix[]
+  createMatrix(input: { name: string; description?: string; icon?: string; color?: string }): Promise<TaskMatrix>
+  renameMatrix(matrixId: TaskMatrixId, name: string): Promise<TaskMatrix>
+  archiveMatrix(matrixId: TaskMatrixId): Promise<void>
+  listTasks(filter?: { matrixId?: TaskMatrixId | null; status?: TaskStatus; includeDeleted?: boolean }): Task[]
+  createTask(input: CreateTaskInput): Promise<Task>
+  updateTask(taskId: TaskId, patch: Partial<Omit<Task, 'taskId' | 'workspaceId' | 'createdAt'>>): Promise<Task>
+  completeTask(taskId: TaskId): Promise<Task>
+  reopenTask(taskId: TaskId): Promise<Task>
+  moveTaskToMatrix(taskId: TaskId, matrixId: TaskMatrixId | null): Promise<Task>
+  deleteTask(taskId: TaskId): Promise<void>
+  restoreTask(taskId: TaskId): Promise<Task>
+}

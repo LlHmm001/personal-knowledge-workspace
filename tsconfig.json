@@ -31,6 +31,7 @@
       "@deepseek-ai/dsh-pkw-weknora": ["/LlHmm9527/Personal Knowledge Workspace/packages/pkw/weknora/src"],
       "@deepseek-ai/dsh-pkw-weknora-sync": ["/LlHmm9527/Personal Knowledge Workspace/packages/pkw/weknora-sync/src"],
       "@deepseek-ai/dsh-pkw-web": ["/LlHmm9527/Personal Knowledge Workspace/packages/pkw/web/src"],
+      "@deepseek-ai/dsh-pkw-tasks": ["/LlHmm9527/Personal Knowledge Workspace/packages/pkw/tasks/src"],
       "@deepseek-ai/dsh-*": [
         "./packages/core/*/lib/types",
         "./packages/llm/*/lib/types",
