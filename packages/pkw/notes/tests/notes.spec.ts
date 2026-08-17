@@ -283,6 +283,18 @@ describe('pkw notes + attachments core', () => {
     expect(notes.list().every(n => n.noteId === before)).toBe(true)
   })
 
+  it('trashFolder archives a non-empty folder and marks descendant notes deleted', async () => {
+    const { notes } = await boot()
+    await notes.createFolder('项目')
+    const a = await notes.create({ relativePath: '项目/a.md', markdown: '# a\n' })
+    const b = await notes.create({ relativePath: '项目/sub/b.md', markdown: '# b\n' })
+    await notes.trashFolder('项目')
+    expect((await notes.listFolders()).includes('项目')).toBe(false)
+    expect(notes.get(a.noteId)!.deletedAt).toBeDefined()
+    expect(notes.get(b.noteId)!.deletedAt).toBeDefined()
+    expect(notes.list().some(n => n.noteId === a.noteId || n.noteId === b.noteId)).toBe(false)
+  })
+
   it('deletes an empty folder but rejects a non-empty one', async () => {
     const { notes } = await boot()
     await notes.createFolder('空')

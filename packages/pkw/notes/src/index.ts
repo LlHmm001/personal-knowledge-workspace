@@ -527,6 +527,32 @@ export class NotesService extends Service {
     await this.removeChildFromOrder(parentOf(relativePath), 'folder', posix.basename(relativePath))
   }
 
+  /** Trash a whole folder (even non-empty): archive the directory + mark descendant notes deleted. */
+  async trashFolder(relativePath: string): Promise<void> {
+    this.assertFolderPath(relativePath)
+    const prefix = `${relativePath}/`
+    for (const [path, id] of [...this.requirePaths().entries()]) {
+      if (path !== relativePath && !path.startsWith(prefix)) continue
+      const record = this.requireTable().get(id)
+      if (record === undefined || record.deletedAt !== undefined) continue
+      const payload: NoteEventPayload = {
+        noteId: String(id),
+        relativePath: path,
+        contentHash: record.contentHash,
+        observedRevision: record.observedRevision,
+        afterStateFingerprint: noteFingerprint(this.config.workspaceId, String(id), path, record.contentHash, true),
+      }
+      await this.commitEvent(NOTE_DELETED, String(id), payload)
+      await this.putRecord({ ...record, deletedAt: new Date().toISOString() }, path)
+    }
+    await this.ctx.fs.rename(
+      await this.ctx.fs.resolve(this.handle.notePath(relativePath)),
+      await this.ctx.fs.resolve(this.handle.archivePath(relativePath)),
+    )
+    await this.requireOrder().delete(this.orderKey(relativePath))
+    await this.removeChildFromOrder(parentOf(relativePath), 'folder', posix.basename(relativePath))
+  }
+
   /** Manual order for one parent folder ('' = workspace root). Empty = default sort. */
   getOrder(parentPath: string): OrderChild[] {
     const rec = this.requireOrder().get(this.orderKey(parentPath))
