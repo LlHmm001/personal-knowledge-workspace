@@ -539,7 +539,7 @@ async function initVditor(){
   }
 }
 function vditorToolbar(){
-  const calloutTypes = ['NOTE', 'TIP', 'INFO', 'IMPORTANT', 'QUESTION', 'EXAMPLE', 'WARNING']
+  const calloutTypes = ['NOTE', 'TIP', 'INFO', 'IMPORTANT', 'WARNING', 'QUESTION', 'EXAMPLE', 'SUCCESS', 'DANGER']
   const ic = (s) => '<span style="font-size:13px;line-height:1">' + s + '</span>'
   return [
     'undo', 'redo', '|',
@@ -588,9 +588,11 @@ function slashMenu(){
     callout('TIP'),
     callout('INFO'),
     callout('IMPORTANT'),
+    callout('WARNING'),
     callout('QUESTION'),
     callout('EXAMPLE'),
-    callout('WARNING'),
+    callout('SUCCESS'),
+    callout('DANGER'),
     { html: '⊞ ' + esc(t('slashTable')), value: '|  |  |\\n| --- | --- |\\n|  |  |\\n' },
     { html: '— ' + esc(t('slashHr')), value: '---\\n' },
   ]
