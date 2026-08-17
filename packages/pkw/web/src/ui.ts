@@ -111,8 +111,23 @@ aside.right h3:first-child{margin-top:0}
 .modal textarea{min-height:96px;resize:vertical;line-height:1.6}
 .modal .modal-actions{display:flex;gap:8px;justify-content:flex-end}
 .modal .form{margin-bottom:10px}.modal .form label{display:block;font-size:12px;color:var(--muted);margin-bottom:3px}
-#taskDetailModal .modal{width:880px;max-width:calc(100vw - 64px);max-height:88vh;overflow:auto}
+#taskDetailModal .modal{width:880px;max-width:calc(100vw - 64px);max-height:88vh;overflow:hidden;display:flex;flex-direction:column}
 @media (max-width:800px){#taskDetailModal .modal{width:calc(100vw - 24px)}}
+.task-detail-header{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--border)}
+.td-title-input{flex:1;font-size:20px;font-weight:650;padding:8px 10px;border:1px solid transparent;border-radius:8px;background:transparent}
+.td-title-input:focus{border-color:var(--accent);background:var(--panel)}
+.td-status{width:auto}
+.task-detail-body{flex:1;overflow:auto;display:grid;grid-template-columns:minmax(0,1.7fr) minmax(240px,1fr);gap:20px;padding:16px}
+@media (max-width:800px){.task-detail-body{grid-template-columns:1fr}}
+.task-detail-main{min-width:0}
+.task-detail-properties{min-width:0}
+.prop-group{margin-bottom:16px}
+.prop-title{font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);font-weight:650;margin-bottom:6px;padding-bottom:4px;border-bottom:1px solid var(--border)}
+.prop-group label{display:block;font-size:11px;color:var(--muted);margin:6px 0 2px}
+.prop-group select,.prop-group input{width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:13px}
+.task-detail-footer{display:flex;align-items:center;gap:8px;padding:12px 16px;border-top:1px solid var(--border)}
+.task-detail-footer .spacer{flex:1}
+#tdState.saved{color:var(--ok)}#tdState.dirty{color:var(--warn)}#tdState.saving{color:var(--muted)}
 .subtask-row{display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:6px;font-size:13px}
 .subtask-row:hover{background:#f3f6fb}
 .subtask-row .nm{flex:1;cursor:pointer}
@@ -204,6 +219,7 @@ const STR = {
     slashInlineCode:'行内代码', slashCodeBlock:'代码块', slashLink:'链接', slashWikiLink:'Wiki 链接', slashImage:'图片', slashFootnote:'脚注', slashCallout:'提示框',
     editorLoading:'正在加载编辑器…', buildInfo:'构建信息', bold:'加粗', italic:'斜体', strike:'删除线', highlight:'高亮',
     taskDetail:'任务详情', description:'描述', taskStatus:'状态', taskOpen:'进行中', taskScheduled:'计划日期', taskCreated:'创建', subtasks:'子任务', subtaskAdd:'添加子任务…',
+    descriptionPlaceholder:'添加描述…', tagsPlaceholder:'输入标签，用逗号分隔', organization:'组织', time:'时间', info:'信息', closeGuardTitle:'有未保存的修改', saveAndClose:'保存并关闭', discard:'放弃修改',
   },
   en: {
     overview:'Overview', notes:'Notes', attachments:'Attachment library', tasks:'Tasks', trash:'Trash', search:'Search',
@@ -240,6 +256,7 @@ const STR = {
     slashInlineCode:'Inline code', slashCodeBlock:'Code block', slashLink:'Link', slashWikiLink:'Wiki link', slashImage:'Image', slashFootnote:'Footnote', slashCallout:'Callout',
     editorLoading:'Loading editor…', buildInfo:'Build info', bold:'Bold', italic:'Italic', strike:'Strikethrough', highlight:'Highlight',
     taskDetail:'Task detail', description:'Description', taskStatus:'Status', taskOpen:'Open', taskScheduled:'Scheduled', taskCreated:'Created', subtasks:'Subtasks', subtaskAdd:'Add subtask…',
+    descriptionPlaceholder:'Add description…', tagsPlaceholder:'Enter tags, comma separated', organization:'Organization', time:'Time', info:'Info', closeGuardTitle:'Unsaved changes', saveAndClose:'Save & close', discard:'Discard changes',
   },
 }
 const PKW_BUILD = '1d93f55'
@@ -1506,26 +1523,61 @@ function taskDetailDialog(taskId){
   const mOpts = task.matrixId ? '<option value="' + esc(task.matrixId) + '" selected>' + esc(task.matrixId) + '</option>' : '<option value="" selected>' + esc(t('taskInbox')) + '</option>'
   const subSection = '<div class="form"><div class="subtask-head"><span>' + esc(t('subtasks')) + '</span><span class="muted" id="tdSubCount"></span></div><div id="tdSubtasks"><span class="muted">' + esc(t('loading')) + '</span></div><div class="toolbar" style="margin-top:4px"><input id="tdNewSub" placeholder="' + esc(t('subtaskAdd')) + '" style="flex:1" /><button class="btn small" id="tdAddSub">+</button></div></div>'
   const wrapper = document.createElement('div')
+    const meta = '<div class="muted mono" style="font-size:11px">' + esc(t('taskCreated')) + ': ' + esc((task.createdAt || '').slice(0, 16)) + '<br>' + esc(t('updated')) + ': ' + esc((task.updatedAt || '').slice(0, 16)) + (task.completedAt ? '<br>' + esc(t('taskCompleted')) + ': ' + esc(task.completedAt.slice(0, 16)) : '') + '</div>'
     wrapper.innerHTML =
-      '<div class="modal-overlay" id="taskDetailModal"><div class="modal"><h3>' + esc(t('taskDetail')) + '</h3>' +
-      '<div class="form"><label>' + esc(t('taskTitle')) + '</label><input id="tdTitle" value="' + esc(task.title) + '" /></div>' +
-      '<div class="form"><label>' + esc(t('description')) + '</label><textarea id="tdDesc" rows="5">' + esc(task.description || '') + '</textarea></div>' +
-      '<div class="form"><label>' + esc(t('taskStatus')) + '</label><select id="tdStatus"><option value="open"' + (task.status === 'open' ? ' selected' : '') + '>' + esc(t('taskOpen')) + '</option><option value="completed"' + (task.status === 'completed' ? ' selected' : '') + '>' + esc(t('taskCompleted')) + '</option></select></div>' +
-      '<div class="form"><label>' + esc(t('matrices')) + '</label><select id="tdMatrix">' + mOpts + '</select></div>' +
-      '<div class="form"><label>' + esc(t('taskQuadrant')) + '</label><select id="tdQuad">' +
-        '<option value="1"' + (quad === 1 ? ' selected' : '') + '>Q1 · ' + esc(t('q1')) + '</option><option value="2"' + (quad === 2 ? ' selected' : '') + '>Q2 · ' + esc(t('q2')) + '</option><option value="3"' + (quad === 3 ? ' selected' : '') + '>Q3 · ' + esc(t('q3')) + '</option><option value="4"' + (quad === 4 ? ' selected' : '') + '>Q4 · ' + esc(t('q4')) + '</option></select></div>' +
-      '<div class="form"><label>' + esc(t('taskScheduled')) + '</label><input type="date" id="tdSched" value="' + esc((task.scheduledAt || '').slice(0, 10)) + '" /></div>' +
-      '<div class="form"><label>' + esc(t('taskDue')) + '</label><input type="date" id="tdDue" value="' + esc((task.dueAt || '').slice(0, 10)) + '" /></div>' +
-      '<div class="form"><label>' + esc(t('tags')) + '</label><input id="tdTags" value="' + esc((task.tags || []).join(', ')) + '" /></div>' +
-      subSection +
-      srcNote +
-      '<div class="muted mono" style="font-size:11px">' + esc(t('taskCreated')) + ': ' + esc((task.createdAt || '').slice(0, 16)) + ' · ' + esc(t('updated')) + ': ' + esc((task.updatedAt || '').slice(0, 16)) + (task.completedAt ? ' · ' + esc(t('taskCompleted')) + ': ' + esc(task.completedAt.slice(0, 16)) : '') + '</div>' +
-      '<div class="toolbar"><button class="btn primary" id="tdSave">' + esc(t('taskSaveEdit')) + '</button><button class="btn" id="tdCancel">' + esc(t('taskClose')) + '</button></div></div></div>'
+      '<div class="modal-overlay" id="taskDetailModal"><div class="modal task-detail-modal">' +
+        '<div class="task-detail-header">' +
+          '<input id="tdTitle" class="td-title-input" value="' + esc(task.title) + '" placeholder="' + esc(t('taskTitle')) + '" />' +
+          '<select id="tdStatus" class="td-status"><option value="open"' + (task.status === 'open' ? ' selected' : '') + '>' + esc(t('taskOpen')) + '</option><option value="completed"' + (task.status === 'completed' ? ' selected' : '') + '>' + esc(t('taskCompleted')) + '</option></select>' +
+          '<button class="btn small" id="tdCloseX" title="' + esc(t('taskClose')) + '">×</button>' +
+        '</div>' +
+        '<div class="task-detail-body">' +
+          '<div class="task-detail-main">' +
+            '<div class="form"><label>' + esc(t('description')) + '</label><textarea id="tdDesc" rows="8" placeholder="' + esc(t('descriptionPlaceholder')) + '">' + esc(task.description || '') + '</textarea></div>' +
+            subSection +
+            srcNote +
+          '</div>' +
+          '<div class="task-detail-properties">' +
+            '<div class="prop-group"><div class="prop-title">' + esc(t('organization')) + '</div>' +
+              '<label>' + esc(t('matrices')) + '</label><select id="tdMatrix">' + mOpts + '</select>' +
+              '<label>' + esc(t('taskQuadrant')) + '</label><select id="tdQuad">' +
+                '<option value="1"' + (quad === 1 ? ' selected' : '') + '>Q1 · ' + esc(t('q1')) + '</option><option value="2"' + (quad === 2 ? ' selected' : '') + '>Q2 · ' + esc(t('q2')) + '</option><option value="3"' + (quad === 3 ? ' selected' : '') + '>Q3 · ' + esc(t('q3')) + '</option><option value="4"' + (quad === 4 ? ' selected' : '') + '>Q4 · ' + esc(t('q4')) + '</option></select>' +
+            '</div>' +
+            '<div class="prop-group"><div class="prop-title">' + esc(t('time')) + '</div>' +
+              '<label>' + esc(t('taskScheduled')) + '</label><input type="date" id="tdSched" value="' + esc((task.scheduledAt || '').slice(0, 10)) + '" />' +
+              '<label>' + esc(t('taskDue')) + '</label><input type="date" id="tdDue" value="' + esc((task.dueAt || '').slice(0, 10)) + '" />' +
+            '</div>' +
+            '<div class="prop-group"><div class="prop-title">' + esc(t('tags')) + '</div><input id="tdTags" placeholder="' + esc(t('tagsPlaceholder')) + '" value="' + esc((task.tags || []).join(', ')) + '" /></div>' +
+            '<div class="prop-group"><div class="prop-title">' + esc(t('info')) + '</div>' + meta + '</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="task-detail-footer">' +
+          '<span id="tdState" class="saved">✓ ' + esc(t('saved')) + '</span>' +
+          '<span class="spacer"></span>' +
+          '<button class="btn" id="tdCancel">' + esc(t('taskClose')) + '</button>' +
+          '<button class="btn primary" id="tdSave" disabled>' + esc(t('taskSaveEdit')) + '</button>' +
+        '</div>' +
+      '</div></div>'
     const modal = wrapper.firstElementChild
     document.body.appendChild(modal)
     const qs = (sel) => modal.querySelector(sel)
     const isActive = () => sessionId === activeTaskDetailSession
+    let dirty = false
+    let saving = false
+    let subtaskSubmitting = false
+    const updateState = () => {
+      const st = qs('#tdState')
+      const sv = qs('#tdSave')
+      if (st) { st.className = saving ? 'saving' : (dirty ? 'dirty' : 'saved'); st.textContent = saving ? ('… ' + t('saving')) : (dirty ? ('● ' + t('unsaved')) : ('✓ ' + t('saved'))) }
+      if (sv) { sv.disabled = !dirty || saving; sv.textContent = saving ? t('saving') : t('taskSaveEdit') }
+    }
+    const markDirty = () => { if (!dirty) { dirty = true; updateState() } }
     const close = () => { if (isActive()) activeTaskDetailSession = 0; taskDetailRefreshSubtasks = null; modal.remove() }
+    const requestClose = () => {
+      if (!dirty) { close(); return }
+      const go = confirm(t('closeGuardTitle') + '\\n[' + t('saveAndClose') + '] [' + t('discard') + '] [' + t('cancel') + ']')
+      if (go) doSave(true)
+    }
     // Re-fetch + patch ONLY the #tdSubtasks section (never the whole modal).
     const refreshSubtasks = () => api('listSubtasks', { parentTaskId: taskId }).then(list => {
       if (!isActive()) return
@@ -1535,27 +1587,10 @@ function taskDetailDialog(taskId){
       if (cnt) cnt.textContent = list.filter(s => s.status === 'completed').length + ' / ' + list.length
     })
     taskDetailRefreshSubtasks = refreshSubtasks
-    // Subtask create is an INDEPENDENT Task Store mutation: it must never
-    // recreate/close the parent modal (which would drop the parent draft).
-    const submitSubtask = () => {
-      const input = qs('#tdNewSub')
-      const title = input.value.trim()
-      if (!title) return
-      const pq = quadrantOf(task)
-      api('createTask', { title, parentTaskId: taskId, ...(task.matrixId ? { matrixId: task.matrixId } : {}), important: pq === 1 || pq === 2, urgent: pq === 1 || pq === 3 })
-        .then(() => refreshSubtasks())
-        .then(() => {
-          if (!isActive()) return
-          input.value = ''
-          input.focus()
-        })
-        .catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
-    }
-    qs('#tdAddSub').addEventListener('click', submitSubtask)
-    qs('#tdNewSub').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submitSubtask() } })
-    qs('#tdCancel').addEventListener('click', close)
-    qs('#tdSave').addEventListener('click', () => {
-      if (!isActive()) return
+    const doSave = (andClose) => {
+      if (!isActive() || saving) return
+      saving = true
+      updateState()
       const q = Number(qs('#tdQuad').value)
       api('updateTask', { taskId, patch: {
         title: qs('#tdTitle').value.trim(),
@@ -1567,9 +1602,47 @@ function taskDetailDialog(taskId){
         ...(qs('#tdSched').value ? { scheduledAt: qs('#tdSched').value } : {}),
         ...(qs('#tdDue').value ? { dueAt: qs('#tdDue').value } : {}),
         tags: (qs('#tdTags').value || '').split(',').map(s => s.trim()).filter(Boolean),
-      } }).then(() => { if (isActive()) { activeTaskDetailSession = 0; modal.remove(); renderTasks() } }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
-    })
-    modal.addEventListener('click', (e) => { if (e.target === modal) close() })
+      } }).then(() => {
+        if (!isActive()) return
+        dirty = false
+        saving = false
+        updateState()
+        renderTasks()
+        if (andClose) close()
+      }).catch(e => {
+        if (!isActive()) return
+        saving = false
+        updateState()
+        toast(t('genericError') + ': ' + e.message, 'err')
+      })
+    }
+    // Subtask create is an INDEPENDENT Task Store mutation: it must never
+    // recreate/close the parent modal (which would drop the parent draft).
+    const submitSubtask = () => {
+      if (subtaskSubmitting) return
+      const input = qs('#tdNewSub')
+      const title = input.value.trim()
+      if (!title) return
+      subtaskSubmitting = true
+      const pq = quadrantOf(task)
+      api('createTask', { title, parentTaskId: taskId, ...(task.matrixId ? { matrixId: task.matrixId } : {}), important: pq === 1 || pq === 2, urgent: pq === 1 || pq === 3 })
+        .then(() => refreshSubtasks())
+        .then(() => {
+          if (!isActive()) return
+          input.value = ''
+          input.focus()
+        })
+        .catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
+        .finally(() => { subtaskSubmitting = false })
+    }
+    // Parent-field edits mark dirty (async loads do NOT).
+    for (const sel of ['#tdTitle', '#tdDesc', '#tdStatus', '#tdMatrix', '#tdQuad', '#tdSched', '#tdDue', '#tdTags']) { const f = qs(sel); if (f) f.addEventListener('input', markDirty); if (f) f.addEventListener('change', markDirty) }
+    qs('#tdAddSub').addEventListener('click', submitSubtask)
+    qs('#tdNewSub').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submitSubtask() } })
+    qs('#tdCancel').addEventListener('click', requestClose)
+    qs('#tdCloseX').addEventListener('click', requestClose)
+    qs('#tdSave').addEventListener('click', () => doSave(false))
+    modal.addEventListener('click', (e) => { if (e.target === modal) requestClose() })
     // Async (non-blocking) secondary data: patch their own sections when ready.
     api('listMatrices').then(matrices => {
       if (!isActive()) return
