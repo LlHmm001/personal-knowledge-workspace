@@ -17,8 +17,10 @@
 import { Service, type Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { posix } from 'node:path'
 import z from '@deepseek-ai/schemastery'
 import { AttachmentId, NoteId } from '@deepseek-ai/dsh-pkw-domain'
+import type { OrderChild } from '@deepseek-ai/dsh-pkw-notes'
 import PkwEventStoreService from '@deepseek-ai/dsh-pkw-events'
 import PkwWorkspaceService from '@deepseek-ai/dsh-pkw-workspace'
 import NotesService from '@deepseek-ai/dsh-pkw-notes'
@@ -66,6 +68,43 @@ async function readJsonBody(req: IncomingMessage): Promise<Json> {
 function folderOf(relativePath: string): string {
   const idx = relativePath.lastIndexOf('/')
   return idx === -1 ? '' : relativePath.slice(0, idx)
+}
+
+interface TreeChild {
+  kind: 'note' | 'folder'
+  id: string
+  name: string
+  path?: string
+  updatedAt?: string
+  note?: Record<string, unknown>
+}
+
+/** Sort children by sort mode (manual/title/updated); manual falls back to folders-then-notes by name. */
+function applyOrder(children: TreeChild[], order: OrderChild[], sortMode: string): TreeChild[] {
+  if (sortMode === 'title') {
+    return children.slice().sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
+  }
+  if (sortMode === 'updated') {
+    return children.slice().sort((a, b) => {
+      if (a.kind !== b.kind) return a.kind === 'folder' ? -1 : 1
+      const au = a.updatedAt ?? ''
+      const bu = b.updatedAt ?? ''
+      return bu < au ? -1 : bu > au ? 1 : 0
+    })
+  }
+  if (order.length === 0) {
+    return children.slice().sort((a, b) => {
+      if (a.kind !== b.kind) return a.kind === 'folder' ? -1 : 1
+      return a.name < b.name ? -1 : a.name > b.name ? 1 : 0
+    })
+  }
+  const idx = new Map<string, number>()
+  order.forEach((o, i) => idx.set(`${o.kind}:${o.id}`, i))
+  const key = (c: TreeChild) => `${c.kind}:${c.id}`
+  const inOrder = children.filter(c => idx.has(key(c)))
+  const rest = children.filter(c => !idx.has(key(c)))
+  inOrder.sort((a, b) => idx.get(key(a))! - idx.get(key(b))!)
+  return [...inOrder, ...applyOrder(rest, [], 'manual')]
 }
 
 export class PkwWebService extends Service {
@@ -275,8 +314,73 @@ export class PkwWebService extends Service {
         const mapping = this.sync.getMapping(NoteId(String(args.noteId)))
         return mapping ?? null
       }
+      case 'getTree': return this.tree(typeof args.sortMode === 'string' ? args.sortMode : 'manual')
+      case 'listFolders': return this.notes.listFolders()
+      case 'createFolder': {
+        await this.notes.createFolder(String(args.path))
+        return { created: true }
+      }
+      case 'renameFolder': {
+        await this.notes.renameFolder(String(args.path), String(args.newPath))
+        return { renamed: true }
+      }
+      case 'deleteFolder': {
+        await this.notes.deleteFolder(String(args.path))
+        return { deleted: true }
+      }
+      case 'setOrder': {
+        const children = Array.isArray(args.children) ? args.children as Array<{ kind: string; id: string }> : []
+        await this.notes.setOrder(String(args.parentPath), children.map(c => ({ kind: c.kind === 'folder' ? 'folder' : 'note', id: c.id })))
+        return { ordered: true }
+      }
       default: throw new Error(`unknown pkw method: ${method}`)
     }
+  }
+
+  /** Nested notes folder tree with per-parent ordering + per-note sync views. */
+  private async tree(sortMode: string): Promise<unknown> {
+    const snap = this.syncSnapshot()
+    const notes = this.notes.list().map(n => ({
+      kind: 'note' as const,
+      noteId: String(n.noteId),
+      relativePath: n.relativePath,
+      folder: folderOf(n.relativePath),
+      title: n.title,
+      updatedAt: n.updatedAt,
+      observedRevision: n.observedRevision,
+      deleted: n.deletedAt !== undefined,
+      sync: this.syncView('note', String(n.noteId), snap),
+    }))
+    const folders = await this.notes.listFolders()
+
+    const childrenByParent = new Map<string, TreeChild[]>()
+    for (const f of folders) {
+      const parent = folderOf(f)
+      const name = posix.basename(f)
+      if (!childrenByParent.has(parent)) childrenByParent.set(parent, [])
+      childrenByParent.get(parent)!.push({ kind: 'folder', id: name, name, path: f })
+    }
+    for (const n of notes) {
+      const parent = n.folder
+      if (!childrenByParent.has(parent)) childrenByParent.set(parent, [])
+      childrenByParent.get(parent)!.push({
+        kind: 'note',
+        id: n.noteId,
+        name: n.title || n.relativePath,
+        path: n.relativePath,
+        updatedAt: n.updatedAt,
+        note: { noteId: n.noteId, relativePath: n.relativePath, folder: n.folder, title: n.title, updatedAt: n.updatedAt, observedRevision: n.observedRevision, deleted: n.deleted, sync: n.sync },
+      })
+    }
+
+    const build = (parentPath: string): unknown[] => {
+      const children = childrenByParent.get(parentPath) ?? []
+      const ordered = applyOrder(children, this.notes.getOrder(parentPath), sortMode)
+      return ordered.map(c => c.kind === 'folder'
+        ? { kind: 'folder', name: c.name, path: c.path, children: build(c.path!) }
+        : { kind: 'note', ...c.note })
+    }
+    return { root: build('') }
   }
 
   /** Active (non-terminal) intents by entity key + currently-dirty entity keys. */

@@ -214,4 +214,54 @@ describe('pkw notes + attachments core', () => {
     expect(got.deletedAt).toBeUndefined()
     expect(got.id).toBe(rec.id) // identity unchanged
   })
+
+  it('creates folders as real directories and lists them', async () => {
+    const { notes, dir } = await boot()
+    await notes.createFolder('工作/项目A')
+    await notes.createFolder('工作/项目B')
+    await notes.createFolder('学习/Agent')
+    const folders = await notes.listFolders()
+    expect(folders).toEqual(expect.arrayContaining(['工作', '工作/项目A', '工作/项目B', '学习', '学习/Agent']))
+    expect(folders.sort()).toEqual(folders)
+  })
+
+  it('renames a folder, preserving NoteId while updating note paths', async () => {
+    const { notes } = await boot()
+    await notes.createFolder('工作/项目A')
+    const note = await notes.create({ relativePath: '工作/项目A/a.md', markdown: '# A\n' })
+    const before = note.noteId
+    await notes.renameFolder('工作/项目A', '工作/项目B')
+    const rec = notes.get(before)!
+    expect(rec.noteId).toBe(before) // NoteId stable
+    expect(rec.relativePath).toBe('工作/项目B/a.md')
+    expect(notes.list().every(n => n.noteId === before)).toBe(true)
+  })
+
+  it('deletes an empty folder but rejects a non-empty one', async () => {
+    const { notes } = await boot()
+    await notes.createFolder('空')
+    await notes.deleteFolder('空')
+    expect((await notes.listFolders()).includes('空')).toBe(false)
+    await notes.createFolder('非空')
+    await notes.create({ relativePath: '非空/a.md', markdown: '# a\n' })
+    await expect(notes.deleteFolder('非空')).rejects.toThrow('not empty')
+  })
+
+  it('persists manual order per parent and rekeys on folder rename', async () => {
+    const { notes } = await boot()
+    await notes.createFolder('F')
+    const a = await notes.create({ relativePath: 'F/a.md', markdown: '# a\n' })
+    const b = await notes.create({ relativePath: 'F/b.md', markdown: '# b\n' })
+    const c = await notes.create({ relativePath: 'F/c.md', markdown: '# c\n' })
+    await notes.setOrder('F', [
+      { kind: 'note', id: String(c.noteId) },
+      { kind: 'note', id: String(a.noteId) },
+      { kind: 'note', id: String(b.noteId) },
+    ])
+    expect(notes.getOrder('F').map(o => o.id)).toEqual([String(c.noteId), String(a.noteId), String(b.noteId)])
+    // rename folder: order record migrates to new parent path.
+    await notes.renameFolder('F', 'G')
+    expect(notes.getOrder('G').map(o => o.id)).toEqual([String(c.noteId), String(a.noteId), String(b.noteId)])
+    expect(notes.getOrder('F')).toEqual([])
+  })
 })

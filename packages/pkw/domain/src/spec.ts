@@ -90,13 +90,32 @@ const attachmentRecordSchema = z.object({
   deletedAt: z.string().optional(),
 })
 
-/** Notes projection domain: identity index + path→identity reverse index. */
+const orderChildSchema = z.object({
+  kind: z.enum(['note', 'folder']),
+  id: z.string(),
+})
+
+const noteOrderSchema = z.object({
+  workspaceId,
+  parentPath: z.string(),
+  children: z.array(orderChildSchema),
+})
+
+/** Notes projection domain: identity index + path→identity reverse index + manual order projection. */
 export const noteDomainSpec = defineDomain({
   name: 'pkw_notes',
-  version: 1,
+  version: 2,
+  migrations: {
+    // v1 → v2: keep note_index + note_paths verbatim; add the (empty) note_order
+    // manual-ordering projection. No records are transformed.
+    1: {
+      upgrade: (previous) => ({ tables: { ...previous.tables, note_order: {} } }),
+    },
+  },
   tables: {
     note_index: domainTable<NoteId, z.infer<typeof noteIndexRecordSchema>>(noteIndexRecordSchema),
     note_paths: domainTable<string, NoteId>(noteId),
+    note_order: domainTable<string, z.infer<typeof noteOrderSchema>>(noteOrderSchema),
   },
 })
 

@@ -239,6 +239,11 @@ export interface ReconcileReport {
   repairedProjections: number
 }
 
+export interface NoteOrderChild {
+  kind: 'note' | 'folder'
+  id: string
+}
+
 export interface PkwNotesService {
   list(filter?: NoteListFilter): NoteIndexRecord[]
   get(noteId: NoteId): NoteIndexRecord | undefined
@@ -251,6 +256,12 @@ export interface PkwNotesService {
   reconcile(): Promise<ReconcileReport>
   getIdentityConflict(noteId: NoteId): NoteIdentityConflict | undefined
   listIdentityConflicts(): NoteIdentityConflict[]
+  listFolders(): Promise<string[]>
+  createFolder(relativePath: string): Promise<void>
+  renameFolder(oldPath: string, newPath: string): Promise<void>
+  deleteFolder(relativePath: string): Promise<void>
+  getOrder(parentPath: string): NoteOrderChild[]
+  setOrder(parentPath: string, children: NoteOrderChild[]): Promise<void>
 }
 
 export interface ImportAttachmentInput {

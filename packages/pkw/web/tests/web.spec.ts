@@ -198,4 +198,27 @@ describe('PKW Web Host Bridge (real Core integration)', () => {
     expect(rep.notesRepaired).toBe(0)
     expect(rep.attachmentsRepaired).toBe(0)
   })
+
+  it('getTree exposes the folder tree; folder CRUD + setOrder round-trip', async () => {
+    const { web } = await boot()
+    await web.call('createFolder', { path: '工作/项目A' })
+    await web.call('createNote', { relativePath: '工作/项目A/a.md', markdown: '# a\n' })
+    await web.call('createNote', { relativePath: '工作/项目A/b.md', markdown: '# b\n' })
+    const tree = await web.call('getTree', { sortMode: 'manual' }) as { root: Array<Record<string, unknown>> }
+    const work = tree.root.find(n => n.kind === 'folder' && n.name === '工作') as { children: Array<Record<string, unknown>> }
+    const proj = work.children.find(n => n.kind === 'folder' && n.name === '项目A') as { children: Array<Record<string, unknown>> }
+    expect(proj.children.length).toBe(2)
+    // move note a after note b via setOrder.
+    const notes = proj.children as Array<{ kind: string; noteId: string; name: string }>
+    const a = notes[0]!
+    const b = notes[1]!
+    await web.call('setOrder', { parentPath: '工作/项目A', children: [{ kind: 'note', id: b.noteId }, { kind: 'note', id: a.noteId }] })
+    const tree2 = await web.call('getTree', { sortMode: 'manual' }) as { root: Array<Record<string, unknown>> }
+    const proj2 = (tree2.root.find(n => n.kind === 'folder' && n.name === '工作') as { children: Array<Record<string, unknown>> }).children.find(n => n.kind === 'folder' && n.name === '项目A') as { children: Array<Record<string, unknown>> }
+    expect((proj2.children as Array<{ noteId: string }>).map(n => n.noteId)).toEqual([b.noteId, a.noteId])
+    // rename folder → tree re-keys.
+    await web.call('renameFolder', { path: '工作/项目A', newPath: '工作/项目B' })
+    const folders = await web.call('listFolders', {}) as string[]
+    expect(folders).toContain('工作/项目B')
+  })
 })

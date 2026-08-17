@@ -46,6 +46,21 @@ export interface Config {
 
 const NOTE_AGG = 'note'
 
+/** Hidden marker file written to force an empty directory to exist in the workspace tree. */
+const FOLDER_MARKER = '.pkw-folder'
+
+/** Manual-order child identity: note → NoteId, folder → basename within its parent. */
+export interface OrderChild {
+  kind: 'note' | 'folder'
+  id: string
+}
+
+interface OrderRecord {
+  workspaceId: WorkspaceId
+  parentPath: string
+  children: OrderChild[]
+}
+
 function sha256(input: string): string {
   return createHash('sha256').update(input).digest('hex')
 }
@@ -77,6 +92,7 @@ export class NotesService extends Service {
   private handle!: WorkspaceHandle
   private table?: KvTable<NoteId, NoteIndexRecord>
   private paths?: KvTable<string, NoteId>
+  private order?: KvTable<string, OrderRecord>
 
   constructor(ctx: Context, private readonly config: Config) {
     super(ctx, 'pkwNotes')
@@ -90,6 +106,7 @@ export class NotesService extends Service {
     this.ctx.effect(() => () => domain.close(), 'pkw.notesDomainClose')
     this.table = domain.table('note_index')
     this.paths = domain.table('note_paths')
+    this.order = domain.table('note_order')
   }
 
   private requireTable(): KvTable<NoteId, NoteIndexRecord> {
@@ -100,6 +117,11 @@ export class NotesService extends Service {
   private requirePaths(): KvTable<string, NoteId> {
     if (this.paths === undefined) throw new Error('pkwNotes is not started yet')
     return this.paths
+  }
+
+  private requireOrder(): KvTable<string, OrderRecord> {
+    if (this.order === undefined) throw new Error('pkwNotes is not started yet')
+    return this.order
   }
 
   list(filter: NoteListFilter = {}): NoteIndexRecord[] {
@@ -399,6 +421,143 @@ export class NotesService extends Service {
     return out
   }
 
+  // ── folders + manual ordering ──────────────────────────────────────────────
+
+  /** Recursively list every folder relative path under `notes/` (sorted). */
+  async listFolders(): Promise<string[]> {
+    const out: string[] = []
+    await this.collectFolders(await this.ctx.fs.resolve(this.handle.notePath('')), '', out)
+    return out.sort()
+  }
+
+  private async collectFolders(target: import('@deepseek-ai/dsh-fs').FsTarget, prefix: string, out: string[]): Promise<void> {
+    const info = await this.ctx.fs.stat(target)
+    if (info === undefined || info.type !== 'directory') return
+    const entries = await this.ctx.fs.listDir(target)
+    for (const entry of entries) {
+      if (entry.type !== 'directory') continue
+      const rel = `${prefix}${entry.name}`
+      out.push(rel)
+      await this.collectFolders(entry.target, `${rel}/`, out)
+    }
+  }
+
+  /** Create an empty folder by writing a hidden marker (parent dirs are auto-created). */
+  async createFolder(relativePath: string): Promise<void> {
+    this.assertFolderPath(relativePath)
+    const marker = await this.ctx.fs.resolve(this.handle.notePath(posix.join(relativePath, FOLDER_MARKER)))
+    await this.ctx.fs.writeText(marker, '', { kind: 'createIfAbsent' })
+  }
+
+  /** Rename/move a folder; every note under it keeps its NoteId and gains the new path. */
+  async renameFolder(oldPath: string, newPath: string): Promise<void> {
+    this.assertFolderPath(oldPath)
+    this.assertFolderPath(newPath)
+    if (oldPath === newPath) return
+    await this.ctx.fs.rename(
+      await this.ctx.fs.resolve(this.handle.notePath(oldPath)),
+      await this.ctx.fs.resolve(this.handle.notePath(newPath)),
+    )
+    await this.repathNotes(oldPath, newPath)
+    await this.migrateOrderFolder(oldPath, newPath)
+  }
+
+  /** Soft-delete an empty folder to archive. Non-empty folders are rejected. */
+  async deleteFolder(relativePath: string): Promise<void> {
+    this.assertFolderPath(relativePath)
+    const target = await this.ctx.fs.resolve(this.handle.notePath(relativePath))
+    const entries = await this.ctx.fs.listDir(target)
+    const hasContent = entries.some(e => e.type === 'directory' || e.name.endsWith('.md'))
+    if (hasContent) throw new Error(`pkwNotes: folder '${relativePath}' is not empty`)
+    await this.ctx.fs.rename(target, await this.ctx.fs.resolve(this.handle.archivePath(relativePath)))
+    await this.requireOrder().delete(this.orderKey(relativePath))
+    await this.removeChildFromOrder(parentOf(relativePath), 'folder', posix.basename(relativePath))
+  }
+
+  /** Manual order for one parent folder ('' = workspace root). Empty = default sort. */
+  getOrder(parentPath: string): OrderChild[] {
+    const rec = this.requireOrder().get(this.orderKey(parentPath))
+    return rec === undefined ? [] : [...rec.children]
+  }
+
+  async setOrder(parentPath: string, children: OrderChild[]): Promise<void> {
+    await this.requireOrder().put(this.orderKey(parentPath), {
+      workspaceId: WorkspaceId(this.config.workspaceId),
+      parentPath,
+      children: children.map(c => ({ kind: c.kind, id: c.id })),
+    })
+  }
+
+  private orderKey(parentPath: string): string {
+    return `${this.config.workspaceId}:${parentPath}`
+  }
+
+  private assertFolderPath(relativePath: string): void {
+    const clean = relativePath.replace(/\\/g, '/')
+    if (clean === '' || clean.startsWith('/') || /(^|\/)\.\.(\/|$)/.test(clean) || /(^|\/)\.(\/|$)/.test(clean)) {
+      throw new Error(`pkwNotes: invalid folder path '${relativePath}'`)
+    }
+  }
+
+  private async repathNotes(oldPrefix: string, newPrefix: string): Promise<void> {
+    const prefix = `${oldPrefix}/`
+    for (const [path, id] of [...this.requirePaths().entries()]) {
+      if (path !== oldPrefix && !path.startsWith(prefix)) continue
+      const rest = path === oldPrefix ? '' : path.slice(oldPrefix.length)
+      const newPath = newPrefix + rest
+      const record = this.requireTable().get(id)
+      if (record === undefined) continue
+      await this.requirePaths().delete(path)
+      await this.putRecord({ ...record, relativePath: newPath, updatedAt: new Date().toISOString() }, newPath)
+    }
+  }
+
+  private async migrateOrderFolder(oldPath: string, newPath: string): Promise<void> {
+    // (1) this folder's own order record re-keyed to the new path.
+    const selfRec = this.requireOrder().get(this.orderKey(oldPath))
+    if (selfRec !== undefined) {
+      await this.requireOrder().delete(this.orderKey(oldPath))
+      await this.requireOrder().put(this.orderKey(newPath), { ...selfRec, parentPath: newPath })
+    }
+    // (2) descendants' order records re-keyed.
+    const prefix = `${oldPath}/`
+    for (const [key, rec] of [...this.requireOrder().entries()]) {
+      if (!(rec.parentPath === oldPath || rec.parentPath.startsWith(prefix))) continue
+      const newParent = newPath + rec.parentPath.slice(oldPath.length)
+      await this.requireOrder().delete(key)
+      await this.requireOrder().put(this.orderKey(newParent), { ...rec, parentPath: newParent })
+    }
+    // (3) parent order: rename the folder child id when it stays in the same parent,
+    // else remove from old parent and append to new parent.
+    const oldParent = parentOf(oldPath)
+    const newParent = parentOf(newPath)
+    if (oldParent === newParent) {
+      await this.renameChildInOrder(oldParent, 'folder', posix.basename(oldPath), posix.basename(newPath))
+    } else {
+      await this.removeChildFromOrder(oldParent, 'folder', posix.basename(oldPath))
+      await this.ensureChildInOrder(newParent, { kind: 'folder', id: posix.basename(newPath) })
+    }
+  }
+
+  private async renameChildInOrder(parentPath: string, kind: 'note' | 'folder', oldId: string, newId: string): Promise<void> {
+    const children = this.getOrder(parentPath)
+    if (children.length === 0) return
+    await this.setOrder(parentPath, children.map(c => c.kind === kind && c.id === oldId ? { kind, id: newId } : c))
+  }
+
+  private async removeChildFromOrder(parentPath: string, kind: 'note' | 'folder', id: string): Promise<void> {
+    const children = this.getOrder(parentPath)
+    if (children.length === 0) return
+    const next = children.filter(c => !(c.kind === kind && c.id === id))
+    if (next.length !== children.length) await this.setOrder(parentPath, next)
+  }
+
+  private async ensureChildInOrder(parentPath: string, child: OrderChild): Promise<void> {
+    const children = this.getOrder(parentPath)
+    if (children.some(c => c.kind === child.kind && c.id === child.id)) return
+    await this.setOrder(parentPath, [...children, child])
+  }
+
   private async commitEvent(type: string, aggregateId: string, payload: NoteEventPayload): Promise<void> {
     const opCtx = this.handle.newOperationContext({ type: 'system' })
     await this.ctx.pkwEvents.commit({
@@ -460,6 +619,12 @@ function collectManagedLinks(workspaceId: string, markdown: string): Array<{ att
     out.push({ attachmentId: AttachmentId(id), relativePath: rel })
   }
   return out
+}
+
+/** Parent folder relative path of a note/folder path ('' for files directly under `notes/`). */
+function parentOf(relativePath: string): string {
+  const d = posix.dirname(relativePath)
+  return d === '.' ? '' : d
 }
 
 /** Directory depth of a note relative to the workspace root (notes/ = depth 1). */

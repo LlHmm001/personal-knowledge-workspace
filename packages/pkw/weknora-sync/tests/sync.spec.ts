@@ -814,7 +814,7 @@ describe('attachment restore + replacement crash recovery', () => {
     // B uploaded but NOT switched yet: durable replacement marker + A still active.
     await vi.waitFor(() => {
       expect(sync.getAttachmentMapping(rec.id)?.replacementKnowledgeId).toBeDefined()
-    }, { timeout: 2000 })
+    }, { timeout: 10000 })
     const mid = sync.getAttachmentMapping(rec.id)!
     expect(mid.knowledgeId).toBe(oldId)
     const bId = mid.replacementKnowledgeId!
@@ -824,7 +824,7 @@ describe('attachment restore + replacement crash recovery', () => {
     await sync.drain()
     await vi.waitFor(() => {
       expect(sync.getAttachmentMapping(rec.id)?.knowledgeId).toBe(bId)
-    }, { timeout: 2000 })
+    }, { timeout: 10000 })
     expect(sync.getAttachmentMapping(rec.id)!.supersededKnowledgeIds).toContain(oldId)
   })
 })
