@@ -79,6 +79,24 @@ describe('pkw notes + attachments core', () => {
     expect(doc.markdown).toContain('id: ' + String(note.noteId))
   })
 
+  it('re-injects the stable id when a source edit removes it', async () => {
+    const { notes } = await boot()
+    const note = await notes.create({ relativePath: 'guard.md', markdown: '# v1\n' })
+    const rec = await notes.update(note.noteId, '# v2\n') // no frontmatter at all
+    expect(rec.noteId).toBe(note.noteId)
+    const doc = await notes.getDocument(note.noteId)
+    expect(doc.markdown).toContain('id: ' + String(note.noteId))
+  })
+
+  it('rejects a source edit that changes the stable id', async () => {
+    const { notes } = await boot()
+    const note = await notes.create({ relativePath: 'guard2.md', markdown: '# v1\n' })
+    await expect(notes.update(note.noteId, '---\nid: note_fake\n---\n\n# v2\n')).rejects.toThrow('cannot change note identity')
+    // identity unchanged, content untouched
+    expect(String(notes.get(note.noteId)!.noteId)).toBe(String(note.noteId))
+    expect((await notes.getDocument(note.noteId)).markdown).toContain('id: ' + String(note.noteId))
+  })
+
   it('reconcile discovers an external .md without id and injects a stable NoteId', async () => {
     const { notes, dir } = await boot()
     await mkdir(join(dir, 'notes', '随手'), { recursive: true })

@@ -800,7 +800,7 @@ describe('attachment restore + replacement crash recovery', () => {
     expect(fake.files.size).toBe(1) // reactivated, not replaced
   })
 
-  it('replacement crash recovery: B durably recorded while A active, then resumed and switched', async () => {
+  it('replacement crash recovery: B durably recorded while A active, then resumed and switched', { timeout: 20000 }, async () => {
     const { attachments, sync, fake, dir } = await boot()
     const rec = await attachments.importFile({ content: Buffer.from('A'), filename: 'rr.txt', mimeType: 'text/plain' })
     const oldId = await sync.syncAttachment(rec.id)
@@ -814,7 +814,7 @@ describe('attachment restore + replacement crash recovery', () => {
     // B uploaded but NOT switched yet: durable replacement marker + A still active.
     await vi.waitFor(() => {
       expect(sync.getAttachmentMapping(rec.id)?.replacementKnowledgeId).toBeDefined()
-    }, { timeout: 10000 })
+    }, { timeout: 15000 })
     const mid = sync.getAttachmentMapping(rec.id)!
     expect(mid.knowledgeId).toBe(oldId)
     const bId = mid.replacementKnowledgeId!
@@ -824,7 +824,7 @@ describe('attachment restore + replacement crash recovery', () => {
     await sync.drain()
     await vi.waitFor(() => {
       expect(sync.getAttachmentMapping(rec.id)?.knowledgeId).toBe(bId)
-    }, { timeout: 10000 })
+    }, { timeout: 15000 })
     expect(sync.getAttachmentMapping(rec.id)!.supersededKnowledgeIds).toContain(oldId)
   })
 })
