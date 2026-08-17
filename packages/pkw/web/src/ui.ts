@@ -15,7 +15,7 @@ export function renderPage(): string {
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>PKW — Personal Knowledge Workspace</title>
-<!-- PKW build: bbda6a9 -->
+<!-- PKW build: 1229e8d -->
 <style>
 :root{--bg:#f6f7f9;--panel:#fff;--border:#e3e6ea;--ink:#1c2330;--muted:#6b7280;--accent:#2f6fed;--ok:#178a4f;--warn:#b45309;--err:#b91c1c}
 *{box-sizing:border-box}body{margin:0;font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"PingFang SC","Microsoft YaHei",sans-serif;color:var(--ink);background:var(--bg)}
@@ -206,7 +206,7 @@ const STR = {
     editorLoading:'Loading editor…', buildInfo:'Build info',
   },
 }
-const PKW_BUILD = 'bbda6a9'
+const PKW_BUILD = '1229e8d'
 let lang = localStorage.getItem('pkw-lang') === 'en' ? 'en' : 'zh'
 const t = (key, vars) => { let s = STR[lang][key] ?? STR.zh[key] ?? key; if (vars) for (const k in vars) s = s.split('{' + k + '}').join(String(vars[k])); return s }
 const api = async (method, args = {}) => {
