@@ -265,12 +265,13 @@ export class WeKnoraClient extends Service {
     return (json as { data: FileKnowledge }).data
   }
 
-  async listKnowledge(kbId: string): Promise<KnowledgeListItem[]> {
+  async listKnowledge(kbId: string, opts: { source?: string } = {}): Promise<KnowledgeListItem[]> {
     const all: KnowledgeListItem[] = []
     const pageSize = 100
     let page = 1
+    const sourceParam = opts.source !== undefined ? `&source=${encodeURIComponent(opts.source)}` : ''
     for (;;) {
-      const r = await this.request<{ data: KnowledgeListItem[]; total?: number }>('GET', `/knowledge-bases/${kbId}/knowledge?page=${page}&page_size=${pageSize}`)
+      const r = await this.request<{ data: KnowledgeListItem[]; total?: number }>('GET', `/knowledge-bases/${kbId}/knowledge?page=${page}&page_size=${pageSize}${sourceParam}`)
       const items = r.data ?? []
       if (items.length === 0) break
       all.push(...items)

@@ -355,17 +355,16 @@ export class WeKnoraSyncService extends Service {
   async drain(): Promise<void> {
     if ((await this.integrationState()) === 'unavailable') return
 
+    // Only dirty records drive the worker. The invariant "active intent ⇔
+    // dirty:true" holds because armPending() sets dirty:true before any remote
+    // mutation and clearDirty() runs only after the intent reaches a terminal
+    // state, so scanning the unbounded, operationId-keyed intents table here is
+    // redundant. Restart resume still works: a crash mid-mutation leaves the
+    // durable dirty flag set, and resumeCreate/resumeUpdate no-op until
+    // nextRetryAt for retryable intents.
     const keys = new Set<string>()
     for (const [key, rec] of this.reqDirty().entries()) {
       if (rec.dirty) keys.add(key)
-    }
-    // Non-terminal intents also re-arm their entity (restart resume).
-    for (const [, intent] of this.reqIntents().entries()) {
-      if (intent.state === S_PENDING || intent.state === S_RUNNING || intent.state === S_UNKNOWN) {
-        keys.add(this.entityKey(intent.entityType, intent.entityId))
-      } else if (intent.state === S_RETRYABLE && intent.nextRetryAt !== undefined && intent.nextRetryAt <= this.now()) {
-        keys.add(this.entityKey(intent.entityType, intent.entityId))
-      }
     }
 
     await Promise.all([...keys].map(key => this.dispatchEntity(key)))
@@ -673,7 +672,10 @@ export class WeKnoraSyncService extends Service {
 
   private async enumerateManualCandidates(fingerprint: string): Promise<Array<{ knowledgeId: string; parseStatus?: string }>> {
     const out: Array<{ knowledgeId: string; parseStatus?: string }> = []
-    const list = await this.ctx.pkwWeKnora.listKnowledge(this.config.kbId)
+    // PKW always ingests with channel='pkw'; WeKnora's `source` query filters by
+    // channel for non-manual/url values, so this avoids listing + downloading the
+    // entire shared KB during CREATE unknown-outcome recovery.
+    const list = await this.ctx.pkwWeKnora.listKnowledge(this.config.kbId, { source: 'pkw' })
     for (const item of list) {
       let content: string
       try { content = await this.ctx.pkwWeKnora.readManualContent(item.id) } catch { continue }
@@ -933,8 +935,9 @@ export class WeKnoraSyncService extends Service {
         if (mapping !== undefined && mapping.syncState !== M_DELETED) report.markedDeleted += 1
         continue
       }
-      const bytes = await this.ctx.pkwAttachments.open(rec.id)
-      const fingerprint = sha256Bytes(bytes)
+      // Prefer the catalog's sha256 (already a projection of the current binary);
+      // fall back to a full open() only when the catalog lacks a hash.
+      const fingerprint = rec.sha256 ?? sha256Bytes(await this.ctx.pkwAttachments.open(rec.id))
       if (mapping === undefined || mapping.remoteFingerprint !== fingerprint || mapping.syncState !== M_SYNCED) {
         await this.markDirty(ENTITY_ATTACHMENT, String(rec.id), rec.observedRevision)
         report.markedDirty += 1
