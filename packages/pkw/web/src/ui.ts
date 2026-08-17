@@ -76,7 +76,19 @@ textarea#editor{width:100%;height:56vh;font:13px/1.7 ui-monospace,SFMono-Regular
 #preview hr{border:0;border-top:1px solid var(--border);margin:1em 0}
 #preview .task{list-style:none;margin-left:-1.4em}#preview .task input{margin-right:6px}
 #preview .callout{border:1px solid var(--border);border-left:4px solid var(--accent);border-radius:8px;padding:8px 12px;margin:.6em 0;background:#f8fafd}
-#preview .callout .co-title{font-weight:650;text-transform:uppercase;font-size:.8em;letter-spacing:.04em;color:var(--accent)}
+#preview .callout .co-title{font-weight:650;text-transform:uppercase;font-size:.8em;letter-spacing:.04em;color:var(--accent);margin-bottom:4px}
+#preview .callout .co-body{color:var(--ink)}
+#preview .callout.co-note{border-left-color:#2f6fed;background:#eef4ff}#preview .callout.co-note .co-title{color:#2f6fed}
+#preview .callout.co-tip{border-left-color:#178a4f;background:#e8f6ee}#preview .callout.co-tip .co-title{color:#178a4f}
+#preview .callout.co-info{border-left-color:#0e7f9e;background:#e7f5f9}#preview .callout.co-info .co-title{color:#0e7f9e}
+#preview .callout.co-important{border-left-color:#7c3aed;background:#f2ecff}#preview .callout.co-important .co-title{color:#7c3aed}
+#preview .callout.co-warning{border-left-color:#b45309;background:#fdf1e3}#preview .callout.co-warning .co-title{color:#b45309}
+#preview .callout.co-question{border-left-color:#0891b2;background:#e8f8fb}#preview .callout.co-question .co-title{color:#0891b2}
+#preview .callout.co-example{border-left-color:#6d28d9;background:#f3eefc}#preview .callout.co-example .co-title{color:#6d28d9}
+#preview .callout.co-success{border-left-color:#16a34a;background:#e9f9ef}#preview .callout.co-success .co-title{color:#16a34a}
+#preview .callout.co-danger{border-left-color:#b91c1c;background:#fdeaea}#preview .callout.co-danger .co-title{color:#b91c1c}
+#preview table{border-collapse:collapse;margin:.6em 0;width:100%}#preview table th,#preview table td{border:1px solid var(--border);padding:6px 10px;text-align:left;font-size:13px}#preview table th{background:#eef2f8;font-weight:650}
+#preview pre{background:#0f172a;color:#e2e8f0;border-radius:8px;padding:12px;overflow:auto;font-size:13px;line-height:1.5}#preview pre code{background:none;color:inherit;font-family:ui-monospace,Menlo,Consolas,monospace}
 .muted{color:var(--muted)}.mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
 aside.right{border-left:1px solid var(--border);background:var(--panel);padding:14px;overflow:auto}
 aside.right h3{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin:16px 0 6px}
@@ -176,7 +188,7 @@ const STR = {
     slashH1:'一级标题', slashH2:'二级标题', slashH3:'三级标题', slashList:'无序列表', slashTask:'任务列表', slashQuote:'引用', slashCalloutNote:'提示框', slashCalloutWarning:'警告框', slashTable:'表格', slashHr:'分割线',
     slashInlineCode:'行内代码', slashCodeBlock:'代码块', slashLink:'链接', slashWikiLink:'Wiki 链接', slashImage:'图片', slashFootnote:'脚注', slashCallout:'提示框',
     editorLoading:'正在加载编辑器…', buildInfo:'构建信息', bold:'加粗', italic:'斜体', strike:'删除线',
-    taskDetail:'任务详情', description:'描述', taskStatus:'状态', taskOpen:'进行中',
+    taskDetail:'任务详情', description:'描述', taskStatus:'状态', taskOpen:'进行中', taskScheduled:'计划日期', taskCreated:'创建',
   },
   en: {
     overview:'Overview', notes:'Notes', attachments:'Attachment library', tasks:'Tasks', trash:'Trash', search:'Search',
@@ -212,7 +224,7 @@ const STR = {
     slashH1:'Heading 1', slashH2:'Heading 2', slashH3:'Heading 3', slashList:'Bullet list', slashTask:'Task list', slashQuote:'Quote', slashCalloutNote:'Callout', slashCalloutWarning:'Warning', slashTable:'Table', slashHr:'Divider',
     slashInlineCode:'Inline code', slashCodeBlock:'Code block', slashLink:'Link', slashWikiLink:'Wiki link', slashImage:'Image', slashFootnote:'Footnote', slashCallout:'Callout',
     editorLoading:'Loading editor…', buildInfo:'Build info', bold:'Bold', italic:'Italic', strike:'Strikethrough',
-    taskDetail:'Task detail', description:'Description', taskStatus:'Status', taskOpen:'Open',
+    taskDetail:'Task detail', description:'Description', taskStatus:'Status', taskOpen:'Open', taskScheduled:'Scheduled', taskCreated:'Created',
   },
 }
 const PKW_BUILD = '1d93f55'
@@ -364,6 +376,7 @@ function parseFrontmatterClient(md){
 }
 function renderInline(s){
   let out = esc(s)
+  out = out.replace(/==([^=]+)==/g, '<mark>$1</mark>')
   out = out.replace(/\`([^\`]+)\`/g, '<code>$1</code>')
   out = out.replace(/!\\[([^\\]]*)\\]\\(([^)\\s]+)\\)/g, '<img alt="$1" src="$2" />')
   out = out.replace(/!\\[\\[([^\\]|]+)(?:\\|([^\\]]+))?\\]\\]/g, function(_, target){ return '<span class="wikilink" data-wiki="' + esc(target) + '">' + esc(target) + '</span>' })
@@ -393,8 +406,28 @@ function renderMarkdown(body){
         q.push(co ? (co[2] || '') : t)
         i++
       }
-      if (callout) html.push('<div class="callout"><div class="co-title">' + esc(callout) + '</div>' + q.map(renderInline).join('<br>') + '</div>')
+      if (callout) {
+        const icons = { note: '📝', tip: '💡', info: 'ℹ️', important: '⭐', warning: '⚠️', question: '❓', example: '🧪', success: '✅', danger: '🔥' }
+        html.push('<div class="callout co-' + esc(callout) + '"><div class="co-title">' + (icons[callout] || '📌') + ' ' + esc(callout.toUpperCase()) + '</div><div class="co-body">' + q.map(renderInline).join('<br>') + '</div></div>')
+      }
       else html.push('<blockquote>' + q.map(renderInline).join('<br>') + '</blockquote>')
+      continue
+    }
+    // Fenced code block
+    if (line.trimStart().charCodeAt(0) === 96 && line.trimStart().charCodeAt(1) === 96 && line.trimStart().charCodeAt(2) === 96) {
+      const lang = line.trim().slice(3).trim()
+      const code = []
+      i++
+      while (i < lines.length && !(lines[i].trimStart().charCodeAt(0) === 96 && lines[i].trimStart().charCodeAt(1) === 96 && lines[i].trimStart().charCodeAt(2) === 96)) { code.push(lines[i]); i++ }
+      i++
+      html.push('<pre><code' + (lang ? ' class="language-' + esc(lang) + '"' : '') + '>' + esc(code.join('\\n')) + '</code></pre>')
+      continue
+    }
+    // GFM table
+    if (/^\\|.*\\|$/.test(line.trim()) && i + 1 < lines.length && /^\\|[\\s:|-]+\\|$/.test(lines[i + 1].trim())) {
+      const tbl = []
+      while (i < lines.length && /^\\|.*\\|$/.test(lines[i].trim())) { tbl.push(lines[i].trim()); i++ }
+      html.push(renderTableMd(tbl))
       continue
     }
     const task = /^\\s*[-*]\\s+\\[([ xX])\\]\\s+(.*)$/.exec(line)
@@ -408,6 +441,15 @@ function renderMarkdown(body){
     html.push('<p>' + renderInline(para.join(' ')) + '</p>')
   }
   return html.join('\\n')
+}
+function renderTableMd(tblLines){
+  const parse = (l) => l.replace(/^\\|/, '').replace(/\\|$/, '').split('\\|').map(c => c.trim())
+  const header = parse(tblLines[0] || '')
+  const aligns = parse(tblLines[1] || '').map(c => c.startsWith(':') && c.endsWith(':') ? 'center' : c.endsWith(':') ? 'right' : 'left')
+  const rows = tblLines.slice(2).map(parse)
+  const th = header.map((c, i) => '<th style="text-align:' + aligns[i] + '">' + renderInline(c) + '</th>').join('')
+  const trs = rows.map(r => '<tr>' + r.map((c, i) => '<td style="text-align:' + aligns[i] + '">' + renderInline(c) + '</td>').join('') + '</tr>').join('')
+  return '<table><thead><tr>' + th + '</tr></thead><tbody>' + trs + '</tbody></table>'
 }
 
 // ── Notes editor ────────────────────────────────────────────────────────────
@@ -1358,9 +1400,11 @@ function taskDetailDialog(taskId){
       '<div class="form"><label>' + esc(t('matrices')) + '</label><select id="tdMatrix">' + mOpts + '</select></div>' +
       '<div class="form"><label>' + esc(t('taskQuadrant')) + '</label><select id="tdQuad">' +
         '<option value="1"' + (quad === 1 ? ' selected' : '') + '>Q1 · ' + esc(t('q1')) + '</option><option value="2"' + (quad === 2 ? ' selected' : '') + '>Q2 · ' + esc(t('q2')) + '</option><option value="3"' + (quad === 3 ? ' selected' : '') + '>Q3 · ' + esc(t('q3')) + '</option><option value="4"' + (quad === 4 ? ' selected' : '') + '>Q4 · ' + esc(t('q4')) + '</option></select></div>' +
+      '<div class="form"><label>' + esc(t('taskScheduled')) + '</label><input type="date" id="tdSched" value="' + esc((task.scheduledAt || '').slice(0, 10)) + '" /></div>' +
       '<div class="form"><label>' + esc(t('taskDue')) + '</label><input type="date" id="tdDue" value="' + esc((task.dueAt || '').slice(0, 10)) + '" /></div>' +
       '<div class="form"><label>' + esc(t('tags')) + '</label><input id="tdTags" value="' + esc((task.tags || []).join(', ')) + '" /></div>' +
       srcNote +
+      '<div class="muted mono" style="font-size:11px">' + esc(t('taskCreated')) + ': ' + esc((task.createdAt || '').slice(0, 16)) + ' · ' + esc(t('updated')) + ': ' + esc((task.updatedAt || '').slice(0, 16)) + (task.completedAt ? ' · ' + esc(t('taskCompleted')) + ': ' + esc(task.completedAt.slice(0, 16)) : '') + '</div>' +
       '<div class="toolbar"><button class="btn primary" id="tdSave">' + esc(t('taskSave')) + '</button><button class="btn" id="tdCancel">' + esc(t('taskCancel')) + '</button></div></div></div>'
     )
     const modal = $('#taskDetailModal')
@@ -1374,6 +1418,7 @@ function taskDetailDialog(taskId){
         matrixId: $('#tdMatrix').value || null,
         important: q === 1 || q === 2,
         urgent: q === 1 || q === 3,
+        ...($('#tdSched').value ? { scheduledAt: $('#tdSched').value } : {}),
         ...($('#tdDue').value ? { dueAt: $('#tdDue').value } : {}),
         tags: ($('#tdTags').value || '').split(',').map(s => s.trim()).filter(Boolean),
       } }).then(() => { modal.remove(); renderTasks() }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
