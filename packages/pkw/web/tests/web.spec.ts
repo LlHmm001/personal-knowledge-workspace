@@ -261,4 +261,35 @@ describe('PKW Web Host Bridge (real Core integration)', () => {
     expect(await invoke('/pkw/attachment/../../etc/passwd')).toBe(404) // traversal
     expect(await invoke('/pkw/attachment/')).toBe(404) // empty
   })
+
+  it('tableMutation applies structural GFM edits via the pure table transforms', async () => {
+    const { web } = await boot()
+    const md = '# t\n\n| A | B | C |\n| --- | --- | --- |\n| 1 | 2 | 3 |\n| 4 | 5 | 6 |\n'
+    const addRow = await web.call('tableMutation', { markdown: md, op: 'addRowBelow', tableIndex: 0, isHeader: false, rowIndex: 1, columnIndex: 1 }) as { markdown: string }
+    expect(addRow.markdown).toContain('|  |  |  |')
+    const addCol = await web.call('tableMutation', { markdown: md, op: 'addColumnRight', tableIndex: 0, isHeader: false, rowIndex: 1, columnIndex: 1 }) as { markdown: string }
+    expect(addCol.markdown).toContain('| A | B |  | C |')
+    const align = await web.call('tableMutation', { markdown: md, op: 'setColumnAlign', tableIndex: 0, isHeader: false, rowIndex: 0, columnIndex: 1, align: 'center' }) as { markdown: string }
+    expect(align.markdown).toContain('| --- | :---: | --- |')
+  })
+
+  it('tableMutation reports unchanged for GFM-illegal edits', async () => {
+    const { web } = await boot()
+    const md = '| A |\n| --- |\n| 1 |\n'
+    const delCol = await web.call('tableMutation', { markdown: md, op: 'deleteColumn', tableIndex: 0, isHeader: false, rowIndex: 0, columnIndex: 0 }) as { unchanged: boolean }
+    expect(delCol.unchanged).toBe(true)
+    const delHeader = await web.call('tableMutation', { markdown: md, op: 'deleteRow', tableIndex: 0, isHeader: true, rowIndex: 0, columnIndex: 0 }) as { unchanged: boolean }
+    expect(delHeader.unchanged).toBe(true)
+  })
+
+  it('footnote RPCs mint keys and edit/delete definitions', async () => {
+    const { web } = await boot()
+    const key = await web.call('nextFootnoteKey', { markdown: 'a[^1] b' }) as { key: string }
+    expect(key.key).toBe('2')
+    const edited = await web.call('footnoteEdit', { markdown: 't[^1]\n\n[^1]: old', key: '1', content: 'new' }) as { markdown: string }
+    expect(edited.markdown).toContain('[^1]: new')
+    const del = await web.call('footnoteDelete', { markdown: 'a[^1] b[^2]\n\n[^1]: one\n[^2]: two', key: '1' }) as { markdown: string }
+    expect(del.markdown).not.toContain('[^1]')
+    expect(del.markdown).toContain('[^2]: two')
+  })
 })

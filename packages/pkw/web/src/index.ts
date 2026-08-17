@@ -21,7 +21,8 @@ import { posix, extname, resolve as pathResolve, sep } from 'node:path'
 import { readFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import z from '@deepseek-ai/schemastery'
-import { AttachmentId, FolderTrashEntryId, NoteId, TaskId, TaskMatrixId } from '@deepseek-ai/dsh-pkw-domain'
+import { AttachmentId, FolderTrashEntryId, NoteId, TaskId, TaskMatrixId, addColumnLeft, addColumnRight, addRowAbove, addRowBelow, deleteColumn, deleteRow, deleteFootnote, deleteTable, editFootnoteDefinition, nextFootnoteKey, resolveTableCell, setColumnAlign } from '@deepseek-ai/dsh-pkw-domain'
+import type { ColumnAlign } from '@deepseek-ai/dsh-pkw-domain'
 import type { OrderChild } from '@deepseek-ai/dsh-pkw-notes'
 import PkwEventStoreService from '@deepseek-ai/dsh-pkw-events'
 import PkwWorkspaceService from '@deepseek-ai/dsh-pkw-workspace'
@@ -340,6 +341,37 @@ export class PkwWebService extends Service {
       case 'renderMarkdown': {
         // Reading-mode HTML via the shared Lute engine (callout/table/code/wiki).
         return renderMarkdownToHtml(String(args.markdown ?? ''))
+      }
+      case 'tableMutation': {
+        // Canonical GFM table edit: browser resolves the cell (tableIndex, header,
+        // row, column) structurally, Host applies the pure table.ts transform.
+        const lines = String(args.markdown ?? '').split('\n')
+        const op = String(args.op ?? '')
+        const loc = resolveTableCell(lines, Number(args.tableIndex ?? 0), args.isHeader === true, Number(args.rowIndex ?? 0), Number(args.columnIndex ?? 0))
+        if (loc === undefined) return { unchanged: true }
+        const align = args.align === 'center' ? 'center' : args.align === 'right' ? 'right' : args.align === 'left' ? 'left' : null
+        let next: string[] | undefined
+        if (op === 'addRowAbove') next = addRowAbove(lines, loc.cursorLine)
+        else if (op === 'addRowBelow') next = addRowBelow(lines, loc.cursorLine)
+        else if (op === 'deleteRow') next = deleteRow(lines, loc.cursorLine)
+        else if (op === 'addColumnLeft') next = addColumnLeft(lines, loc.cursorLine, loc.columnIndex)
+        else if (op === 'addColumnRight') next = addColumnRight(lines, loc.cursorLine, loc.columnIndex)
+        else if (op === 'deleteColumn') next = deleteColumn(lines, loc.cursorLine, loc.columnIndex)
+        else if (op === 'setColumnAlign') next = setColumnAlign(lines, loc.cursorLine, loc.columnIndex, align as ColumnAlign)
+        else if (op === 'deleteTable') next = deleteTable(lines, loc.cursorLine)
+        else return { unchanged: true }
+        if (next === undefined) return { unchanged: true }
+        return { markdown: next.join('\n') }
+      }
+      case 'nextFootnoteKey': return { key: nextFootnoteKey(String(args.markdown ?? '')) }
+      case 'footnoteEdit': {
+        const lines = String(args.markdown ?? '').split('\n')
+        const next = editFootnoteDefinition(lines, String(args.key ?? ''), String(args.content ?? ''))
+        if (next === undefined) return { unchanged: true }
+        return { markdown: next.join('\n') }
+      }
+      case 'footnoteDelete': {
+        return { markdown: deleteFootnote(String(args.markdown ?? ''), String(args.key ?? '')) }
       }
       case 'createNote': {
         const rec = await this.notes.create({ relativePath: String(args.relativePath), markdown: String(args.markdown) })
