@@ -65,4 +65,14 @@ describe('PKW web UI (served page)', () => {
     expect(js).toContain('footnoteKeyFromDef')
     expect(js).toContain('sup[data-type="footnotes-ref"]')
   })
+
+  it('wires view performance: cache-first, single-flight, navigation guard, instrumentation', () => {
+    const js = script()
+    expect(js).toContain('loadOnce')
+    expect(js).toContain('invalidateLoad')
+    expect(js).toContain('viewSeq')
+    expect(js).toContain('viewMark')
+    expect(js).toContain('cache=hit')
+    expect(js).toContain('stale navigation guard')
+  })
 })

@@ -321,6 +321,33 @@ const state = {
   taskView: localStorage.getItem('pkw-task-view') || 'all',
   highlightText: '',
   tasksCache: [],
+  matricesCache: [],
+  attachmentsCache: [],
+  trashCache: null,
+  summaryCache: null,
+}
+// ── View switching: navigation guard + single-flight + instrumentation ──────
+let viewSeq = 0
+let viewStart = 0
+const inFlight = {}
+function loadOnce(method, args){
+  const key = method + ':' + JSON.stringify(args || {})
+  if (inFlight[key]) return inFlight[key]
+  const p = api(method, args).finally(() => { if (inFlight[key] === p) delete inFlight[key] })
+  inFlight[key] = p
+  return p
+}
+function invalidateLoad(method){
+  const prefix = method + ':'
+  Object.keys(inFlight).forEach(k => { if (k.indexOf(prefix) === 0) delete inFlight[k] })
+}
+// Mutation-triggered refresh: bypass a possibly-stale in-flight fetch so the
+// post-mutation data is authoritative (Local mutation is an event, not polling).
+function refreshTasks(){ invalidateLoad('listTasks'); invalidateLoad('listMatrices'); renderTasks() }
+function refreshAttachments(){ invalidateLoad('listAttachments'); renderAttachments() }
+function refreshTrash(){ invalidateLoad('listTrash'); invalidateLoad('listTrashAttachments'); invalidateLoad('listTrashFolders'); renderTrash() }
+function viewMark(phase, extra){
+  console.debug('[pkw.view] view=' + state.view + ' phase=' + phase + ' ms=' + Math.round(performance.now() - viewStart) + (extra ? ' ' + extra : ''))
 }
 
 function toast(msg, kind){ const el = $('#toast'); el.innerHTML = '<div class="toast ' + (kind || 'ok') + '">' + esc(msg) + '</div>'; el.style.display = 'block'; clearTimeout(toast._t); toast._t = setTimeout(() => { el.style.display = 'none' }, 3200) }
@@ -352,6 +379,8 @@ async function refreshHeader(){
 
 function setView(v){
   state.view = v
+  viewSeq++
+  viewStart = performance.now()
   if (v !== 'notes') { state.selectedNoteId = null; state.selectedFolder = null }
   if (v !== 'attachments') state.selectedAttachmentId = null
   render()
@@ -369,26 +398,34 @@ function render(){
 }
 
 // ── Overview ────────────────────────────────────────────────────────────────
+function renderOverviewFrom(s){
+  const integ = s.integration === 'ready'
+  const rows = [
+    '<div class="stat"><div class="n">' + s.notes + '</div><div class="l">' + esc(t('overviewNotes')) + '</div></div>',
+    '<div class="stat"><div class="n">' + s.attachments + '</div><div class="l">' + esc(t('overviewAttachments')) + '</div></div>',
+    '<div class="stat"><div class="n">' + s.mappings + '</div><div class="l">' + esc(t('overviewMappings')) + '</div></div>',
+    '<div class="stat"><div class="n">' + s.pendingSync + '</div><div class="l">' + esc(t('overviewPendingSync')) + '</div></div>',
+    '<div class="stat"><div class="n">' + s.syncErrors + '</div><div class="l">' + esc(t('overviewSyncErrors')) + '</div></div>',
+  ]
+  const integBadge = '<span class="badge ' + (integ ? 'ok' : 'warn') + '">' + (integ ? t('connected') : (s.credential === 'configured' ? t('unavailable') : t('notConfigured'))) + '</span>'
+  const recentHtml = (s.recent || []).length ? (s.recent || []).map(r => '<div class="tree-row" data-action="' + (r.kind === 'note' ? 'open-note' : 'open-attachment') + '" data-id="' + esc(r.id) + '"><span class="nm">' + esc(r.title) + '</span></div>').join('') : '<div class="empty">' + esc(t('noRecent')) + '</div>'
+  $('#main').innerHTML = '<h2>' + esc(t('overviewTitle')) + '<span class="sub">' + esc(s.workspaceName || '') + '</span></h2>' +
+    '<div class="toolbar"><button class="btn primary" data-action="new-note">+ ' + esc(t('newNote')) + '</button><button class="btn" data-action="sync-now">' + esc(t('syncNow')) + '</button><button class="btn" data-action="reconcile">' + esc(t('reconcile')) + '</button></div>' +
+    '<div class="stats">' + rows.join('') + '</div><h2>' + esc(t('overviewIntegration')) + '</h2>' + integBadge + '<h2 style="margin-top:16px">' + esc(t('overviewRecent')) + '</h2>' + recentHtml
+  $('#detail').innerHTML = detailWorkspace(s)
+}
 async function renderOverview(){
+  const seq = viewSeq
   $('#list').innerHTML = ''; $('#treeToolbar').innerHTML = ''
-  $('#main').innerHTML = '<div class="empty">' + esc(t('loading')) + '</div>'; $('#detail').innerHTML = ''
+  if (state.summaryCache) { renderOverviewFrom(state.summaryCache); viewMark('warm-paint', 'cache=hit') }
+  else { $('#main').innerHTML = '<div class="empty">' + esc(t('loading')) + '</div>'; $('#detail').innerHTML = ''; viewMark('shell', 'cache=miss') }
   try {
-    const s = await api('summary')
-    const integ = s.integration === 'ready'
-    const rows = [
-      '<div class="stat"><div class="n">' + s.notes + '</div><div class="l">' + esc(t('overviewNotes')) + '</div></div>',
-      '<div class="stat"><div class="n">' + s.attachments + '</div><div class="l">' + esc(t('overviewAttachments')) + '</div></div>',
-      '<div class="stat"><div class="n">' + s.mappings + '</div><div class="l">' + esc(t('overviewMappings')) + '</div></div>',
-      '<div class="stat"><div class="n">' + s.pendingSync + '</div><div class="l">' + esc(t('overviewPendingSync')) + '</div></div>',
-      '<div class="stat"><div class="n">' + s.syncErrors + '</div><div class="l">' + esc(t('overviewSyncErrors')) + '</div></div>',
-    ]
-    const integBadge = '<span class="badge ' + (integ ? 'ok' : 'warn') + '">' + (integ ? t('connected') : (s.credential === 'configured' ? t('unavailable') : t('notConfigured'))) + '</span>'
-    let recentHtml = (s.recent || []).length ? (s.recent || []).map(r => '<div class="tree-row" data-action="' + (r.kind === 'note' ? 'open-note' : 'open-attachment') + '" data-id="' + esc(r.id) + '"><span class="nm">' + esc(r.title) + '</span></div>').join('') : '<div class="empty">' + esc(t('noRecent')) + '</div>'
-    $('#main').innerHTML = '<h2>' + esc(t('overviewTitle')) + '<span class="sub">' + esc(s.workspaceName || '') + '</span></h2>' +
-      '<div class="toolbar"><button class="btn primary" data-action="new-note">+ ' + esc(t('newNote')) + '</button><button class="btn" data-action="sync-now">' + esc(t('syncNow')) + '</button><button class="btn" data-action="reconcile">' + esc(t('reconcile')) + '</button></div>' +
-      '<div class="stats">' + rows.join('') + '</div><h2>' + esc(t('overviewIntegration')) + '</h2>' + integBadge + '<h2 style="margin-top:16px">' + esc(t('overviewRecent')) + '</h2>' + recentHtml
-    $('#detail').innerHTML = detailWorkspace(s)
-  } catch (e) { $('#main').innerHTML = '<div class="empty">' + esc(t('genericError')) + ': ' + esc(e.message) + '</div>' }
+    const s = await loadOnce('summary', {})
+    if (seq !== viewSeq) return // stale navigation guard
+    state.summaryCache = s
+    renderOverviewFrom(s)
+    viewMark('data-ready')
+  } catch (e) { if (seq === viewSeq) $('#main').innerHTML = '<div class="empty">' + esc(t('genericError')) + ': ' + esc(e.message) + '</div>' }
 }
 function detailWorkspace(s){
   return '<h3>' + esc(t('workspaceSummary')) + '</h3><div class="kv"><b>' + esc(t('workspaceLabel')) + '</b> <span class="v">' + esc(s.workspaceName || '—') + '</span></div>' +
@@ -983,16 +1020,24 @@ function showFolderPicker(currentPath, cb){
 }
 
 // ── Attachments / Search / Maintenance ──────────────────────────────────────
-async function renderAttachments(){
+function renderAttachmentsFrom(list){
   $('#treeToolbar').innerHTML = ''
-  $('#list').innerHTML = '<div class="empty">' + esc(t('loading')) + '</div>'
+  $('#list').innerHTML = list.length ? list.map(a => '<div class="tree-row ' + (a.attachmentId === state.selectedAttachmentId ? 'active' : '') + '" data-action="open-attachment" data-id="' + esc(a.attachmentId) + '"><span class="tw"></span><span class="ic">📎</span><span class="nm">' + esc(a.filename) + '</span> ' + syncBadgeHtml(a.sync) + '</div>').join('') : '<div class="empty">' + esc(t('emptyAttachments')) + '</div>'
+  $('#main').innerHTML = '<h2>' + esc(t('attachments')) + '</h2><p class="muted">' + esc(t('attachmentsDesc')) + '</p><div class="toolbar"><input type="file" id="file" /> <button class="btn primary" data-action="upload-attachment">' + esc(t('upload')) + '</button></div>'
+}
+async function renderAttachments(){
+  const seq = viewSeq
   $('#detail').innerHTML = '<h3>' + esc(t('attachments')) + '</h3><div class="kv muted">' + esc(t('attachmentDetailHint')) + '</div>'
+  if (state.attachmentsCache.length) { renderAttachmentsFrom(state.attachmentsCache); viewMark('warm-paint', 'cache=hit') }
+  else { $('#list').innerHTML = '<div class="empty">' + esc(t('loading')) + '</div>'; viewMark('shell', 'cache=miss') }
   try {
-    const list = await api('listAttachments')
-    $('#list').innerHTML = list.length ? list.map(a => '<div class="tree-row ' + (a.attachmentId === state.selectedAttachmentId ? 'active' : '') + '" data-action="open-attachment" data-id="' + esc(a.attachmentId) + '"><span class="tw"></span><span class="ic">📎</span><span class="nm">' + esc(a.filename) + '</span> ' + syncBadgeHtml(a.sync) + '</div>').join('') : '<div class="empty">' + esc(t('emptyAttachments')) + '</div>'
-    $('#main').innerHTML = '<h2>' + esc(t('attachments')) + '</h2><p class="muted">' + esc(t('attachmentsDesc')) + '</p><div class="toolbar"><input type="file" id="file" /> <button class="btn primary" data-action="upload-attachment">' + esc(t('upload')) + '</button></div>'
+    const list = await loadOnce('listAttachments', {})
+    if (seq !== viewSeq) return
+    state.attachmentsCache = list
+    renderAttachmentsFrom(list)
+    viewMark('data-ready')
     if (state.selectedAttachmentId !== null) await openAttachment(state.selectedAttachmentId)
-  } catch (e) { $('#list').innerHTML = '<div class="empty">' + esc(t('genericError')) + '</div>' }
+  } catch (e) { if (seq === viewSeq) $('#list').innerHTML = '<div class="empty">' + esc(t('genericError')) + '</div>' }
 }
 async function openAttachment(id){
   state.selectedAttachmentId = id
@@ -1000,7 +1045,7 @@ async function openAttachment(id){
     const d = await api('getAttachment', { attachmentId: id })
     const a = d.attachment, s = d.sync
     $('#detail').innerHTML = '<h3>' + esc(t('details')) + '</h3><div class="kv"><b>' + esc(t('attachmentId')) + '</b> <span class="v mono">' + esc(a.attachmentId) + '</span></div><div class="kv"><b>' + esc(t('size')) + '</b> ' + fmtSize(a.sizeBytes) + '</div><h3>' + esc(t('syncSection')) + '</h3>' + syncBadgeHtml(s) + '<h3>' + esc(t('maintenance')) + '</h3><button class="btn small" data-action="download-attachment" data-id="' + esc(id) + '">' + esc(t('download')) + '</button> <button class="btn small danger" data-action="delete-attachment" data-id="' + esc(id) + '">' + esc(t('del')) + '</button>'
-    await renderAttachments()
+    await refreshAttachments()
   } catch (e) { toast(t('genericError') + ': ' + e.message, 'err') }
 }
 async function uploadAttachment(){
@@ -1011,7 +1056,7 @@ async function uploadAttachment(){
     const buf = new Uint8Array(await file.arrayBuffer()); let bin = ''
     for (let i = 0; i < buf.length; i++) bin += String.fromCharCode(buf[i])
     await api('uploadAttachment', { filename: file.name, mimeType: file.type || 'application/octet-stream', contentBase64: btoa(bin) })
-    toast(t('uploadSuccess'), 'ok'); await renderAttachments(); refreshHeader()
+    toast(t('uploadSuccess'), 'ok'); await refreshAttachments(); refreshHeader()
   } catch (e) { toast(t('uploadFailed') + ': ' + e.message, 'err') }
 }
 async function downloadAttachment(id){
@@ -1025,7 +1070,7 @@ async function downloadAttachment(id){
 }
 async function delAttachment(id){
   if (!confirm(t('delAttachmentConfirm'))) return
-  try { await api('deleteAttachment', { attachmentId: id }); state.selectedAttachmentId = null; toast(t('deletedMsg'), 'ok'); await renderAttachments(); refreshHeader() }
+  try { await api('deleteAttachment', { attachmentId: id }); state.selectedAttachmentId = null; toast(t('deletedMsg'), 'ok'); await refreshAttachments(); refreshHeader() }
   catch (e) { toast(t('genericError') + ': ' + e.message, 'err') }
 }
 function quadrantOf(x){ return x.important ? (x.urgent ? 1 : 2) : (x.urgent ? 3 : 4) }
@@ -1070,30 +1115,37 @@ function moveTaskOrder(taskId, dir){
   const j = i + dir
   if (j < 0 || j >= scope.length) return
   const tmp = scope[i]; scope[i] = scope[j]; scope[j] = tmp
-  api('reorderTasks', { taskIds: scope }).then(() => renderTasks()).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
+  api('reorderTasks', { taskIds: scope }).then(() => refreshTasks()).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
+}
+function renderTasksFrom(matrices, all){
+  const counts = {}
+  for (const x of all) if (x.status === 'open') { const k = x.matrixId ?? 'inbox'; counts[k] = (counts[k] || 0) + 1 }
+  const views = [['inbox', 'Inbox'], ['today', t('taskToday')], ['upcoming', t('taskUpcoming')], ['all', t('taskAll')], ['completed', t('taskCompleted')]]
+  const viewRows = views.map(v => '<div class="tree-row' + (state.taskView === v[0] ? ' active' : '') + '" data-action="task-view" data-view="' + v[0] + '"' + (v[0] === 'inbox' || v[0] === 'today' ? ' data-drop="' + v[0] + '"' : '') + '><span class="ic">' + (v[0] === 'inbox' ? '📥' : '▤') + '</span><span class="nm">' + esc(v[1]) + (v[0] === 'inbox' ? ' (' + (counts.inbox || 0) + ')' : '') + '</span></div>').join('')
+  const matrixRows = matrices.map(m => '<div class="tree-row' + (state.taskView === m.matrixId ? ' active' : '') + '" data-action="task-view" data-view="' + esc(m.matrixId) + '" data-drop="matrix" data-matrixid="' + esc(m.matrixId) + '"><span class="ic">▦</span><span class="nm">' + esc(m.name) + ' (' + (counts[m.matrixId] || 0) + ')</span></div>').join('')
+  $('#list').innerHTML =
+    '<div class="list-head">' + esc(t('tasks')) + '</div>' +
+    '<div class="list-section">' + esc(t('smartViews')) + '</div>' +
+    viewRows +
+    '<div class="list-section">' + esc(t('matrices')) + '</div>' +
+    matrixRows +
+    '<div class="tree-row" data-action="new-matrix"><span class="ic">＋</span><span class="nm">' + esc(t('newMatrix')) + '</span></div>'
+  if (state.taskView === 'all' || state.taskView === 'today' || state.taskView === 'upcoming' || state.taskView === 'completed' || state.taskView === 'inbox') renderTaskList(matrices, all, state.taskView)
+  else renderMatrixGrid(matrices, all, state.taskView)
 }
 async function renderTasks(){
-  $('#list').innerHTML = ''; $('#treeToolbar').innerHTML = ''; $('#detail').innerHTML = ''
-  $('#main').innerHTML = '<div class="empty">' + esc(t('loading')) + '</div>'
+  const seq = viewSeq
+  $('#detail').innerHTML = ''
+  if (state.tasksCache.length && state.matricesCache.length) { renderTasksFrom(state.matricesCache, state.tasksCache); viewMark('warm-paint', 'cache=hit') }
+  else { $('#list').innerHTML = ''; $('#treeToolbar').innerHTML = ''; $('#main').innerHTML = '<div class="empty">' + esc(t('loading')) + '</div>'; viewMark('shell', 'cache=miss') }
   try {
-    const matrices = await api('listMatrices')
-    const all = await api('listTasks', {})
-    state.tasksCache = all
-    const counts = {}
-    for (const x of all) if (x.status === 'open') { const k = x.matrixId ?? 'inbox'; counts[k] = (counts[k] || 0) + 1 }
-    const views = [['inbox', 'Inbox'], ['today', t('taskToday')], ['upcoming', t('taskUpcoming')], ['all', t('taskAll')], ['completed', t('taskCompleted')]]
-    const viewRows = views.map(v => '<div class="tree-row' + (state.taskView === v[0] ? ' active' : '') + '" data-action="task-view" data-view="' + v[0] + '"' + (v[0] === 'inbox' || v[0] === 'today' ? ' data-drop="' + v[0] + '"' : '') + '><span class="ic">' + (v[0] === 'inbox' ? '📥' : '▤') + '</span><span class="nm">' + esc(v[1]) + (v[0] === 'inbox' ? ' (' + (counts.inbox || 0) + ')' : '') + '</span></div>').join('')
-    const matrixRows = matrices.map(m => '<div class="tree-row' + (state.taskView === m.matrixId ? ' active' : '') + '" data-action="task-view" data-view="' + esc(m.matrixId) + '" data-drop="matrix" data-matrixid="' + esc(m.matrixId) + '"><span class="ic">▦</span><span class="nm">' + esc(m.name) + ' (' + (counts[m.matrixId] || 0) + ')</span></div>').join('')
-    $('#list').innerHTML =
-      '<div class="list-head">' + esc(t('tasks')) + '</div>' +
-      '<div class="list-section">' + esc(t('smartViews')) + '</div>' +
-      viewRows +
-      '<div class="list-section">' + esc(t('matrices')) + '</div>' +
-      matrixRows +
-      '<div class="tree-row" data-action="new-matrix"><span class="ic">＋</span><span class="nm">' + esc(t('newMatrix')) + '</span></div>'
-    if (state.taskView === 'all' || state.taskView === 'today' || state.taskView === 'upcoming' || state.taskView === 'completed' || state.taskView === 'inbox') renderTaskList(matrices, all, state.taskView)
-    else renderMatrixGrid(matrices, all, state.taskView)
-  } catch (e) { $('#main').innerHTML = '<div class="empty">' + esc(t('genericError')) + ': ' + esc(e.message) + '</div>' }
+    const matrices = await loadOnce('listMatrices', {})
+    const all = await loadOnce('listTasks', {})
+    if (seq !== viewSeq) return // stale navigation guard
+    state.tasksCache = all; state.matricesCache = matrices
+    renderTasksFrom(matrices, all)
+    viewMark('data-ready')
+  } catch (e) { if (seq === viewSeq) $('#main').innerHTML = '<div class="empty">' + esc(t('genericError')) + ': ' + esc(e.message) + '</div>' }
 }
 function filterTaskList(all, filter){
   const roots = all.filter(x => x.parentTaskId === null)
@@ -1134,20 +1186,28 @@ function renderMatrixGrid(matrices, all, matrixId){
     '<div class="quad-grid">' + grid + '</div>' + doneHtml
 }
 
+function renderTrashFrom(notes, atts, folders){
+  const rows = []
+  for (const f of folders) rows.push('<div class="tree-row"><span class="ic">📁</span><span class="nm">' + esc(f.originalPath) + '/</span><button class="btn small" data-action="restore-folder" data-id="' + esc(f.trashEntryId) + '">' + esc(t('reconcile')) + '</button><button class="btn small danger" data-action="purge-folder" data-id="' + esc(f.trashEntryId) + '">' + esc(t('del')) + '</button></div>')
+  for (const n of notes) rows.push('<div class="tree-row"><span class="ic">📄</span><span class="nm">' + esc(n.title) + '</span><button class="btn small" data-action="restore-note" data-id="' + esc(n.noteId) + '">' + esc(t('reconcile')) + '</button><button class="btn small danger" data-action="purge-note" data-id="' + esc(n.noteId) + '">' + esc(t('del')) + '</button></div>')
+  for (const a of atts) rows.push('<div class="tree-row"><span class="ic">📎</span><span class="nm">' + esc(a.filename) + '</span><button class="btn small" data-action="restore-attachment" data-id="' + esc(a.attachmentId) + '">' + esc(t('reconcile')) + '</button><button class="btn small danger" data-action="purge-attachment" data-id="' + esc(a.attachmentId) + '">' + esc(t('del')) + '</button></div>')
+  $('#list').innerHTML = '<div class="list-head">' + esc(t('trash')) + '</div>'
+  $('#main').innerHTML = '<h2>' + esc(t('trash')) + '</h2>' + (rows.length ? rows.join('') : '<div class="empty">' + esc(t('noRecent')) + '</div>')
+}
 async function renderTrash(){
-  $('#list').innerHTML = ''; $('#treeToolbar').innerHTML = ''; $('#detail').innerHTML = ''
-  $('#main').innerHTML = '<div class="empty">' + esc(t('loading')) + '</div>'
+  const seq = viewSeq
+  $('#detail').innerHTML = ''
+  if (state.trashCache) { renderTrashFrom(state.trashCache.notes, state.trashCache.atts, state.trashCache.folders); viewMark('warm-paint', 'cache=hit') }
+  else { $('#list').innerHTML = ''; $('#treeToolbar').innerHTML = ''; $('#main').innerHTML = '<div class="empty">' + esc(t('loading')) + '</div>'; viewMark('shell', 'cache=miss') }
   try {
-    const notes = await api('listTrash')
-    const atts = await api('listTrashAttachments')
-    const folders = await api('listTrashFolders')
-    const rows = []
-    for (const f of folders) rows.push('<div class="tree-row"><span class="ic">📁</span><span class="nm">' + esc(f.originalPath) + '/</span><button class="btn small" data-action="restore-folder" data-id="' + esc(f.trashEntryId) + '">' + esc(t('reconcile')) + '</button><button class="btn small danger" data-action="purge-folder" data-id="' + esc(f.trashEntryId) + '">' + esc(t('del')) + '</button></div>')
-    for (const n of notes) rows.push('<div class="tree-row"><span class="ic">📄</span><span class="nm">' + esc(n.title) + '</span><button class="btn small" data-action="restore-note" data-id="' + esc(n.noteId) + '">' + esc(t('reconcile')) + '</button><button class="btn small danger" data-action="purge-note" data-id="' + esc(n.noteId) + '">' + esc(t('del')) + '</button></div>')
-    for (const a of atts) rows.push('<div class="tree-row"><span class="ic">📎</span><span class="nm">' + esc(a.filename) + '</span><button class="btn small" data-action="restore-attachment" data-id="' + esc(a.attachmentId) + '">' + esc(t('reconcile')) + '</button><button class="btn small danger" data-action="purge-attachment" data-id="' + esc(a.attachmentId) + '">' + esc(t('del')) + '</button></div>')
-    $('#list').innerHTML = '<div class="list-head">' + esc(t('trash')) + '</div>'
-    $('#main').innerHTML = '<h2>' + esc(t('trash')) + '</h2>' + (rows.length ? rows.join('') : '<div class="empty">' + esc(t('noRecent')) + '</div>')
-  } catch (e) { $('#main').innerHTML = '<div class="empty">' + esc(t('genericError')) + ': ' + esc(e.message) + '</div>' }
+    const notes = await loadOnce('listTrash', {})
+    const atts = await loadOnce('listTrashAttachments', {})
+    const folders = await loadOnce('listTrashFolders', {})
+    if (seq !== viewSeq) return // stale navigation guard
+    state.trashCache = { notes, atts, folders }
+    renderTrashFrom(notes, atts, folders)
+    viewMark('data-ready')
+  } catch (e) { if (seq === viewSeq) $('#main').innerHTML = '<div class="empty">' + esc(t('genericError')) + ': ' + esc(e.message) + '</div>' }
 }
 
 function renderSearchView(){ $('#list').innerHTML = ''; $('#treeToolbar').innerHTML = ''; $('#detail').innerHTML = ''; $('#main').innerHTML = '<h2>' + esc(t('search')) + '</h2><p class="muted">' + esc(t('searchHint')) + '</p>' }
@@ -1645,7 +1705,7 @@ document.addEventListener('drop', (e) => {
     patch = { scheduledAt: new Date().toISOString().slice(0, 10) }
   }
   if (!patch) return
-  api('updateTask', { taskId, patch }).then(() => renderTasks()).catch(e => { toast(t('genericError') + ': ' + e.message, 'err'); renderTasks() })
+  api('updateTask', { taskId, patch }).then(() => refreshTasks()).catch(e => { toast(t('genericError') + ': ' + e.message, 'err'); renderTasks() })
 })
 
 // ── Delegated events ────────────────────────────────────────────────────────
@@ -1682,7 +1742,7 @@ document.addEventListener('click', (e) => {
   else if (act === 'go-attachments') setView('attachments')
   else if (act === 'new-task') quickTaskDialog(null, null)
   else if (act === 'new-task-matrix') quickTaskDialog(id || null, null)
-  else if (act === 'new-matrix') { const name = prompt(t('createFolderPrompt'), ''); if (name && name.trim()) api('createMatrix', { name: name.trim() }).then(() => renderTasks()) }
+  else if (act === 'new-matrix') { const name = prompt(t('createFolderPrompt'), ''); if (name && name.trim()) api('createMatrix', { name: name.trim() }).then(() => refreshTasks()) }
   else if (act === 'task-view') setTaskView(el.dataset.view)
   else if (act === 'note-to-task') {
     api('getNote', { noteId: id }).then(d => {
@@ -1697,26 +1757,26 @@ document.addEventListener('click', (e) => {
     const task = (state.tasksCache || []).find(x => x.taskId === id)
     const isSubtask = task && task.parentTaskId !== null
     const t = el.dataset.completed === '1' ? api('reopenTask', { taskId: id }) : api('completeTask', { taskId: id })
-    t.then(() => { if (!isSubtask) renderTasks(); if (taskDetailRefreshSubtasks) taskDetailRefreshSubtasks() }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
+    t.then(() => { if (!isSubtask) refreshTasks(); if (taskDetailRefreshSubtasks) taskDetailRefreshSubtasks() }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
   }
   else if (act === 'subtask-edit') { inlineEditSubtask(el, id) }
   else if (act === 'subtask-toggle') { if (taskDetailToggleSubtask) taskDetailToggleSubtask(id) }
   else if (act === 'open-task-detail') taskDetailDialog(id)
-  else if (act === 'task-due') { const due = prompt(t('taskDue'), ''); if (due !== null) api('updateTask', { taskId: id, patch: { dueAt: due } }).then(() => renderTasks()) }
-  else if (act === 'task-delete') { const task = (state.tasksCache || []).find(x => x.taskId === id); const isSubtask = task && task.parentTaskId !== null; api('deleteTask', { taskId: id }).then(() => { if (!isSubtask) renderTasks(); if (taskDetailRefreshSubtasks) taskDetailRefreshSubtasks() }).catch(e => toast(t('genericError') + ': ' + e.message, 'err')) }
-  else if (act === 'task-duplicate') { const t = (state.tasksCache || []).find(x => x.taskId === id); if (t) api('createTask', { title: t.title + ' (copy)', ...(t.matrixId ? { matrixId: t.matrixId } : {}), important: t.important, urgent: t.urgent, ...(t.description ? { description: t.description } : {}), ...(t.dueAt ? { dueAt: t.dueAt } : {}), tags: t.tags || [] }).then(() => renderTasks()) }
-  else if (act === 'matrix-rename') { const name = prompt(t('folderRenamePrompt'), ''); if (name && name.trim()) api('renameMatrix', { matrixId: id, name: name.trim() }).then(() => renderTasks()) }
-  else if (act === 'matrix-archive') { api('archiveMatrix', { matrixId: id }).then(() => renderTasks()) }
-  else if (act === 'matrix-remove') { if (confirm(t('matrixRemoveConfirm'))) api('removeMatrix', { matrixId: id, reassignTo: null }).then(() => renderTasks()).catch(e => toast(e.message, 'err')) }
+  else if (act === 'task-due') { const due = prompt(t('taskDue'), ''); if (due !== null) api('updateTask', { taskId: id, patch: { dueAt: due } }).then(() => refreshTasks()) }
+  else if (act === 'task-delete') { const task = (state.tasksCache || []).find(x => x.taskId === id); const isSubtask = task && task.parentTaskId !== null; api('deleteTask', { taskId: id }).then(() => { if (!isSubtask) refreshTasks(); if (taskDetailRefreshSubtasks) taskDetailRefreshSubtasks() }).catch(e => toast(t('genericError') + ': ' + e.message, 'err')) }
+  else if (act === 'task-duplicate') { const t = (state.tasksCache || []).find(x => x.taskId === id); if (t) api('createTask', { title: t.title + ' (copy)', ...(t.matrixId ? { matrixId: t.matrixId } : {}), important: t.important, urgent: t.urgent, ...(t.description ? { description: t.description } : {}), ...(t.dueAt ? { dueAt: t.dueAt } : {}), tags: t.tags || [] }).then(() => refreshTasks()) }
+  else if (act === 'matrix-rename') { const name = prompt(t('folderRenamePrompt'), ''); if (name && name.trim()) api('renameMatrix', { matrixId: id, name: name.trim() }).then(() => refreshTasks()) }
+  else if (act === 'matrix-archive') { api('archiveMatrix', { matrixId: id }).then(() => refreshTasks()) }
+  else if (act === 'matrix-remove') { if (confirm(t('matrixRemoveConfirm'))) api('removeMatrix', { matrixId: id, reassignTo: null }).then(() => refreshTasks()).catch(e => toast(e.message, 'err')) }
   else if (act === 'copy-wikilink') { api('getNote', { noteId: id }).then(d => navigator.clipboard.writeText('[[' + (d.note.title || id) + ']]')).then(() => toast(t('ok'), 'ok')).catch(e => toast(t('genericError') + ': ' + e.message, 'err')) }
   else if (act === 'task-up') moveTaskOrder(id, -1)
   else if (act === 'task-down') moveTaskOrder(id, 1)
-  else if (act === 'restore-note') { api('restoreNote', { noteId: id }).then(() => renderTrash()).then(refreshHeader) }
-  else if (act === 'purge-note') { if (confirm(t('delNoteConfirm'))) api('purgeNote', { noteId: id }).then(() => renderTrash()).then(refreshHeader) }
-  else if (act === 'restore-attachment') { api('restoreAttachment', { attachmentId: id }).then(() => renderTrash()).then(refreshHeader) }
-  else if (act === 'purge-attachment') { if (confirm(t('delAttachmentConfirm'))) api('purgeAttachment', { attachmentId: id }).then(() => renderTrash()).then(refreshHeader) }
-  else if (act === 'restore-folder') { api('restoreFolder', { trashEntryId: id }).then(() => renderTrash()).then(refreshHeader).catch(e => toast(e.message, 'err')) }
-  else if (act === 'purge-folder') { if (confirm(t('folderDeleteConfirm', { n: '' }))) api('purgeFolder', { trashEntryId: id }).then(() => renderTrash()).then(refreshHeader) }
+  else if (act === 'restore-note') { api('restoreNote', { noteId: id }).then(() => refreshTrash()).then(refreshHeader) }
+  else if (act === 'purge-note') { if (confirm(t('delNoteConfirm'))) api('purgeNote', { noteId: id }).then(() => refreshTrash()).then(refreshHeader) }
+  else if (act === 'restore-attachment') { api('restoreAttachment', { attachmentId: id }).then(() => refreshTrash()).then(refreshHeader) }
+  else if (act === 'purge-attachment') { if (confirm(t('delAttachmentConfirm'))) api('purgeAttachment', { attachmentId: id }).then(() => refreshTrash()).then(refreshHeader) }
+  else if (act === 'restore-folder') { api('restoreFolder', { trashEntryId: id }).then(() => refreshTrash()).then(refreshHeader).catch(e => toast(e.message, 'err')) }
+  else if (act === 'purge-folder') { if (confirm(t('folderDeleteConfirm', { n: '' }))) api('purgeFolder', { trashEntryId: id }).then(() => refreshTrash()).then(refreshHeader) }
 })
 function selectionSourceRef(){
   if (state.selectedNoteId === null) return null
@@ -1970,7 +2030,7 @@ function taskDetailDialog(taskId){
         parentDirty = false
         saving = false
         updateState()
-        renderTasks()
+        refreshTasks()
         if (andClose) close()
       }).catch(e => {
         if (!isActive()) return
@@ -2062,7 +2122,7 @@ function quickTaskDialog(matrixId, sourceRefs, prefill){
         ...(due ? { dueAt: due } : {}),
         ...(tags.length ? { tags } : {}),
         ...(sourceRefs && sourceRefs.length ? { sourceRefs } : {}),
-      }).then(() => { modal.remove(); renderTasks() }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
+      }).then(() => { modal.remove(); refreshTasks() }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
     })
     modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove() })
     $('#tkTitle').focus()
