@@ -118,6 +118,8 @@ aside.right h3:first-child{margin-top:0}
       <button data-view="overview">总览</button>
       <button data-view="notes">笔记</button>
       <button data-view="attachments">附件</button>
+      <button data-view="tasks">待办</button>
+      <button data-view="trash">回收站</button>
       <button data-view="search">搜索</button>
     </div>
     <div id="treeToolbar"></div>
@@ -130,7 +132,7 @@ aside.right h3:first-child{margin-top:0}
 <script>
 const STR = {
   zh: {
-    overview:'总览', notes:'笔记', attachments:'附件', search:'搜索',
+    overview:'总览', notes:'笔记', attachments:'附件', tasks:'待办', trash:'回收站', search:'搜索',
     searchPlaceholder:'搜索知识库 (hybrid search)…', workspaceLabel:'工作区', localSummary:'本地: {n} 笔记 · {m} 文件',
     connected:'已连接', unavailable:'不可用', notConfigured:'未配置', error:'错误',
     overviewTitle:'工作区概览', overviewNotes:'笔记', overviewAttachments:'附件', overviewMappings:'已同步对象', overviewPendingSync:'待同步', overviewSyncErrors:'同步错误',
@@ -155,7 +157,7 @@ const STR = {
     quickSwitch:'快速切换笔记', typeToSearch:'输入标题或路径…',
   },
   en: {
-    overview:'Overview', notes:'Notes', attachments:'Attachments', search:'Search',
+    overview:'Overview', notes:'Notes', attachments:'Attachments', tasks:'Tasks', trash:'Trash', search:'Search',
     searchPlaceholder:'Search knowledge base (hybrid search)…', workspaceLabel:'Workspace', localSummary:'Local: {n} notes · {m} files',
     connected:'Connected', unavailable:'Unavailable', notConfigured:'Not configured', error:'error',
     overviewTitle:'Workspace Overview', overviewNotes:'Notes', overviewAttachments:'Attachments', overviewMappings:'Synced objects', overviewPendingSync:'Pending sync', overviewSyncErrors:'Sync errors',
@@ -243,6 +245,8 @@ function render(){
   if (state.view === 'overview') renderOverview()
   else if (state.view === 'notes') { renderTreeToolbar(); renderTree(); renderDetail() }
   else if (state.view === 'attachments') renderAttachments()
+  else if (state.view === 'tasks') renderTasks()
+  else if (state.view === 'trash') renderTrash()
   else renderSearchView()
 }
 
@@ -690,6 +694,47 @@ async function delAttachment(id){
   try { await api('deleteAttachment', { attachmentId: id }); state.selectedAttachmentId = null; toast(t('deletedMsg'), 'ok'); await renderAttachments(); refreshHeader() }
   catch (e) { toast(t('genericError') + ': ' + e.message, 'err') }
 }
+async function renderTasks(){
+  $('#list').innerHTML = ''; $('#treeToolbar').innerHTML = ''; $('#detail').innerHTML = ''
+  $('#main').innerHTML = '<div class="empty">' + esc(t('loading')) + '</div>'
+  try {
+    const matrices = await api('listMatrices')
+    const inbox = await api('listTasks', { matrixId: null })
+    const matrixRows = matrices.map(m =>
+      '<div class="tree-row" data-action="open-matrix" data-id="' + esc(m.matrixId) + '"><span class="ic">▦</span><span class="nm">' + esc(m.name) + '</span></div>'
+    ).join('')
+    const tasks = await api('listTasks', {})
+    const open = tasks.filter(x => x.status === 'open')
+    $('#list').innerHTML =
+      '<div class="list-head">' + esc(t('tasks')) + '</div>' +
+      '<div class="tree-row" data-action="open-matrix" data-id=""><span class="ic">📥</span><span class="nm">Inbox (' + inbox.length + ')</span></div>' +
+      matrixRows
+    $('#main').innerHTML =
+      '<h2>' + esc(t('tasks')) + '</h2>' +
+      '<div class="toolbar"><button class="btn primary" data-action="new-task">+ ' + esc(t('newNote')) + '</button><button class="btn" data-action="new-matrix">+ ' + esc(t('newFolder')) + '</button></div>' +
+      (open.length ? open.map(x =>
+        '<div class="tree-row" data-action="toggle-task" data-id="' + esc(x.taskId) + '"><span class="ic">' + (x.status === 'completed' ? '☑' : '☐') + '</span><span class="nm">' + esc(x.title) + '</span>' + (x.matrixId ? '<span class="badge">' + esc(matrixName(matrices, x.matrixId)) + '</span>' : '') + '</div>'
+      ).join('') : '<div class="empty">' + esc(t('emptyNotes')) + '</div>')
+  } catch (e) { $('#main').innerHTML = '<div class="empty">' + esc(t('genericError')) + ': ' + esc(e.message) + '</div>' }
+}
+function matrixName(matrices, id){ const m = matrices.find(m => m.matrixId === id); return m ? m.name : id }
+
+async function renderTrash(){
+  $('#list').innerHTML = ''; $('#treeToolbar').innerHTML = ''; $('#detail').innerHTML = ''
+  $('#main').innerHTML = '<div class="empty">' + esc(t('loading')) + '</div>'
+  try {
+    const notes = await api('listTrash')
+    const atts = await api('listTrashAttachments')
+    const folders = await api('listTrashFolders')
+    const rows = []
+    for (const f of folders) rows.push('<div class="tree-row"><span class="ic">📁</span><span class="nm">' + esc(f) + '/</span><button class="btn small" data-action="restore-folder" data-path="' + esc(f) + '">' + esc(t('reconcile')) + '</button></div>')
+    for (const n of notes) rows.push('<div class="tree-row"><span class="ic">📄</span><span class="nm">' + esc(n.title) + '</span><button class="btn small" data-action="restore-note" data-id="' + esc(n.noteId) + '">' + esc(t('reconcile')) + '</button><button class="btn small danger" data-action="purge-note" data-id="' + esc(n.noteId) + '">' + esc(t('del')) + '</button></div>')
+    for (const a of atts) rows.push('<div class="tree-row"><span class="ic">📎</span><span class="nm">' + esc(a.filename) + '</span><button class="btn small" data-action="restore-attachment" data-id="' + esc(a.attachmentId) + '">' + esc(t('reconcile')) + '</button><button class="btn small danger" data-action="purge-attachment" data-id="' + esc(a.attachmentId) + '">' + esc(t('del')) + '</button></div>')
+    $('#list').innerHTML = '<div class="list-head">' + esc(t('trash')) + '</div>'
+    $('#main').innerHTML = '<h2>' + esc(t('trash')) + '</h2>' + (rows.length ? rows.join('') : '<div class="empty">' + esc(t('noRecent')) + '</div>')
+  } catch (e) { $('#main').innerHTML = '<div class="empty">' + esc(t('genericError')) + ': ' + esc(e.message) + '</div>' }
+}
+
 function renderSearchView(){ $('#list').innerHTML = ''; $('#treeToolbar').innerHTML = ''; $('#detail').innerHTML = ''; $('#main').innerHTML = '<h2>' + esc(t('search')) + '</h2><p class="muted">' + esc(t('searchHint')) + '</p>' }
 async function runSearch(q){
   $('#main').innerHTML = '<div class="empty">' + esc(t('searching')) + '</div>'
@@ -789,7 +834,21 @@ document.addEventListener('click', (e) => {
   else if (act === 'download-attachment') downloadAttachment(id)
   else if (act === 'delete-attachment') delAttachment(id)
   else if (act === 'go-attachments') setView('attachments')
+  else if (act === 'new-task') quickAddTask(null, null)
+  else if (act === 'new-matrix') { const name = prompt(t('createFolderPrompt'), ''); if (name && name.trim()) api('createMatrix', { name: name.trim() }).then(() => renderTasks()) }
+  else if (act === 'open-matrix') { renderTasks() }
+  else if (act === 'toggle-task') { api('completeTask', { taskId: id }).then(() => renderTasks()) }
+  else if (act === 'restore-note') { api('restoreNote', { noteId: id }).then(() => renderTrash()).then(refreshHeader) }
+  else if (act === 'purge-note') { if (confirm(t('delNoteConfirm'))) api('purgeNote', { noteId: id }).then(() => renderTrash()).then(refreshHeader) }
+  else if (act === 'restore-attachment') { api('restoreAttachment', { attachmentId: id }).then(() => renderTrash()).then(refreshHeader) }
+  else if (act === 'purge-attachment') { if (confirm(t('delAttachmentConfirm'))) api('purgeAttachment', { attachmentId: id }).then(() => renderTrash()).then(refreshHeader) }
+  else if (act === 'restore-folder') { api('restoreFolder', { path }).then(() => renderTrash()) }
 })
+function quickAddTask(matrixId, sourceRefs){
+  const title = prompt(t('newNotePrompt'), '')
+  if (title === null) return
+  api('createTask', { title, ...(matrixId ? { matrixId } : {}), ...(sourceRefs ? { sourceRefs } : {}) }).then(() => renderTasks())
+}
 $('#search').addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.value.trim()) { state.view = 'search'; render(); runSearch(e.target.value.trim()) } })
 document.addEventListener('keydown', (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') { e.preventDefault(); if (state.view === 'notes' && state.selectedNoteId !== null) saveNote() }
