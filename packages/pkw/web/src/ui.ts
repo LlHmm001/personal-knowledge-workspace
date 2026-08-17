@@ -155,6 +155,7 @@ const STR = {
     untitled:'untitled', notSynced:'未同步', synced:'已同步', syncing:'同步中', pending:'待同步', failed:'失败', stale:'已过期', deleted:'已删除',
     upload:'上传文件', emptyAttachments:'还没有附件。', attachmentsDesc:'管理笔记中上传的文件。', size:'大小', download:'下载', delAttachmentConfirm:'删除该附件？', attachmentDetailHint:'选中附件查看详情。',
     newMatrix:'新建四象限', smartViews:'智能视图', matrices:'四象限',
+    copyWikiLink:'复制 Wiki 链接', taskComplete:'完成', taskReopen:'重新打开', matrixArchive:'归档', matrixRemove:'删除四象限', matrixRemoveConfirm:'删除该四象限？其全部任务将移回 Inbox。',
     uploadProgress:'上传中…', uploadSuccess:'已上传', uploadFailed:'上传失败', searching:'搜索中…', noHits:'没有命中「{q}」。', searchHint:'输入关键词搜索本地笔记与附件（经 WeKnora hybrid search）。',
     score:'得分', openNote:'打开笔记', openAttachment:'打开附件', externalWeKnora:'WeKnora 外部', noteLabel:'笔记', attachmentLabel:'附件',
     details:'详情', noteId:'NoteId', attachmentId:'AttachmentId', path:'路径', revision:'版本', updated:'更新时间', lastError:'最近错误', maintenance:'维护', advanced:'高级',
@@ -189,6 +190,7 @@ const STR = {
     untitled:'untitled', notSynced:'Not synced', synced:'Synced', syncing:'Syncing', pending:'Pending', failed:'Failed', stale:'Stale', deleted:'Deleted',
     upload:'Upload file', emptyAttachments:'No attachments yet.', attachmentsDesc:'Manage files uploaded in notes.', size:'Size', download:'Download', delAttachmentConfirm:'Delete this attachment?', attachmentDetailHint:'Select an attachment to view details.',
     newMatrix:'New matrix', smartViews:'Smart views', matrices:'Matrices',
+    copyWikiLink:'Copy wiki link', taskComplete:'Complete', taskReopen:'Reopen', matrixArchive:'Archive', matrixRemove:'Delete matrix', matrixRemoveConfirm:'Delete this matrix? All its tasks will move back to Inbox.',
     uploadProgress:'Uploading…', uploadSuccess:'Uploaded', uploadFailed:'Upload failed', searching:'Searching…', noHits:'No hits for 「{q}」.', searchHint:'Type a query to search notes & attachments (via WeKnora hybrid search).',
     score:'score', openNote:'Open note', openAttachment:'Open attachment', externalWeKnora:'external WeKnora', noteLabel:'Note', attachmentLabel:'Attachment',
     details:'Details', noteId:'NoteId', attachmentId:'AttachmentId', path:'Path', revision:'Revision', updated:'Updated', lastError:'Last error', maintenance:'Maintenance', advanced:'Advanced',
@@ -1084,24 +1086,67 @@ function insertAtCursor(el, text){
 
 // ── Note tree context menu (right-click → 添加到待办 / 移动 / 重命名 / 删除) ──
 function dismissContextMenu(){ const m = $('#ctxMenu'); if (m) m.remove() }
-function showNoteContextMenu(x, y, noteId){
+// Unified context menu: entity → context-sensitive action list (single mutation
+// path — each item just invokes an existing delegated data-action).
+function showContextMenu(x, y, items){
   dismissContextMenu()
   const menu = document.createElement('div')
   menu.className = 'ctx-menu'; menu.id = 'ctxMenu'
-  menu.style.left = Math.min(x, window.innerWidth - 200) + 'px'
-  menu.style.top = Math.min(y, window.innerHeight - 180) + 'px'
-  menu.innerHTML =
-    '<div class="ctx-item" data-action="note-to-task" data-id="' + esc(noteId) + '">📝 ' + esc(t('noteToTask')) + '</div>' +
-    '<div class="ctx-item" data-action="move-note" data-id="' + esc(noteId) + '">📁 ' + esc(t('moveNoteTo')) + '</div>' +
-    '<div class="ctx-item" data-action="rename-note" data-id="' + esc(noteId) + '">✏️ ' + esc(t('renameMove')) + '</div>' +
-    '<div class="ctx-item danger" data-action="delete-note" data-id="' + esc(noteId) + '">🗑 ' + esc(t('del')) + '</div>'
+  menu.style.left = Math.min(x, window.innerWidth - 220) + 'px'
+  menu.style.top = Math.min(y, window.innerHeight - 40 - items.length * 30) + 'px'
+  menu.innerHTML = items.map(it => {
+    let attrs = ''
+    if (it.id !== undefined) attrs += ' data-id="' + esc(it.id) + '"'
+    if (it.path !== undefined) attrs += ' data-path="' + esc(it.path) + '"'
+    if (it.attrs) for (const k in it.attrs) attrs += ' ' + k + '="' + esc(it.attrs[k]) + '"'
+    return '<div class="ctx-item' + (it.danger ? ' danger' : '') + '" data-action="' + esc(it.action) + '"' + attrs + '>' + esc(it.label) + '</div>'
+  }).join('')
   document.body.appendChild(menu)
+}
+function showNoteContextMenu(x, y, noteId){
+  showContextMenu(x, y, [
+    { label: '📄 ' + t('openNote'), action: 'open-note', id: noteId },
+    { label: '📝 ' + t('noteToTask'), action: 'note-to-task', id: noteId },
+    { label: '🔗 ' + t('copyWikiLink'), action: 'copy-wikilink', id: noteId },
+    { label: '✏️ ' + t('renameMove'), action: 'rename-note', id: noteId },
+    { label: '📁 ' + t('moveNoteTo'), action: 'move-note', id: noteId },
+    { label: '🗑 ' + t('trashFolder'), action: 'delete-note', id: noteId, danger: true },
+  ])
+}
+function showFolderContextMenu(x, y, path){
+  showContextMenu(x, y, [
+    { label: '📄 ' + t('newNoteHere'), action: 'new-note-here', path },
+    { label: '📁 ' + t('newSubfolder'), action: 'new-subfolder', path },
+    { label: '✏️ ' + t('renameFolder'), action: 'rename-folder', path },
+    { label: '🗑 ' + t('trashFolder'), action: 'delete-folder', path, danger: true },
+  ])
+}
+function showTaskContextMenu(x, y, taskId, completed){
+  showContextMenu(x, y, [
+    { label: completed ? '↩ ' + t('taskReopen') : '✓ ' + t('taskComplete'), action: 'toggle-task', id: taskId, attrs: { 'data-completed': completed ? '1' : '0' } },
+    { label: '📅 ' + t('taskDue'), action: 'task-due', id: taskId },
+    { label: '🗑 ' + t('trashFolder'), action: 'task-delete', id: taskId, danger: true },
+  ])
+}
+function showMatrixContextMenu(x, y, matrixId){
+  showContextMenu(x, y, [
+    { label: '✏️ ' + t('renameFolder'), action: 'matrix-rename', id: matrixId },
+    { label: '📦 ' + t('matrixArchive'), action: 'matrix-archive', id: matrixId },
+    { label: '🗑 ' + t('matrixRemove'), action: 'matrix-remove', id: matrixId, danger: true },
+  ])
 }
 document.addEventListener('contextmenu', (e) => {
   const noteRow = e.target.closest('.tree-row.note[data-action="open-note"]')
-  if (!noteRow) { dismissContextMenu(); return }
-  e.preventDefault()
-  showNoteContextMenu(e.clientX, e.clientY, noteRow.dataset.id)
+  if (noteRow) { e.preventDefault(); showNoteContextMenu(e.clientX, e.clientY, noteRow.dataset.id); return }
+  const folderRow = e.target.closest('.tree-row.folder[data-action="select-folder"]')
+  if (folderRow) { e.preventDefault(); showFolderContextMenu(e.clientX, e.clientY, folderRow.dataset.path); return }
+  const taskRow = e.target.closest('[data-action="toggle-task"]')
+  if (taskRow) { e.preventDefault(); showTaskContextMenu(e.clientX, e.clientY, taskRow.dataset.id, taskRow.dataset.completed === '1'); return }
+  const matrixRow = e.target.closest('[data-action="task-view"][data-view]')
+  if (matrixRow && !['all', 'today', 'upcoming', 'completed', 'inbox'].includes(matrixRow.dataset.view)) {
+    e.preventDefault(); showMatrixContextMenu(e.clientX, e.clientY, matrixRow.dataset.view); return
+  }
+  dismissContextMenu()
 })
 
 // ── Selection → floating "add to task" (appears next to the selection) ──────
@@ -1165,6 +1210,12 @@ document.addEventListener('click', (e) => {
   else if (act === 'selection-to-task') { const ref = selectionSourceRef(); if (ref) quickTaskDialog(null, [ref]); else toast(t('taskNoTasks'), 'warn') }
   else if (act === 'open-task-source') { state.highlightText = el.dataset.exact || ''; setView('notes'); openNote(id) }
   else if (act === 'toggle-task') { const t = el.dataset.completed === '1' ? api('reopenTask', { taskId: id }) : api('completeTask', { taskId: id }); t.then(() => renderTasks()) }
+  else if (act === 'task-due') { const due = prompt(t('taskDue'), ''); if (due !== null) api('updateTask', { taskId: id, patch: { dueAt: due } }).then(() => renderTasks()) }
+  else if (act === 'task-delete') { api('deleteTask', { taskId: id }).then(() => renderTasks()) }
+  else if (act === 'matrix-rename') { const name = prompt(t('folderRenamePrompt'), ''); if (name && name.trim()) api('renameMatrix', { matrixId: id, name: name.trim() }).then(() => renderTasks()) }
+  else if (act === 'matrix-archive') { api('archiveMatrix', { matrixId: id }).then(() => renderTasks()) }
+  else if (act === 'matrix-remove') { if (confirm(t('matrixRemoveConfirm'))) api('removeMatrix', { matrixId: id, reassignTo: null }).then(() => renderTasks()).catch(e => toast(e.message, 'err')) }
+  else if (act === 'copy-wikilink') { api('getNote', { noteId: id }).then(d => navigator.clipboard.writeText('[[' + (d.note.title || id) + ']]')).then(() => toast(t('ok'), 'ok')).catch(e => toast(t('genericError') + ': ' + e.message, 'err')) }
   else if (act === 'task-up') moveTaskOrder(id, -1)
   else if (act === 'task-down') moveTaskOrder(id, 1)
   else if (act === 'restore-note') { api('restoreNote', { noteId: id }).then(() => renderTrash()).then(refreshHeader) }
@@ -1255,6 +1306,7 @@ function quickTaskDialog(matrixId, sourceRefs){
 }
 $('#search').addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.value.trim()) { state.view = 'search'; render(); runSearch(e.target.value.trim()) } })
 document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { dismissContextMenu(); dismissSelButton(); dismissWikiSuggest(); return }
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') { e.preventDefault(); if (state.view === 'notes' && state.selectedNoteId !== null) saveNote() }
   else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'o') { e.preventDefault(); quickSwitch() }
   else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'b' && $('#editor')) { e.preventDefault(); document.execCommand('insertText', false, '**bold**') }
