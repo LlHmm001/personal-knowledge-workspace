@@ -505,6 +505,23 @@ export class PkwWebService extends Service {
         await this.weknora.reparseKnowledge(mapping.knowledgeId)
         return { reparse: true }
       }
+      case 'noteAttachmentSummaries': {
+        // For a Note's referenced attachments, surface each Attachment Knowledge summary
+        // (a remote projection — never written back into the Note Markdown).
+        const doc = await this.notes.getDocument(NoteId(String(args.noteId)))
+        const out: Array<{ attachmentId: string; filename: string; knowledgeId?: string; description?: string; summaryStatus?: string }> = []
+        for (const ref of doc.attachments) {
+          const rec = this.attachments.get(ref.attachmentId)
+          const mapping = this.sync.getAttachmentMapping(ref.attachmentId)
+          let description: string | undefined
+          let summaryStatus: string | undefined
+          if (mapping !== undefined && mapping.knowledgeId !== undefined) {
+            try { const k = await this.weknora.getKnowledge(mapping.knowledgeId); description = k.description; summaryStatus = k.summary_status } catch { /* offline */ }
+          }
+          out.push({ attachmentId: String(ref.attachmentId), filename: rec?.filename ?? '', knowledgeId: mapping?.knowledgeId, description, summaryStatus })
+        }
+        return out
+      }
       case 'listWikiPages': return this.weknora.listWikiPages(this.config.kbId, { query: args.query !== undefined ? String(args.query) : undefined, pageType: args.pageType !== undefined ? String(args.pageType) : undefined, folderId: args.folderId !== undefined ? String(args.folderId) : undefined, page: args.page !== undefined ? Number(args.page) : undefined, pageSize: args.pageSize !== undefined ? Number(args.pageSize) : undefined })
       case 'getWikiPage': return this.weknora.getWikiPage(this.config.kbId, String(args.slug))
       case 'listWikiFolders': return this.weknora.listWikiFolders(this.config.kbId, args.parentId !== undefined ? String(args.parentId) : '')

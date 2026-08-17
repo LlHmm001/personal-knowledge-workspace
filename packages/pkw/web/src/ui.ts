@@ -686,6 +686,7 @@ async function openNote(noteId){
     $('#main').innerHTML = renderEditorShell(d)
     bindEditor()
     $('#detail').innerHTML = detailNote(d)
+    renderNoteAttachmentKnowledge(d)
     await renderTree()
     kickSyncPoll(d.sync)
   } catch (e) {
@@ -987,7 +988,7 @@ function detailNote(d){
     (fm.title ? '<div class="kv"><b>' + esc(t('title')) + '</b> <span class="v">' + esc(fm.title) + '</span></div>' : '') +
     (fm.tags && fm.tags.length ? '<div class="kv"><b>' + esc(t('tags')) + '</b> <span class="v">' + esc(fm.tags.join(', ')) + '</span></div>' : '') +
     '<div class="kv"><b>' + esc(t('path')) + '</b> <span class="v mono">' + esc(d.note.relativePath) + '</span></div>' +
-    (d.attachments && d.attachments.length ? '<h3>' + esc(t('refAttachments')) + '</h3><div class="kv">' + d.attachments.length + '</div>' : '') +
+    (d.attachments && d.attachments.length ? '<h3>' + esc(t('refAttachments')) + '</h3><div class="kv">' + d.attachments.length + '</div><div id="noteAttachmentKnowledge"></div>' : '') +
     '<h3>' + esc(t('outline')) + '</h3><div class="outline" id="outlineBox">' + outlineHtml(d.markdown) + '</div>' +
     '<h3>' + esc(t('syncSection')) + '</h3><div id="detailSync">' + syncBadgeHtml(s) + '</div>' +
     (s && s.error ? '<div class="kv"><b>' + esc(t('lastError')) + '</b> <span class="v">' + esc(s.error) + '</span></div>' : '') +
@@ -995,6 +996,15 @@ function detailNote(d){
     '<div class="kv"><b>' + esc(t('noteId')) + '</b> <span class="v mono">' + esc(d.note.noteId) + '</span></div>' +
     '<div class="kv"><b>' + esc(t('revision')) + '</b> ' + d.note.observedRevision + '</div>' +
     (s && s.knowledgeId ? '<div class="kv"><b>' + esc(t('knowledgeId')) + '</b> <span class="v mono">' + esc(s.knowledgeId) + '</span></div>' : '')
+}
+function renderNoteAttachmentKnowledge(d){
+  if (!d.attachments || !d.attachments.length) return
+  api('noteAttachmentSummaries', { noteId: d.note.noteId }).then(sums => {
+    const box = $('#noteAttachmentKnowledge')
+    if (!box || state.selectedNoteId !== d.note.noteId) return
+    const rows = sums.filter(s => s.description || s.summaryStatus).map(s => '<div class="kv"><b>' + esc(s.filename || s.attachmentId) + '</b> <span class="v">' + (s.description ? esc(s.description) : (s.summaryStatus === 'completed' ? esc(t('knowledgeIndexed')) : esc(t('knowledgePending')))) + '</span></div>').join('')
+    if (rows) box.innerHTML = '<h3>' + esc(t('summary')) + '</h3>' + rows
+  }).catch(() => {})
 }
 function outlineHtml(md){
   const fm = parseFrontmatterClient(md)
