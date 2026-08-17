@@ -1396,7 +1396,7 @@ document.addEventListener('click', (e) => {
   }
   else if (act === 'selection-to-task') { const ref = selectionSourceRef(); if (ref) quickTaskDialog(null, [ref], { title: ref.exact.replace(/\\n/g, ' ').trim().slice(0, 60), description: ref.exact }); else toast(t('taskNoTasks'), 'warn') }
   else if (act === 'open-task-source') { state.highlightText = el.dataset.exact || ''; setView('notes'); openNote(id) }
-  else if (act === 'toggle-task') { const t = el.dataset.completed === '1' ? api('reopenTask', { taskId: id }) : api('completeTask', { taskId: id }); t.then(() => renderTasks()) }
+  else if (act === 'toggle-task') { const t = el.dataset.completed === '1' ? api('reopenTask', { taskId: id }) : api('completeTask', { taskId: id }); t.then(() => { renderTasks(); if (taskDetailRefreshSubtasks) taskDetailRefreshSubtasks() }).catch(e => toast(t('genericError') + ': ' + e.message, 'err')) }
   else if (act === 'open-task-detail') taskDetailDialog(id)
   else if (act === 'task-due') { const due = prompt(t('taskDue'), ''); if (due !== null) api('updateTask', { taskId: id, patch: { dueAt: due } }).then(() => renderTasks()) }
   else if (act === 'task-delete') { api('deleteTask', { taskId: id }).then(() => renderTasks()) }
@@ -1456,6 +1456,7 @@ function selectionSourceRef(){
 }
 let taskDetailSessionSeq = 0
 let activeTaskDetailSession = 0
+let taskDetailRefreshSubtasks = null
 function taskDetailDialog(taskId){
   const task = (state.tasksCache || []).find(t => t.taskId === taskId)
   if (!task) return
@@ -1465,14 +1466,14 @@ function taskDetailDialog(taskId){
   activeTaskDetailSession = sessionId
   // Single-modal invariant: remove any previous dialog (and invalidate it).
   const prev = document.getElementById('taskDetailModal'); if (prev) prev.remove()
-  Promise.all([api('listMatrices'), api('listSubtasks', { parentTaskId: taskId })]).then(([matrices, subtasks]) => {
-    if (sessionId !== activeTaskDetailSession) return // stale async: drop
-    const mOpts = '<option value="">' + esc(t('taskInbox')) + '</option>' + matrices.map(m => '<option value="' + esc(m.matrixId) + '"' + (m.matrixId === task.matrixId ? ' selected' : '') + '>' + esc(m.name) + '</option>').join('')
-    const quad = quadrantOf(task)
-    const srcNote = task.sourceRefs && task.sourceRefs[0] ? '<div class="form"><label>' + esc(t('noteLabel')) + '</label><span class="v mono" data-action="open-task-source" data-id="' + esc(task.sourceRefs[0].noteId) + '" data-exact="' + esc(task.sourceRefs[0].exact || '') + '" style="cursor:pointer">📄 ' + esc(task.sourceRefs[0].noteId) + '</span></div>' : ''
-    const renderSubRows = (list) => list.map(s => '<div class="tree-row task-card" data-action="open-task-detail" data-id="' + esc(s.taskId) + '"><span class="ic" data-action="toggle-task" data-completed="' + (s.status === 'completed' ? '1' : '0') + '" data-id="' + esc(s.taskId) + '">' + (s.status === 'completed' ? '☑' : '☐') + '</span><span class="nm">' + esc(s.title) + '</span></div>').join('')
-    const subSection = '<div class="form"><label>' + esc(t('subtasks')) + '</label><div id="tdSubtasks">' + (renderSubRows(subtasks) || '<span class="muted">' + esc(t('taskNoTasks')) + '</span>') + '</div><div class="toolbar" style="margin-top:4px"><input id="tdNewSub" placeholder="' + esc(t('subtaskAdd')) + '" style="flex:1" /><button class="btn small" id="tdAddSub">+</button></div></div>'
-    const wrapper = document.createElement('div')
+  const quad = quadrantOf(task)
+  const srcNote = task.sourceRefs && task.sourceRefs[0] ? '<div class="form"><label>' + esc(t('noteLabel')) + '</label><span class="v mono" data-action="open-task-source" data-id="' + esc(task.sourceRefs[0].noteId) + '" data-exact="' + esc(task.sourceRefs[0].exact || '') + '" style="cursor:pointer">📄 ' + esc(task.sourceRefs[0].noteId) + '</span></div>' : ''
+  const renderSubRows = (list) => list.map(s => '<div class="tree-row task-card" data-action="open-task-detail" data-id="' + esc(s.taskId) + '"><span class="ic" data-action="toggle-task" data-completed="' + (s.status === 'completed' ? '1' : '0') + '" data-id="' + esc(s.taskId) + '">' + (s.status === 'completed' ? '☑' : '☐') + '</span><span class="nm">' + esc(s.title) + '</span></div>').join('')
+  // Shell renders immediately from the already-cached task object; matrices and
+  // subtasks load async and patch their own sections (never block the shell).
+  const mOpts = task.matrixId ? '<option value="' + esc(task.matrixId) + '" selected>' + esc(task.matrixId) + '</option>' : '<option value="" selected>' + esc(t('taskInbox')) + '</option>'
+  const subSection = '<div class="form"><label>' + esc(t('subtasks')) + '</label><div id="tdSubtasks"><span class="muted">' + esc(t('loading')) + '</span></div><div class="toolbar" style="margin-top:4px"><input id="tdNewSub" placeholder="' + esc(t('subtaskAdd')) + '" style="flex:1" /><button class="btn small" id="tdAddSub">+</button></div></div>'
+  const wrapper = document.createElement('div')
     wrapper.innerHTML =
       '<div class="modal-overlay" id="taskDetailModal"><div class="modal"><h3>' + esc(t('taskDetail')) + '</h3>' +
       '<div class="form"><label>' + esc(t('taskTitle')) + '</label><input id="tdTitle" value="' + esc(task.title) + '" /></div>' +
@@ -1492,7 +1493,14 @@ function taskDetailDialog(taskId){
     document.body.appendChild(modal)
     const qs = (sel) => modal.querySelector(sel)
     const isActive = () => sessionId === activeTaskDetailSession
-    const close = () => { if (isActive()) activeTaskDetailSession = 0; modal.remove() }
+    const close = () => { if (isActive()) activeTaskDetailSession = 0; taskDetailRefreshSubtasks = null; modal.remove() }
+    // Re-fetch + patch ONLY the #tdSubtasks section (never the whole modal).
+    const refreshSubtasks = () => api('listSubtasks', { parentTaskId: taskId }).then(list => {
+      if (!isActive()) return
+      const box = qs('#tdSubtasks')
+      if (box) box.innerHTML = renderSubRows(list) || '<span class="muted">' + esc(t('taskNoTasks')) + '</span>'
+    })
+    taskDetailRefreshSubtasks = refreshSubtasks
     // Subtask create is an INDEPENDENT Task Store mutation: it must never
     // recreate/close the parent modal (which would drop the parent draft).
     const submitSubtask = () => {
@@ -1501,11 +1509,9 @@ function taskDetailDialog(taskId){
       if (!title) return
       const pq = quadrantOf(task)
       api('createTask', { title, parentTaskId: taskId, ...(task.matrixId ? { matrixId: task.matrixId } : {}), important: pq === 1 || pq === 2, urgent: pq === 1 || pq === 3 })
-        .then(() => api('listSubtasks', { parentTaskId: taskId }))
-        .then(list => {
+        .then(() => refreshSubtasks())
+        .then(() => {
           if (!isActive()) return
-          const box = qs('#tdSubtasks')
-          if (box) box.innerHTML = renderSubRows(list) || '<span class="muted">' + esc(t('taskNoTasks')) + '</span>'
           input.value = ''
           input.focus()
         })
@@ -1530,7 +1536,13 @@ function taskDetailDialog(taskId){
       } }).then(() => { if (isActive()) { activeTaskDetailSession = 0; modal.remove(); renderTasks() } }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
     })
     modal.addEventListener('click', (e) => { if (e.target === modal) close() })
-  }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
+    // Async (non-blocking) secondary data: patch their own sections when ready.
+    api('listMatrices').then(matrices => {
+      if (!isActive()) return
+      const sel = qs('#tdMatrix')
+      if (sel) sel.innerHTML = '<option value="">' + esc(t('taskInbox')) + '</option>' + matrices.map(m => '<option value="' + esc(m.matrixId) + '"' + (m.matrixId === task.matrixId ? ' selected' : '') + '>' + esc(m.name) + '</option>').join('')
+    }).catch(() => {})
+    refreshSubtasks().catch(() => {})
 }
 function quickTaskDialog(matrixId, sourceRefs, prefill){
   const lastMatrix = localStorage.getItem('pkw-task-last-matrix') || ''
