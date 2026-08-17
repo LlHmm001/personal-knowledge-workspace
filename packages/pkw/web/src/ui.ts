@@ -1425,11 +1425,16 @@ document.addEventListener('click', (e) => {
   }
   else if (act === 'selection-to-task') { const ref = selectionSourceRef(); if (ref) quickTaskDialog(null, [ref], { title: ref.exact.replace(/\\n/g, ' ').trim().slice(0, 60), description: ref.exact }); else toast(t('taskNoTasks'), 'warn') }
   else if (act === 'open-task-source') { state.highlightText = el.dataset.exact || ''; setView('notes'); openNote(id) }
-  else if (act === 'toggle-task') { const t = el.dataset.completed === '1' ? api('reopenTask', { taskId: id }) : api('completeTask', { taskId: id }); t.then(() => { renderTasks(); if (taskDetailRefreshSubtasks) taskDetailRefreshSubtasks() }).catch(e => toast(t('genericError') + ': ' + e.message, 'err')) }
+  else if (act === 'toggle-task') {
+    const task = (state.tasksCache || []).find(x => x.taskId === id)
+    const isSubtask = task && task.parentTaskId !== null
+    const t = el.dataset.completed === '1' ? api('reopenTask', { taskId: id }) : api('completeTask', { taskId: id })
+    t.then(() => { if (!isSubtask) renderTasks(); if (taskDetailRefreshSubtasks) taskDetailRefreshSubtasks() }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
+  }
   else if (act === 'subtask-edit') { inlineEditSubtask(el, id) }
   else if (act === 'open-task-detail') taskDetailDialog(id)
   else if (act === 'task-due') { const due = prompt(t('taskDue'), ''); if (due !== null) api('updateTask', { taskId: id, patch: { dueAt: due } }).then(() => renderTasks()) }
-  else if (act === 'task-delete') { api('deleteTask', { taskId: id }).then(() => renderTasks()) }
+  else if (act === 'task-delete') { const task = (state.tasksCache || []).find(x => x.taskId === id); const isSubtask = task && task.parentTaskId !== null; api('deleteTask', { taskId: id }).then(() => { if (!isSubtask) renderTasks(); if (taskDetailRefreshSubtasks) taskDetailRefreshSubtasks() }).catch(e => toast(t('genericError') + ': ' + e.message, 'err')) }
   else if (act === 'task-duplicate') { const t = (state.tasksCache || []).find(x => x.taskId === id); if (t) api('createTask', { title: t.title + ' (copy)', ...(t.matrixId ? { matrixId: t.matrixId } : {}), important: t.important, urgent: t.urgent, ...(t.description ? { description: t.description } : {}), ...(t.dueAt ? { dueAt: t.dueAt } : {}), tags: t.tags || [] }).then(() => renderTasks()) }
   else if (act === 'matrix-rename') { const name = prompt(t('folderRenamePrompt'), ''); if (name && name.trim()) api('renameMatrix', { matrixId: id, name: name.trim() }).then(() => renderTasks()) }
   else if (act === 'matrix-archive') { api('archiveMatrix', { matrixId: id }).then(() => renderTasks()) }
