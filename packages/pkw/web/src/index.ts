@@ -17,7 +17,7 @@
 import { Service, type Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { posix, extname, resolve as pathResolve } from 'node:path'
+import { posix, extname, resolve as pathResolve, sep } from 'node:path'
 import { readFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import z from '@deepseek-ai/schemastery'
@@ -72,6 +72,13 @@ function folderOf(relativePath: string): string {
   const idx = relativePath.lastIndexOf('/')
   return idx === -1 ? '' : relativePath.slice(0, idx)
 }
+
+/**
+ * Pinned Vditor version. The served asset URLs embed it so the browser can
+ * long-cache immutably; Vditor's own `cdn` base also uses it. Bump together
+ * with the `vditor` dependency in the lockfile.
+ */
+const VDITOR_VERSION = '3.11.3'
 
 const VDITOR_MIME: Record<string, string> = {
   '.js': 'application/javascript; charset=utf-8',
@@ -201,29 +208,43 @@ export class PkwWebService extends Service {
       },
     }), 'pkw.web.api')
 
-    // Vditor self-hosted assets: serve from the installed vditor dist with an
-    // extension allowlist + path-traversal guard (never the whole node_modules).
+    // Vditor self-hosted assets. Serve the pinned version under
+    // `/pkw/assets/vditor/<version>/dist/**` from the installed package so
+    // Vditor's own lazy `cdn`-relative fetches (i18n, icons, highlight, math,
+    // mermaid, …) resolve to the same tree. Versioned + immutable long-cache.
     const vditorEntry = createRequire(import.meta.url).resolve('vditor/dist/index.min.js')
-    const vditorDist = vditorEntry.slice(0, vditorEntry.length - 'index.min.js'.length)
+    const vditorRoot = vditorEntry.slice(0, vditorEntry.length - 'dist/index.min.js'.length)
     this.ctx.effect(() => this.ctx.webServer.register({
       kind: 'prefix', path: '/pkw/assets/vditor', handler: (req, res) => {
-        void this.serveVditorAsset(req, res, vditorDist)
+        void this.serveVditorAsset(req, res, vditorRoot)
       },
     }), 'pkw.web.vditorAssets')
   }
 
-  private async serveVditorAsset(req: IncomingMessage, res: ServerResponse, dist: string): Promise<void> {
+  private async serveVditorAsset(req: IncomingMessage, res: ServerResponse, root: string): Promise<void> {
     try {
       const url = new URL(req.url ?? '/', 'http://localhost')
+      // e.g. '3.11.3/dist/index.min.js' → version + 'dist/...' (allowlist).
       const sub = url.pathname.slice('/pkw/assets/vditor/'.length)
-      const target = pathResolve(dist, sub)
-      if (!target.startsWith(pathResolve(dist))) {
+      const [version, ...rest] = sub.split('/')
+      if (version !== VDITOR_VERSION) {
+        res.writeHead(404, { 'Content-Type': 'text/plain' })
+        res.end('not found')
+        return
+      }
+      const rel = rest.join('/')
+      if (!rel.startsWith('dist/')) {
+        json(res, 403, { ok: false, error: 'forbidden' })
+        return
+      }
+      const target = pathResolve(root, rel)
+      if (!target.startsWith(pathResolve(root) + sep)) {
         json(res, 403, { ok: false, error: 'forbidden' })
         return
       }
       const mime = VDITOR_MIME[extname(target).toLowerCase()] ?? 'application/octet-stream'
       const data = await readFile(target)
-      res.writeHead(200, { 'Content-Type': mime, 'Cache-Control': 'public, max-age=86400' })
+      res.writeHead(200, { 'Content-Type': mime, 'Cache-Control': 'public, max-age=31536000, immutable' })
       res.end(data)
     } catch {
       res.writeHead(404, { 'Content-Type': 'text/plain' })

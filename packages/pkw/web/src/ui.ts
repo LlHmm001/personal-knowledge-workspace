@@ -15,9 +15,7 @@ export function renderPage(): string {
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>PKW — Personal Knowledge Workspace</title>
-<link rel="stylesheet" href="/pkw/assets/vditor/index.css" />
-<script src="/pkw/assets/vditor/js/lute/lute.min.js"></script>
-<script src="/pkw/assets/vditor/index.min.js"></script>
+<!-- PKW build: bbda6a9 -->
 <style>
 :root{--bg:#f6f7f9;--panel:#fff;--border:#e3e6ea;--ink:#1c2330;--muted:#6b7280;--accent:#2f6fed;--ok:#178a4f;--warn:#b45309;--err:#b91c1c}
 *{box-sizing:border-box}body{margin:0;font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"PingFang SC","Microsoft YaHei",sans-serif;color:var(--ink);background:var(--bg)}
@@ -173,6 +171,7 @@ const STR = {
     noteToTask:'笔记 → 待办', selectionToTask:'选区 → 待办', taskNoTasks:'暂无任务。', taskTomorrow:'明天', taskYesterday:'昨天', taskOverdue:'已逾期',
     slashH1:'一级标题', slashH2:'二级标题', slashH3:'三级标题', slashList:'无序列表', slashTask:'任务列表', slashQuote:'引用', slashCalloutNote:'提示框', slashCalloutWarning:'警告框', slashTable:'表格', slashHr:'分割线',
     slashInlineCode:'行内代码', slashCodeBlock:'代码块', slashLink:'链接', slashWikiLink:'Wiki 链接', slashImage:'图片', slashFootnote:'脚注', slashCallout:'提示框',
+    editorLoading:'正在加载编辑器…', buildInfo:'构建信息',
   },
   en: {
     overview:'Overview', notes:'Notes', attachments:'Attachments', tasks:'Tasks', trash:'Trash', search:'Search',
@@ -204,8 +203,10 @@ const STR = {
     noteToTask:'Note → Task', selectionToTask:'Selection → Task', taskNoTasks:'No tasks yet.', taskTomorrow:'Tomorrow', taskYesterday:'Yesterday', taskOverdue:'Overdue',
     slashH1:'Heading 1', slashH2:'Heading 2', slashH3:'Heading 3', slashList:'Bullet list', slashTask:'Task list', slashQuote:'Quote', slashCalloutNote:'Callout', slashCalloutWarning:'Warning', slashTable:'Table', slashHr:'Divider',
     slashInlineCode:'Inline code', slashCodeBlock:'Code block', slashLink:'Link', slashWikiLink:'Wiki link', slashImage:'Image', slashFootnote:'Footnote', slashCallout:'Callout',
+    editorLoading:'Loading editor…', buildInfo:'Build info',
   },
 }
+const PKW_BUILD = 'bbda6a9'
 let lang = localStorage.getItem('pkw-lang') === 'en' ? 'en' : 'zh'
 const t = (key, vars) => { let s = STR[lang][key] ?? STR.zh[key] ?? key; if (vars) for (const k in vars) s = s.split('{' + k + '}').join(String(vars[k])); return s }
 const api = async (method, args = {}) => {
@@ -302,6 +303,7 @@ async function renderOverview(){
 function detailWorkspace(s){
   return '<h3>' + esc(t('workspaceSummary')) + '</h3><div class="kv"><b>' + esc(t('workspaceLabel')) + '</b> <span class="v">' + esc(s.workspaceName || '—') + '</span></div>' +
     '<div class="kv"><b>WorkspaceId</b> <span class="v mono">' + esc(s.workspaceId || '') + '</span></div>' +
+    '<h3>' + esc(t('buildInfo')) + '</h3><div class="kv"><b>PKW</b> <span class="v mono">' + esc(PKW_BUILD) + '</span></div>' +
     '<h3>' + esc(t('maintenance')) + '</h3><button class="btn small" data-action="sync-now">' + esc(t('syncNow')) + '</button> <button class="btn small" data-action="reconcile">' + esc(t('reconcile')) + '</button>'
 }
 
@@ -433,7 +435,7 @@ function renderEditorShell(d){
     '</div>' +
     '<div class="editor-head"><span class="title">' + esc(fm.title || d.note.title || '') + '</span><span class="path">' + esc(d.note.relativePath) + '</span></div>' +
     '<div id="editorPane">' +
-      (mode === 'live' ? '<div id="vditor" style="min-height:56vh"></div>' : '') +
+      (mode === 'live' ? '<div id="vditor" style="min-height:56vh"><div class="empty">' + esc(t('editorLoading')) + '</div></div>' : '') +
       (mode === 'source' ? '<textarea id="editor" aria-label="Markdown">' + esc(d.markdown) + '</textarea>' : '') +
       (mode === 'reading' ? '<div id="preview"></div>' : '') +
     '</div>'
@@ -476,25 +478,58 @@ function insertWikiLink(el, title, pos, qLen){
   dismissWikiSuggest(); el.dispatchEvent(new Event('input')); el.focus()
 }
 function dismissWikiSuggest(){ const s = $('#wikiSuggest'); if (s) s.remove() }
-function initVditor(){
-  const el = $('#vditor')
-  if (!el || typeof window.Vditor === 'undefined') return
-  if (vditor) { try { vditor.destroy() } catch (e) {} vditor = null }
-  vditor = new window.Vditor(el, {
-    mode: 'ir',
-    cache: { enable: false },
-    cdn: '/pkw/assets/vditor',
-    height: '56vh',
-    value: state.editor.body || '',
-    toolbar: ['undo', 'redo', '|', 'headings', 'bold', 'italic', 'strike', '|', 'list', 'ordered-list', 'check', '|', 'quote', 'inline-code', 'code', '|', 'link', 'table', '|', 'upload', '|', 'outline'],
-    hint: {
-      parse: false,
-      delay: 0,
-      extend: [{ key: '/', hint: () => slashMenu() }],
-    },
-    upload: { handler: (files) => { uploadVditorFiles(files) } },
-    input: () => { onEditorInput() },
+// Vditor lazy loader: assets load ONLY on first entry into Live mode, once per
+// page lifecycle. Overview/Tasks/Trash/Search/Attachments/Source never fetch them.
+let vditorLoadPromise = null
+function loadScript(src){
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script'); s.src = src
+    s.onload = () => resolve(); s.onerror = () => reject(new Error('load failed: ' + src))
+    document.head.appendChild(s)
   })
+}
+function loadCss(href){
+  return new Promise((resolve) => {
+    const l = document.createElement('link'); l.rel = 'stylesheet'; l.href = href
+    l.onload = () => resolve(); l.onerror = () => resolve()
+    document.head.appendChild(l)
+  })
+}
+function ensureVditorLoaded(){
+  if (window.Vditor) return Promise.resolve()
+  if (vditorLoadPromise) return vditorLoadPromise
+  vditorLoadPromise = Promise.all([
+    loadCss('/pkw/assets/vditor/3.11.3/dist/index.css'),
+    loadScript('/pkw/assets/vditor/3.11.3/dist/js/lute/lute.min.js'),
+    loadScript('/pkw/assets/vditor/3.11.3/dist/index.min.js'),
+  ]).then(() => { if (!window.Vditor) throw new Error('Vditor failed to initialize') })
+  return vditorLoadPromise
+}
+async function initVditor(){
+  const el = $('#vditor')
+  if (!el) return
+  if (vditor) { try { vditor.destroy() } catch (e) {} vditor = null }
+  try {
+    await ensureVditorLoaded()
+    if (!el.isConnected) return // editor torn down while assets were loading
+    vditor = new window.Vditor(el, {
+      mode: 'ir',
+      cache: { enable: false },
+      cdn: '/pkw/assets/vditor/3.11.3',
+      height: '56vh',
+      value: state.editor.body || '',
+      toolbar: ['undo', 'redo', '|', 'headings', 'bold', 'italic', 'strike', '|', 'list', 'ordered-list', 'check', '|', 'quote', 'inline-code', 'code', '|', 'link', 'table', '|', 'upload', '|', 'outline'],
+      hint: {
+        parse: false,
+        delay: 0,
+        extend: [{ key: '/', hint: () => slashMenu() }],
+      },
+      upload: { handler: (files) => { uploadVditorFiles(files) } },
+      input: () => { onEditorInput() },
+    })
+  } catch (e) {
+    el.innerHTML = '<div class="empty">' + esc(t('genericError')) + ': ' + esc(e.message) + '</div>'
+  }
 }
 function slashMenu(){
   const callout = (type) => ({ html: '💡 ' + esc(t('slashCallout')) + '·' + type, value: '> [!' + type + ']\\n> ' })
