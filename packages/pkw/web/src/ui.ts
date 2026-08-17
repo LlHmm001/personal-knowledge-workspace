@@ -649,7 +649,7 @@ function renderTableMd(tblLines){
 
 // ── Notes editor ────────────────────────────────────────────────────────────
 let vditor = null // active Vditor instance (Live mode only)
-function destroyVditor(){ if (vditor) { try { vditor.destroy() } catch (e) {} vditor = null } }
+function destroyVditor(){ if (setupLiveAttachmentRewrite._obs) { setupLiveAttachmentRewrite._obs.disconnect(); setupLiveAttachmentRewrite._obs = null } if (vditor) { try { vditor.destroy() } catch (e) {} vditor = null } }
 
 async function openNote(noteId){
   state.selectedNoteId = noteId; state.selectedFolder = null
@@ -751,6 +751,28 @@ function ensureVditorLoaded(){
   ]).then(() => { if (!window.Vditor) throw new Error('Vditor failed to initialize') })
   return vditorLoadPromise
 }
+// Managed attachment URL resolver (Live + Reading share one rule):
+// canonical "attachments/<id>/<file>" -> served "/pkw/attachment/<id>".
+function rewriteLiveAttachmentImgs(root){
+  if (!root || !root.querySelectorAll) return
+  const imgs = root.querySelectorAll('img[src^="attachments/"]')
+  for (let i = 0; i < imgs.length; i++) {
+    const src = imgs[i].getAttribute('src') || ''
+    if (src.indexOf('/pkw/attachment/') === 0) continue
+    const after = src.slice('attachments/'.length)
+    const slash = after.indexOf('/')
+    if (slash < 0) continue
+    imgs[i].setAttribute('src', '/pkw/attachment/' + after.slice(0, slash))
+  }
+}
+function setupLiveAttachmentRewrite(v){
+  if (!v || !v.vditor || !v.vditor.ir || !v.vditor.ir.element) return
+  const el = v.vditor.ir.element
+  rewriteLiveAttachmentImgs(el)
+  if (setupLiveAttachmentRewrite._obs) setupLiveAttachmentRewrite._obs.disconnect()
+  setupLiveAttachmentRewrite._obs = new MutationObserver(() => rewriteLiveAttachmentImgs(el))
+  setupLiveAttachmentRewrite._obs.observe(el, { childList: true, subtree: true })
+}
 async function initVditor(){
   const el = $('#vditor')
   if (!el) return
@@ -773,6 +795,7 @@ async function initVditor(){
       upload: { handler: (files) => { uploadVditorFiles(files, true) } },
       input: () => { onEditorInput() },
     })
+    setupLiveAttachmentRewrite(vditor)
   } catch (e) {
     el.innerHTML = '<div class="empty">' + esc(t('genericError')) + ': ' + esc(e.message) + '</div>'
   }

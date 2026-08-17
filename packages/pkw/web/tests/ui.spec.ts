@@ -124,4 +124,12 @@ describe('PKW web UI (served page)', () => {
     expect(js).toContain('toggleInspector')
     expect(js).toContain('inspectorCollapsed')
   })
+
+  it('rewrites Live managed-attachment img src to /pkw/attachment/<id>', () => {
+    const js = script()
+    expect(js).toContain('rewriteLiveAttachmentImgs')
+    expect(js).toContain('setupLiveAttachmentRewrite')
+    expect(js).toContain('img[src^="attachments/"]')
+    expect(js).toContain("'/pkw/attachment/'")
+  })
 })
