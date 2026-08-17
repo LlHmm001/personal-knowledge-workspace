@@ -230,6 +230,7 @@ mark{background:var(--mark-bg);border-radius:2px;padding:0 2px}
       <button data-view="attachments">附件</button>
       <button data-view="tasks">待办</button>
       <button data-view="trash">回收站</button>
+      <button data-view="knowledge">知识库</button>
       <button data-view="search">搜索</button>
     </div>
     <div id="treeToolbar"></div>
@@ -261,6 +262,7 @@ const STR = {
     themeSystem:'跟随系统', themeLight:'浅色', themeDark:'深色',
     knowledge:'知识库', knowledgeIndexed:'已索引', knowledgePending:'待索引', knowledgeNotIndexed:'未索引', knowledgeParseFailed:'解析失败', relatedNotes:'相关笔记', refAttachments:'引用附件', mime:'类型',
     parseStatus:'解析状态', summary:'摘要', reparse:'重新解析', reparseStarted:'已提交重新解析',
+    knowledgeWiki:'Wiki', knowledgeGraph:'图谱', knowledgeSearchTab:'搜索', wikiGenerated:'WeKnora 生成内容', wikiOpenNote:'打开笔记', wikiEmpty:'该知识库尚未生成 Wiki 页面。', wikiSearchPlaceholder:'搜索 Wiki 页面…', graphEmpty:'图谱暂无节点。', graphFit:'适应屏幕', graphHideRelations:'隐藏关系', graphShowRelations:'显示关系', graphFull:'全库概览', knowledgeUnavailable:'WeKnora 暂不可用',
     companionNote:'建立伴随笔记', noteLocation:'笔记位置', kbIndex:'知识库索引', kbIndexHint:'索引可解析附件', uploadedNoNote:'文件已上传，但伴随笔记创建失败', uploadedCompanion:'已生成 {n} 篇伴随笔记',
     uploadProgress:'上传中…', uploadSuccess:'已上传', uploadFailed:'上传失败', searching:'搜索中…', noHits:'没有命中「{q}」。', searchHint:'输入关键词搜索本地笔记与附件（经 WeKnora hybrid search）。',
     score:'得分', openNote:'打开笔记', openAttachment:'打开附件', externalWeKnora:'WeKnora 外部', noteLabel:'笔记', attachmentLabel:'附件',
@@ -316,6 +318,7 @@ const STR = {
     themeSystem:'Follow system', themeLight:'Light', themeDark:'Dark',
     knowledge:'Knowledge', knowledgeIndexed:'Indexed', knowledgePending:'Pending', knowledgeNotIndexed:'Not indexed', knowledgeParseFailed:'Parse failed', relatedNotes:'Related notes', refAttachments:'Referenced attachments', mime:'Type',
     parseStatus:'Parse status', summary:'Summary', reparse:'Reparse', reparseStarted:'Reparse submitted',
+    knowledgeWiki:'Wiki', knowledgeGraph:'Graph', knowledgeSearchTab:'Search', wikiGenerated:'WeKnora generated', wikiOpenNote:'Open note', wikiEmpty:'This knowledge base has no generated Wiki pages yet.', wikiSearchPlaceholder:'Search Wiki pages…', graphEmpty:'No graph nodes.', graphFit:'Fit screen', graphHideRelations:'Hide relations', graphShowRelations:'Show relations', graphFull:'Full library', knowledgeUnavailable:'WeKnora unavailable',
     companionNote:'Create companion note', noteLocation:'Note location', kbIndex:'Knowledge indexing', kbIndexHint:'Index parseable attachments', uploadedNoNote:'File uploaded, but companion note creation failed', uploadedCompanion:'Created {n} companion notes',
     uploadProgress:'Uploading…', uploadSuccess:'Uploaded', uploadFailed:'Upload failed', searching:'Searching…', noHits:'No hits for 「{q}」.', searchHint:'Type a query to search notes & attachments (via WeKnora hybrid search).',
     score:'score', openNote:'Open note', openAttachment:'Open attachment', externalWeKnora:'external WeKnora', noteLabel:'Note', attachmentLabel:'Attachment',
@@ -387,6 +390,7 @@ const state = {
   trashBusy: false,
   inspectorCollapsed: false,
   selectedTaskIds: new Set(),
+  knowledgeTab: 'wiki',
 }
 // ── View switching: navigation guard + single-flight + instrumentation ──────
 let viewSeq = 0
@@ -494,6 +498,7 @@ function render(){
   else if (state.view === 'attachments') renderAttachments()
   else if (state.view === 'tasks') renderTasks()
   else if (state.view === 'trash') renderTrash()
+  else if (state.view === 'knowledge') renderKnowledgeView()
   else renderSearchView()
 }
 
@@ -1556,6 +1561,98 @@ async function renderTrash(){
 }
 
 function renderSearchView(){ $('#list').innerHTML = ''; $('#treeToolbar').innerHTML = ''; $('#detail').innerHTML = ''; $('#main').innerHTML = '<h2>' + esc(t('search')) + '</h2><p class="muted">' + esc(t('searchHint')) + '</p>' }
+// ── Knowledge view (Wiki / Graph / Search) — WeKnora-derived projection ──────
+function renderKnowledgeView(){
+  const tabs = [['search', t('knowledgeSearchTab')], ['wiki', t('knowledgeWiki')], ['graph', t('knowledgeGraph')]]
+  $('#list').innerHTML = '<div class="list-head">' + esc(t('knowledge')) + '</div><div class="list-section">' + esc(t('knowledge')) + '</div>' +
+    tabs.map(([v, label]) => '<div class="tree-row' + (state.knowledgeTab === v ? ' active' : '') + '" data-action="knowledge-tab" data-tab="' + v + '"><span class="ic">' + (v === 'search' ? '🔍' : v === 'wiki' ? '📖' : '🕸') + '</span><span class="nm">' + esc(label) + '</span></div>').join('')
+  if (state.knowledgeTab === 'search') { renderSearchView(); return }
+  if (state.knowledgeTab === 'wiki') { renderWikiList(); return }
+  renderGraphView()
+}
+async function renderWikiList(){
+  $('#treeToolbar').innerHTML = ''; $('#detail').innerHTML = ''
+  $('#main').innerHTML = '<div class="empty">' + esc(t('loading')) + '</div>'
+  try {
+    const r = await api('listWikiPages', { pageSize: 200 })
+    const pages = (r && r.pages) || []
+    if (!pages.length) { $('#main').innerHTML = '<div class="empty"><h3>' + esc(t('wikiEmpty')) + '</h3></div>'; return }
+    $('#main').innerHTML = '<h2>' + esc(t('knowledgeWiki')) + '<span class="sub">' + ((r && r.total) || pages.length) + '</span></h2>' +
+      '<input id="wikiSearch" placeholder="' + esc(t('wikiSearchPlaceholder')) + '" style="width:100%;margin-bottom:10px">' +
+      pages.map(p => '<div class="tree-row" data-action="open-wiki-page" data-slug="' + esc(p.slug) + '"><span class="ic">📄</span><span class="nm">' + esc(p.title) + '</span>' + (p.page_type ? '<span class="badge">' + esc(p.page_type) + '</span>' : '') + '</div>').join('')
+    $('#wikiSearch').addEventListener('keydown', (e) => { if (e.key === 'Enter') { const q = $('#wikiSearch').value.trim(); wikiSearch(q) } })
+  } catch (e) { $('#main').innerHTML = '<div class="empty">' + esc(t('knowledgeUnavailable')) + '</div>' }
+}
+async function wikiSearch(q){
+  if (!q) { renderWikiList(); return }
+  try {
+    const r = await api('listWikiPages', { query: q, pageSize: 50 })
+    const pages = (r && r.pages) || []
+    $('#main').innerHTML = '<h2>' + esc(t('knowledgeWiki')) + '<span class="sub">' + esc(q) + '</span></h2>' +
+      (pages.length ? pages.map(p => '<div class="tree-row" data-action="open-wiki-page" data-slug="' + esc(p.slug) + '"><span class="ic">📄</span><span class="nm">' + esc(p.title) + '</span>' + (p.page_type ? '<span class="badge">' + esc(p.page_type) + '</span>' : '') + '</div>').join('') : '<div class="empty">' + esc(t('noHits', { q })) + '</div>')
+  } catch (e) { toast(t('genericError') + ': ' + e.message, 'err') }
+}
+async function openWikiPage(slug){
+  try {
+    const p = await api('getWikiPage', { slug })
+    const md = p.content || p.summary || ''
+    const html = await api('renderMarkdown', { markdown: md }).catch(() => esc(md))
+    const tree = await api('getTree', { sortMode: 'manual' }).catch(() => ({ root: [] }))
+    const found = findNoteByTitleOrPath(tree.root || [], p.title)
+    $('#main').innerHTML = '<div class="toolbar"><button class="btn" data-action="back-wiki">← ' + esc(t('knowledgeWiki')) + '</button>' +
+      (found ? '<button class="btn" data-action="open-note" data-id="' + esc(found.noteId) + '">' + esc(t('wikiOpenNote')) + '</button>' : '') +
+      '<span class="muted small">' + esc(t('wikiGenerated')) + '</span></div>' +
+      '<h2>' + esc(p.title) + (p.page_type ? ' <span class="badge">' + esc(p.page_type) + '</span>' : '') + '</h2>' +
+      (p.summary && p.summary !== p.content ? '<p class="muted">' + esc(p.summary) + '</p>' : '') +
+      '<div id="preview" style="min-height:40vh">' + html + '</div>'
+    $('#detail').innerHTML = '<h3>' + esc(t('knowledge')) + '</h3><div class="kv"><b>slug</b> <span class="v mono">' + esc(p.slug) + '</span></div><div class="kv"><b>' + esc(t('knowledgeId')) + '</b> <span class="v">—</span></div>'
+  } catch (e) { toast(t('genericError') + ': ' + e.message, 'err') }
+}
+function graphColor(type){
+  const map = { summary: '#5b8cff', entity: '#34d399', concept: '#fbbf24', synthesis: '#38bdf8', comparison: '#a78bfa' }
+  return map[type] || 'var(--accent)'
+}
+function renderGraphView(){
+  $('#treeToolbar').innerHTML = ''; $('#detail').innerHTML = ''
+  $('#main').innerHTML = '<div class="empty">' + esc(t('loading')) + '</div>'
+  api('getWikiGraph', { mode: 'overview', limit: 500 }).then(g => {
+    const nodes = g.nodes || [], edges = g.edges || []
+    if (!nodes.length) { $('#main').innerHTML = '<div class="empty"><h3>' + esc(t('graphEmpty')) + '</h3></div>'; return }
+    $('#main').innerHTML = '<h2>' + esc(t('knowledgeGraph')) + '<span class="sub">' + (g.meta ? g.meta.total : nodes.length) + '</span></h2>' +
+      '<div class="toolbar"><button class="btn small" data-action="graph-fit">' + esc(t('graphFit')) + '</button><button class="btn small" data-action="graph-toggle-rel">' + esc(t('graphHideRelations')) + '</button></div>' +
+      '<canvas id="graphCanvas" style="width:100%;height:58vh;border:1px solid var(--border);border-radius:8px;background:var(--bg-surface)"></canvas>' +
+      '<div class="muted small" style="margin-top:6px">' + ['summary', 'entity', 'concept', 'synthesis', 'comparison'].map(ty => '<span class="badge" style="background:' + graphColor(ty) + ';color:#fff;margin-right:6px">' + esc(ty) + '</span>').join('') + '</div>'
+    drawGraph(nodes, edges)
+  }).catch(() => { $('#main').innerHTML = '<div class="empty">' + esc(t('knowledgeUnavailable')) + '</div>' })
+}
+function drawGraph(nodes, edges){
+  const canvas = $('#graphCanvas'); if (!canvas) return
+  const ctx = canvas.getContext('2d')
+  const dpr = window.devicePixelRatio || 1
+  const W = canvas.clientWidth, H = canvas.clientHeight
+  canvas.width = W * dpr; canvas.height = H * dpr; ctx.scale(dpr, dpr)
+  // simple circular layout (stable, no external force lib)
+  const bySlug = {}
+  nodes.forEach((n, i) => { const a = (i / nodes.length) * Math.PI * 2; bySlug[n.slug] = { ...n, x: W / 2 + Math.cos(a) * Math.min(W, H) * 0.38, y: H / 2 + Math.sin(a) * Math.min(W, H) * 0.38 } })
+  let panX = 0, panY = 0, scale = 1, showRel = true, dragging = false, last = null
+  function render(){
+    ctx.clearRect(0, 0, W, H)
+    ctx.save(); ctx.translate(panX, panY); ctx.scale(scale, scale)
+    if (showRel) { ctx.strokeStyle = 'rgba(128,140,160,.35)'; ctx.lineWidth = 1; edges.forEach(e => { const a = bySlug[e.source], b = bySlug[e.target]; if (a && b) { ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke() } }) }
+    nodes.forEach(n => { const p = bySlug[n.slug]; ctx.beginPath(); ctx.arc(p.x, p.y, 5 + Math.min(8, n.link_count), 0, Math.PI * 2); ctx.fillStyle = graphColor(n.page_type); ctx.fill() })
+    ctx.restore()
+    if (showRel) { ctx.fillStyle = 'var(--text-muted)'; ctx.font = '11px sans-serif'; ctx.fillText(nodes.length + ' nodes', 8, H - 8) }
+  }
+  function hit(x, y){ for (const n of nodes) { const p = bySlug[n.slug]; if ((x - p.x) * (x - p.x) + (y - p.y) * (y - p.y) < 100) return n } return null }
+  render()
+  canvas.addEventListener('mousedown', (e) => { dragging = true; last = { x: e.offsetX, y: e.offsetY } })
+  canvas.addEventListener('mousemove', (e) => { if (dragging) { panX += e.offsetX - last.x; panY += e.offsetY - last.y; last = { x: e.offsetX, y: e.offsetY }; render() } })
+  canvas.addEventListener('mouseup', () => { dragging = false })
+  canvas.addEventListener('wheel', (e) => { e.preventDefault(); scale = Math.max(0.2, Math.min(4, scale * (e.deltaY < 0 ? 1.1 : 0.9))); render() }, { passive: false })
+  canvas.addEventListener('click', (e) => { const n = hit((e.offsetX - panX) / scale, (e.offsetY - panY) / scale); if (n) openWikiPage(n.slug) })
+  canvas._fit = () => { panX = 0; panY = 0; scale = 1; render() }
+  canvas._toggleRel = () => { showRel = !showRel; const b = document.querySelector('[data-action="graph-toggle-rel"]'); if (b) b.textContent = showRel ? t('graphHideRelations') : t('graphShowRelations'); render() }
+}
 async function runSearch(q){
   $('#main').innerHTML = '<div class="empty">' + esc(t('searching')) + '</div>'
   try {
@@ -2279,6 +2376,11 @@ document.addEventListener('click', (e) => {
   else if (act === 'theme-system') setTheme('system')
   else if (act === 'theme-light') setTheme('light')
   else if (act === 'theme-dark') setTheme('dark')
+  else if (act === 'knowledge-tab') { state.knowledgeTab = el.dataset.tab || 'wiki'; renderKnowledgeView() }
+  else if (act === 'open-wiki-page') openWikiPage(el.dataset.slug)
+  else if (act === 'back-wiki') renderWikiList()
+  else if (act === 'graph-fit') { const c = $('#graphCanvas'); if (c && c._fit) c._fit() }
+  else if (act === 'graph-toggle-rel') { const c = $('#graphCanvas'); if (c && c._toggleRel) c._toggleRel() }
 })
 // Trash selection is pure local state: checkbox/select-all toggles never fetch.
 document.addEventListener('change', (e) => {

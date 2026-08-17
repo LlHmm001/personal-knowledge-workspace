@@ -106,6 +106,70 @@ export interface KnowledgeListItem {
   parse_status?: string
 }
 
+// ── Wiki / Knowledge Graph (read-only projection of WeKnora generated data) ──
+
+export interface WikiPage {
+  id: string
+  slug: string
+  title: string
+  page_type?: string
+  status?: string
+  content?: string
+  summary?: string
+  aliases?: string[]
+  category_path?: string[]
+  folder_id?: string
+  updated_at?: string
+}
+
+export interface WikiPageList {
+  pages: WikiPage[]
+  total: number
+  page: number
+  page_size: number
+  total_pages: number
+}
+
+export interface WikiFolder {
+  id: string
+  name: string
+  page_count?: number
+  has_children?: boolean
+}
+
+export interface WikiFolderList {
+  folders?: WikiFolder[]
+  data?: WikiFolder[]
+}
+
+export interface WikiGraphNode {
+  slug: string
+  title: string
+  page_type: string
+  link_count: number
+}
+
+export interface WikiGraphEdge {
+  source: string
+  target: string
+}
+
+export interface WikiGraphData {
+  nodes: WikiGraphNode[]
+  edges: WikiGraphEdge[]
+  meta: { mode: string; total: number; returned: number; truncated: boolean; center?: string; depth?: number }
+}
+
+export interface WikiStats {
+  total_pages: number
+  pages_by_type?: Record<string, number>
+  total_links: number
+  orphan_count?: number
+  pending_tasks?: number
+  pending_issues?: number
+  is_active?: boolean
+}
+
 /** A hybrid-search hit, mirroring WeKnora `SearchResult`. */
 export interface SearchResultChunk {
   id: string
@@ -322,6 +386,40 @@ export class WeKnoraClient extends Service {
   async listKnowledgeBases(): Promise<Array<{ id: string; name: string }>> {
     const r = await this.request<{ data: Array<{ id: string; name: string }> }>('GET', '/knowledge-bases')
     return r.data ?? []
+  }
+
+  // ── Wiki (read-only parity; same generated result as WeKnora) ──────────────
+
+  async listWikiPages(kbId: string, opts: { query?: string; pageType?: string; page?: number; pageSize?: number } = {}): Promise<WikiPageList> {
+    const qs = new URLSearchParams()
+    if (opts.query) qs.set('query', opts.query)
+    if (opts.pageType) qs.set('page_type', opts.pageType)
+    qs.set('page', String(opts.page ?? 1))
+    qs.set('page_size', String(opts.pageSize ?? 200))
+    return this.request<WikiPageList>('GET', `/knowledge-bases/${kbId}/wiki/pages?${qs.toString()}`)
+  }
+
+  async getWikiPage(kbId: string, slug: string): Promise<WikiPage> {
+    return this.request<WikiPage>('GET', `/knowledge-bases/${kbId}/wiki/pages/${encodeURIComponent(slug)}`)
+  }
+
+  async listWikiFolders(kbId: string, parentId: string = ''): Promise<WikiFolderList> {
+    const qs = parentId ? `?parent_id=${encodeURIComponent(parentId)}` : ''
+    return this.request<WikiFolderList>('GET', `/knowledge-bases/${kbId}/wiki/folders${qs}`)
+  }
+
+  async getWikiGraph(kbId: string, opts: { mode?: string; center?: string; depth?: number; types?: string[]; limit?: number } = {}): Promise<WikiGraphData> {
+    const qs = new URLSearchParams()
+    if (opts.mode) qs.set('mode', opts.mode)
+    if (opts.center) qs.set('center', opts.center)
+    if (opts.depth) qs.set('depth', String(opts.depth))
+    if (opts.types && opts.types.length) qs.set('types', opts.types.join(','))
+    if (opts.limit) qs.set('limit', String(opts.limit))
+    return this.request<WikiGraphData>('GET', `/knowledge-bases/${kbId}/wiki/graph?${qs.toString()}`)
+  }
+
+  async getWikiStats(kbId: string): Promise<WikiStats> {
+    return this.request<WikiStats>('GET', `/knowledge-bases/${kbId}/wiki/stats`)
   }
 
   /** Fingerprint the exact Manual payload the adapter sends for the given content. */

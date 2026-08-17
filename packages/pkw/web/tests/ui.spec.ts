@@ -144,4 +144,16 @@ describe('PKW web UI (served page)', () => {
     expect(js).toContain('reconcileTaskSelection')
     expect(renderPage()).toContain('.task-card.selected')
   })
+
+  it('wires knowledge view (Wiki list/page/search + Graph canvas)', () => {
+    const js = script()
+    expect(js).toContain('renderKnowledgeView')
+    expect(js).toContain('renderWikiList')
+    expect(js).toContain('openWikiPage')
+    expect(js).toContain('renderGraphView')
+    expect(js).toContain('drawGraph')
+    expect(js).toContain("api('listWikiPages'")
+    expect(js).toContain("api('getWikiGraph'")
+    expect(js).toContain('graphCanvas')
+  })
 })

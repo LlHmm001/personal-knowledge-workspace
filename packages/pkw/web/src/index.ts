@@ -505,6 +505,11 @@ export class PkwWebService extends Service {
         await this.weknora.reparseKnowledge(mapping.knowledgeId)
         return { reparse: true }
       }
+      case 'listWikiPages': return this.weknora.listWikiPages(this.config.kbId, { query: args.query !== undefined ? String(args.query) : undefined, pageType: args.pageType !== undefined ? String(args.pageType) : undefined, page: args.page !== undefined ? Number(args.page) : undefined, pageSize: args.pageSize !== undefined ? Number(args.pageSize) : undefined })
+      case 'getWikiPage': return this.weknora.getWikiPage(this.config.kbId, String(args.slug))
+      case 'listWikiFolders': return this.weknora.listWikiFolders(this.config.kbId, args.parentId !== undefined ? String(args.parentId) : '')
+      case 'getWikiGraph': return this.weknora.getWikiGraph(this.config.kbId, { mode: args.mode !== undefined ? String(args.mode) : undefined, center: args.center !== undefined ? String(args.center) : undefined, depth: args.depth !== undefined ? Number(args.depth) : undefined, types: Array.isArray(args.types) ? args.types.map(String) : undefined, limit: args.limit !== undefined ? Number(args.limit) : undefined })
+      case 'getWikiStats': return this.weknora.getWikiStats(this.config.kbId)
       case 'getAttachment': {
         const id = AttachmentId(String(args.attachmentId))
         const rec = this.attachments.get(id)
