@@ -46,4 +46,11 @@ describe('PKW web UI (served page)', () => {
     expect(js).toContain("closest('[data-wiki]')")
     expect(js).toContain('openWikiTarget(wiki.dataset.wiki)')
   })
+
+  it('styles Vditor IR callouts with the PKW 9-type palette (Live↔Reading parity)', () => {
+    const page = renderPage()
+    expect(page).toContain('.vditor-ir blockquote.callout[data-subtype="NOTE"]')
+    expect(page).toContain('.vditor-ir blockquote.callout[data-subtype="DANGER"]{--callout-color:#b91c1c')
+    expect(page).toContain('.vditor-ir blockquote.callout[data-subtype="SUCCESS"]')
+  })
 })

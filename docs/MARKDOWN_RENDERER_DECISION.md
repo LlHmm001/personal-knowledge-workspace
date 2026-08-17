@@ -58,4 +58,10 @@ Observed output:
 - **Correction:** `lute.SetCallout(true)` renders Obsidian callouts natively (the earlier `New({callout:true})` probe was a false negative). Vditor's own `MARKDOWN_OPTIONS` uses `callout: true` via `setLute` → `lute.SetCallout(options.callout)`.
 - **Wired:** Host-side `renderMarkdown` RPC (`packages/pkw/web/src/lute.ts`) loads the pinned `lute.min.js` into an isolated `node:vm` sandbox once (lazy singleton), runs `protectWikiLinks → Md2HTML → restoreWikiLinks`, and returns HTML. `renderPreview()` now paints the homemade renderer synchronously as a first-paint fallback, then replaces it with the canonical Lute HTML; on Lute failure the fallback stays.
 - **Extension layer is now minimal:** `packages/pkw/domain/src/lute-pipeline.ts` (pure) only protects/restores wiki links (`[[X]]`, `[[X|Alias]]`, `![[X]]`), skipping fenced + inline code, with HTML-escaped output. Callouts/tables/code/footnotes/inline are Lute-native.
-- **Still deferred:** Live-side callout CSS/visual box in IR, wiki-link CLICK wiring (`openWikiTarget` is not yet bound), attachment-card image src resolution, and the fixture browser-acceptance pass.
+
+## Update (parity closure: wiki click, attachment bytes, Live callout)
+
+- **Live callout was ALREADY native, not a blockquote gap:** Vditor 3.11.3 IR mode renders `> [!TYPE]` via Lute `SpinVditorIRDOM` → `<blockquote class="callout" data-type="callout" data-subtype="TYPE">`, and `index.css` styles it (`.vditor-ir blockquote.callout` + per-subtype `--callout-color`). The earlier "shows blockquote, needs afterRender hook" note was wrong. Vditor's CSS only colors TIP/IMPORTANT/WARNING/CAUTION, so PKW added `.vditor-ir blockquote.callout[data-subtype=…]` overrides for its full 9-type palette to match Reading.
+- **Wiki-link CLICK wired:** Reading `.wikilink[data-wiki]` now routes to `openWikiTarget` (title/path → open note).
+- **Attachment bytes served:** `renderMarkdownToHtml` rewrites `attachments/<id>/<file>` src/href → `/pkw/attachment/<id>` (via pure `rewriteAttachmentUrls`); the new `/pkw/attachment/<id>` route streams stored mime with inline (image) / attachment (file) disposition.
+- **Still needs real browser acceptance:** the `fixtures/editor-compatibility.md` visual pass (no Chromium in the dev session).
