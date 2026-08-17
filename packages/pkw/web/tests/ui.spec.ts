@@ -50,7 +50,7 @@ describe('PKW web UI (served page)', () => {
   it('styles Vditor IR callouts with the PKW 9-type palette (Live↔Reading parity)', () => {
     const page = renderPage()
     expect(page).toContain('.vditor-ir blockquote.callout[data-subtype="NOTE"]')
-    expect(page).toContain('.vditor-ir blockquote.callout[data-subtype="DANGER"]{--callout-color:#b91c1c')
+    expect(page).toContain('.vditor-ir blockquote.callout[data-subtype="DANGER"]{--callout-color:var(--co-danger)')
     expect(page).toContain('.vditor-ir blockquote.callout[data-subtype="SUCCESS"]')
   })
 
@@ -107,5 +107,19 @@ describe('PKW web UI (served page)', () => {
     expect(js).toContain('uploadFilesWithCompanion')
     expect(js).toContain("'![]('")
     expect(js).toContain('lastIndexOf')
+  })
+
+  it('wires theme (system/light/dark tokens) + contextual inspector', () => {
+    const page = renderPage()
+    expect(page).toContain('[data-theme="dark"]')
+    expect(page).toContain('--bg-app')
+    expect(page).toContain('--bg-hover')
+    expect(page).toContain('--co-note')
+    expect(page).toContain('#app.no-inspector')
+    const js = script()
+    expect(js).toContain('applyTheme')
+    expect(js).toContain('currentThemeMode')
+    expect(js).toContain('syncInspector')
+    expect(js).toContain('theme-system')
   })
 })
