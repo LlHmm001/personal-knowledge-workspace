@@ -300,42 +300,60 @@ describe('pkw notes + attachments core', () => {
     expect(notes.list().every(n => n.noteId === before)).toBe(true)
   })
 
-  it('trashFolder archives a non-empty folder and marks descendant notes deleted', async () => {
+  it('folder trash uses stable identity: trash → restore → trash again (no ENOTEMPTY)', async () => {
     const { notes } = await boot()
-    await notes.createFolder('项目')
-    const a = await notes.create({ relativePath: '项目/a.md', markdown: '# a\n' })
-    const b = await notes.create({ relativePath: '项目/sub/b.md', markdown: '# b\n' })
-    await notes.trashFolder('项目')
-    expect((await notes.listFolders()).includes('项目')).toBe(false)
+    await notes.createFolder('acceptance')
+    const a = await notes.create({ relativePath: 'acceptance/a.md', markdown: '# a\n' })
+    const e1 = await notes.trashFolder('acceptance')
+    expect(e1.trashEntryId).toBeDefined()
+    expect((await notes.listFolders()).includes('acceptance')).toBe(false)
     expect(notes.get(a.noteId)!.deletedAt).toBeDefined()
-    expect(notes.get(b.noteId)!.deletedAt).toBeDefined()
-    expect(notes.list().some(n => n.noteId === a.noteId || n.noteId === b.noteId)).toBe(false)
-    // restore the folder: same NoteIds, un-deleted, folder back.
-    await notes.restoreFolder('项目')
-    expect((await notes.listFolders()).includes('项目')).toBe(true)
+    await notes.restoreFolder(e1.trashEntryId)
+    expect((await notes.listFolders()).includes('acceptance')).toBe(true)
     expect(notes.get(a.noteId)!.deletedAt).toBeUndefined()
-    expect(notes.get(b.noteId)!.deletedAt).toBeUndefined()
-    expect(notes.list().some(n => n.noteId === a.noteId)).toBe(true)
-    // trash again + purge permanently
-    await notes.trashFolder('项目')
-    await notes.purgeFolder('项目')
-    expect((await notes.listFolders()).includes('项目')).toBe(false)
+    // second trash must succeed (no archive/<path> collision)
+    const e2 = await notes.trashFolder('acceptance')
+    expect(String(e2.trashEntryId)).not.toBe(String(e1.trashEntryId))
+    await notes.purgeFolder(e2.trashEntryId)
+    expect((await notes.listFolders()).includes('acceptance')).toBe(false)
     expect(notes.get(a.noteId)).toBeUndefined()
-    expect(notes.get(b.noteId)).toBeUndefined()
-    expect(notes.list({ includeDeleted: true }).some(n => n.noteId === a.noteId || n.noteId === b.noteId)).toBe(false)
-    // The physical archive directory must be gone — no ghost folder in Trash.
-    expect(await notes.listTrashFolders()).not.toContain('项目')
-    expect(await notes.listTrashFolders()).not.toContain('项目/sub')
+    expect(await notes.listTrashFolders()).toHaveLength(0)
   })
 
-  it('deletes an empty folder but rejects a non-empty one', async () => {
+  it('two trash entries for the same recreated path are independent', async () => {
+    const { notes } = await boot()
+    await notes.createFolder('acceptance')
+    await notes.create({ relativePath: 'acceptance/a.md', markdown: '# a\n' })
+    const e1 = await notes.trashFolder('acceptance')
+    await notes.createFolder('acceptance')
+    await notes.create({ relativePath: 'acceptance/b.md', markdown: '# b\n' })
+    const e2 = await notes.trashFolder('acceptance')
+    const ids = (await notes.listTrashFolders()).map(e => String(e.trashEntryId)).sort()
+    expect(ids).toEqual([String(e1.trashEntryId), String(e2.trashEntryId)].sort())
+    // purging one must not affect the other
+    await notes.purgeFolder(e1.trashEntryId)
+    expect((await notes.listTrashFolders()).map(e => String(e.trashEntryId))).toEqual([String(e2.trashEntryId)])
+  })
+
+  it('restore conflicts when the original path is re-occupied', async () => {
+    const { notes } = await boot()
+    await notes.createFolder('acceptance')
+    await notes.create({ relativePath: 'acceptance/a.md', markdown: '# a\n' })
+    const e1 = await notes.trashFolder('acceptance')
+    await notes.createFolder('acceptance')
+    await expect(notes.restoreFolder(e1.trashEntryId)).rejects.toThrow('already exists')
+  })
+
+  it('trashes any folder (empty or nested) into a stable entry', async () => {
     const { notes } = await boot()
     await notes.createFolder('空')
-    await notes.deleteFolder('空')
+    await notes.trashFolder('空')
     expect((await notes.listFolders()).includes('空')).toBe(false)
     await notes.createFolder('非空')
-    await notes.create({ relativePath: '非空/a.md', markdown: '# a\n' })
-    await expect(notes.deleteFolder('非空')).rejects.toThrow('not empty')
+    await notes.create({ relativePath: '非空/sub/b.md', markdown: '# b\n' })
+    await notes.trashFolder('非空')
+    expect((await notes.listFolders()).includes('非空')).toBe(false)
+    expect(await notes.listTrashFolders()).toHaveLength(2)
   })
 
   it('persists manual order per parent and rekeys on folder rename', async () => {

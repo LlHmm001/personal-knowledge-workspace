@@ -64,8 +64,8 @@ async function bootJson(root: string) {
   return { ctx, facility }
 }
 
-describe('pkw_notes v1 → v2 migration', () => {
-  it('preserves note_index/note_paths and adds an empty note_order', async () => {
+describe('pkw_notes v1 → v3 migration', () => {
+  it('preserves note_index/note_paths and adds empty note_order + folder_trash', async () => {
     const root = await mkdtemp(join(tmpdir(), 'pkw-mig-'))
     dirs.push(root)
     await writeFile(join(root, 'pkw_notes.json'), JSON.stringify(v1Fixture()))
@@ -84,9 +84,12 @@ describe('pkw_notes v1 → v2 migration', () => {
     const order = domain.table('note_order')
     expect([...order.entries()]).toHaveLength(0)
 
-    // The file header is bumped to version 2 (migration materialized).
+    const trash = domain.table('folder_trash')
+    expect([...trash.entries()]).toHaveLength(0)
+
+    // The file header is bumped to version 3 (migration materialized).
     const onDisk = JSON.parse(await readFile(join(root, 'pkw_notes.json'), 'utf8')) as { unit: { version: number } }
-    expect(onDisk.unit.version).toBe(2)
+    expect(onDisk.unit.version).toBe(3)
 
     await domain.close()
   })

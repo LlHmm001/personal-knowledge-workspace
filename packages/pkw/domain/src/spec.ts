@@ -8,7 +8,7 @@
 import { z } from 'zod'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import { WorkspaceId } from '@deepseek-ai/dsh-workspace'
-import { AttachmentId, CorrelationId, EventId, NoteId, OperationId } from './types.ts'
+import { AttachmentId, CorrelationId, EventId, FolderTrashEntryId, NoteId, OperationId } from './types.ts'
 
 const eventId = z.string().transform(value => value as EventId)
 const operationId = z.string().transform(value => value as OperationId)
@@ -101,21 +101,37 @@ const noteOrderSchema = z.object({
   children: z.array(orderChildSchema),
 })
 
-/** Notes projection domain: identity index + path→identity reverse index + manual order projection. */
+/** A trashed folder with a stable identity independent of its original path. */
+const folderTrashEntrySchema = z.object({
+  trashEntryId: z.string().transform(value => value as FolderTrashEntryId),
+  workspaceId,
+  originalPath: z.string(),
+  archivedPath: z.string(),
+  deletedAt: z.string(),
+})
+
+/** Notes projection domain: identity index + path→identity reverse index + manual order projection + folder trash entries. */
 export const noteDomainSpec = defineDomain({
   name: 'pkw_notes',
-  version: 2,
+  version: 3,
   migrations: {
     // v1 → v2: keep note_index + note_paths verbatim; add the (empty) note_order
     // manual-ordering projection. No records are transformed.
     1: {
       upgrade: (previous) => ({ tables: { ...previous.tables, note_order: {} } }),
     },
+    // v2 → v3: add the (empty) folder_trash table. Physical folder-trash
+    // identity moves from `archive/<originalPath>` to `archive/folders/<entryId>`;
+    // existing on-disk `archive/<path>` folders are untouched (read-only legacy).
+    2: {
+      upgrade: (previous) => ({ tables: { ...previous.tables, folder_trash: {} } }),
+    },
   },
   tables: {
     note_index: domainTable<NoteId, z.infer<typeof noteIndexRecordSchema>>(noteIndexRecordSchema),
     note_paths: domainTable<string, NoteId>(noteId),
     note_order: domainTable<string, z.infer<typeof noteOrderSchema>>(noteOrderSchema),
+    folder_trash: domainTable<string, z.infer<typeof folderTrashEntrySchema>>(folderTrashEntrySchema),
   },
 })
 

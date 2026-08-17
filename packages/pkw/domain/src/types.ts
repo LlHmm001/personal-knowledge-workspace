@@ -17,6 +17,7 @@ export type OperationId = Branded<'OperationId'>
 export type CorrelationId = Branded<'CorrelationId'>
 export type TaskId = Branded<'TaskId'>
 export type TaskMatrixId = Branded<'TaskMatrixId'>
+export type FolderTrashEntryId = Branded<'FolderTrashEntryId'>
 
 export function NoteId(id: string): NoteId { return id as NoteId }
 export function AttachmentId(id: string): AttachmentId { return id as AttachmentId }
@@ -25,6 +26,7 @@ export function OperationId(id: string): OperationId { return id as OperationId 
 export function CorrelationId(id: string): CorrelationId { return id as CorrelationId }
 export function TaskId(id: string): TaskId { return id as TaskId }
 export function TaskMatrixId(id: string): TaskMatrixId { return id as TaskMatrixId }
+export function FolderTrashEntryId(id: string): FolderTrashEntryId { return id as FolderTrashEntryId }
 
 // ── operation context ────────────────────────────────────────────────────────
 
@@ -248,6 +250,15 @@ export interface NoteOrderChild {
   id: string
 }
 
+/** A trashed folder: stable identity decoupled from its original path. */
+export interface FolderTrashEntry {
+  trashEntryId: FolderTrashEntryId
+  workspaceId: WorkspaceId
+  originalPath: string
+  archivedPath: string
+  deletedAt: string
+}
+
 export interface PkwNotesService {
   list(filter?: NoteListFilter): NoteIndexRecord[]
   get(noteId: NoteId): NoteIndexRecord | undefined
@@ -263,13 +274,13 @@ export interface PkwNotesService {
   getIdentityConflict(noteId: NoteId): NoteIdentityConflict | undefined
   listIdentityConflicts(): NoteIdentityConflict[]
   listFolders(): Promise<string[]>
-  listTrashFolders(): Promise<string[]>
+  listTrashFolders(): Promise<FolderTrashEntry[]>
   createFolder(relativePath: string): Promise<void>
   renameFolder(oldPath: string, newPath: string): Promise<void>
   deleteFolder(relativePath: string): Promise<void>
-  trashFolder(relativePath: string): Promise<void>
-  restoreFolder(relativePath: string): Promise<void>
-  purgeFolder(relativePath: string): Promise<void>
+  trashFolder(relativePath: string): Promise<FolderTrashEntry>
+  restoreFolder(trashEntryId: FolderTrashEntryId): Promise<void>
+  purgeFolder(trashEntryId: FolderTrashEntryId): Promise<void>
   getOrder(parentPath: string): NoteOrderChild[]
   setOrder(parentPath: string, children: NoteOrderChild[]): Promise<void>
 }

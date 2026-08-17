@@ -13,6 +13,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { posix } from 'node:path'
 import {
   AttachmentId,
+  FolderTrashEntryId,
   NOTE_CREATED,
   NOTE_DELETED,
   NOTE_DISCOVERED,
@@ -25,6 +26,7 @@ import {
   OperationId,
   noteDomainSpec,
   type CreateNoteInput,
+  type FolderTrashEntry,
   type NoteDocument,
   type NoteIdentityConflict,
   type NoteIndexRecord,
@@ -95,6 +97,7 @@ export class NotesService extends Service {
   private table?: KvTable<NoteId, NoteIndexRecord>
   private paths?: KvTable<string, NoteId>
   private order?: KvTable<string, OrderRecord>
+  private folderTrash?: KvTable<string, FolderTrashEntry>
 
   constructor(ctx: Context, private readonly config: Config) {
     super(ctx, 'pkwNotes')
@@ -109,6 +112,7 @@ export class NotesService extends Service {
     this.table = domain.table('note_index')
     this.paths = domain.table('note_paths')
     this.order = domain.table('note_order')
+    this.folderTrash = domain.table('folder_trash')
   }
 
   private requireTable(): KvTable<NoteId, NoteIndexRecord> {
@@ -124,6 +128,11 @@ export class NotesService extends Service {
   private requireOrder(): KvTable<string, OrderRecord> {
     if (this.order === undefined) throw new Error('pkwNotes is not started yet')
     return this.order
+  }
+
+  private requireFolderTrash(): KvTable<string, FolderTrashEntry> {
+    if (this.folderTrash === undefined) throw new Error('pkwNotes is not started yet')
+    return this.folderTrash
   }
 
   list(filter: NoteListFilter = {}): NoteIndexRecord[] {
@@ -483,11 +492,11 @@ export class NotesService extends Service {
     return out.sort()
   }
 
-  /** List trashed folder relative paths (under `archive/`). */
-  async listTrashFolders(): Promise<string[]> {
-    const out: string[] = []
-    await this.collectFolders(await this.ctx.fs.resolve(this.handle.archivePath('')), '', out)
-    return out.sort()
+  /** List trashed folder entries (stable identity, independent of original path). */
+  async listTrashFolders(): Promise<FolderTrashEntry[]> {
+    const out: FolderTrashEntry[] = []
+    for (const [, entry] of this.requireFolderTrash().entries()) out.push(entry)
+    return out.sort((a, b) => (a.deletedAt < b.deletedAt ? 1 : -1))
   }
 
   private async collectFolders(target: import('@deepseek-ai/dsh-fs').FsTarget, prefix: string, out: string[]): Promise<void> {
@@ -522,28 +531,26 @@ export class NotesService extends Service {
     await this.migrateOrderFolder(oldPath, newPath)
   }
 
-  /** Soft-delete an empty folder to archive. Non-empty folders are rejected. */
+  /** Soft-delete a folder to trash (empty or not). Deprecated alias of {@link trashFolder}. */
   async deleteFolder(relativePath: string): Promise<void> {
-    this.assertFolderPath(relativePath)
-    const target = await this.ctx.fs.resolve(this.handle.notePath(relativePath))
-    const entries = await this.ctx.fs.listDir(target)
-    const hasContent = entries.some(e => e.type === 'directory' || e.name.endsWith('.md'))
-    if (hasContent) throw new Error(`pkwNotes: folder '${relativePath}' is not empty`)
-    await this.ctx.fs.rename(target, await this.ctx.fs.resolve(this.handle.archivePath(relativePath)))
-    await this.requireOrder().delete(this.orderKey(relativePath))
-    await this.removeChildFromOrder(parentOf(relativePath), 'folder', posix.basename(relativePath))
+    await this.trashFolder(relativePath)
   }
 
-  /** Restore a trashed folder and un-delete its descendant notes (NoteId preserved). */
-  async restoreFolder(relativePath: string): Promise<void> {
-    this.assertFolderPath(relativePath)
+  /** Restore a trashed folder to its original path and un-delete descendant notes. */
+  async restoreFolder(trashEntryId: FolderTrashEntryId): Promise<void> {
+    const entry = this.requireFolderTrash().get(String(trashEntryId))
+    if (entry === undefined) throw new Error(`pkwNotes: unknown folder trash entry '${trashEntryId}'`)
+    const target = await this.ctx.fs.resolve(this.handle.notePath(entry.originalPath))
+    if (await this.ctx.fs.stat(target) !== undefined) {
+      throw new Error(`pkwNotes: cannot restore folder '${entry.originalPath}' — target already exists`)
+    }
     await this.ctx.fs.rename(
-      await this.ctx.fs.resolve(this.handle.archivePath(relativePath)),
-      await this.ctx.fs.resolve(this.handle.notePath(relativePath)),
+      await this.ctx.fs.resolve(this.handle.archivePath(entry.archivedPath)),
+      target,
     )
-    const prefix = `${relativePath}/`
+    const prefix = `${entry.originalPath}/`
     for (const [path, id] of [...this.requirePaths().entries()]) {
-      if (path !== relativePath && !path.startsWith(prefix)) continue
+      if (path !== entry.originalPath && !path.startsWith(prefix)) continue
       const record = this.requireTable().get(id)
       if (record === undefined || record.deletedAt === undefined) continue
       await this.commitEvent(NOTE_RESTORED, String(id), {
@@ -555,17 +562,17 @@ export class NotesService extends Service {
       })
       await this.putRecord({ ...record, deletedAt: undefined, observedRevision: record.observedRevision + 1, updatedAt: new Date().toISOString() }, path)
     }
+    await this.requireFolderTrash().delete(String(trashEntryId))
   }
 
-  /** Permanently purge a trashed folder: remove the physical archive directory + descendant note projections. */
-  async purgeFolder(relativePath: string): Promise<void> {
-    this.assertFolderPath(relativePath)
-    // Remove the whole archive directory tree so no ghost empty directory can
-    // later reappear in listTrashFolders / reconcile.
-    await this.ctx.fs.removeDir(await this.ctx.fs.resolve(this.handle.archivePath(relativePath)), { recursive: true })
-    const prefix = `${relativePath}/`
+  /** Permanently purge a trashed folder by its stable trash entry id. */
+  async purgeFolder(trashEntryId: FolderTrashEntryId): Promise<void> {
+    const entry = this.requireFolderTrash().get(String(trashEntryId))
+    if (entry === undefined) return
+    await this.ctx.fs.removeDir(await this.ctx.fs.resolve(this.handle.archivePath(entry.archivedPath)), { recursive: true })
+    const prefix = `${entry.originalPath}/`
     for (const [path, id] of [...this.requirePaths().entries()]) {
-      if (path !== relativePath && !path.startsWith(prefix)) continue
+      if (path !== entry.originalPath && !path.startsWith(prefix)) continue
       const record = this.requireTable().get(id)
       if (record !== undefined) {
         await this.commitEvent(NOTE_PURGED, String(id), {
@@ -580,13 +587,15 @@ export class NotesService extends Service {
       await this.requirePaths().delete(path)
       await this.removeChildFromOrder(parentOf(path), 'note', String(id))
     }
-    await this.requireOrder().delete(this.orderKey(relativePath))
-    await this.removeChildFromOrder(parentOf(relativePath), 'folder', posix.basename(relativePath))
+    await this.requireFolderTrash().delete(String(trashEntryId))
   }
 
-  /** Trash a whole folder (even non-empty): archive the directory + mark descendant notes deleted. */
-  async trashFolder(relativePath: string): Promise<void> {
+  /** Trash a whole folder (even non-empty) into a stable-identity archive entry. */
+  async trashFolder(relativePath: string): Promise<FolderTrashEntry> {
     this.assertFolderPath(relativePath)
+    const trashEntryId = FolderTrashEntryId(`ftrash_${randomUUID().replaceAll('-', '').slice(0, 12)}`)
+    const archivedRel = `folders/${trashEntryId}`
+    const now = new Date().toISOString()
     const prefix = `${relativePath}/`
     for (const [path, id] of [...this.requirePaths().entries()]) {
       if (path !== relativePath && !path.startsWith(prefix)) continue
@@ -600,14 +609,25 @@ export class NotesService extends Service {
         afterStateFingerprint: noteFingerprint(this.config.workspaceId, String(id), path, record.contentHash, true),
       }
       await this.commitEvent(NOTE_DELETED, String(id), payload)
-      await this.putRecord({ ...record, deletedAt: new Date().toISOString() }, path)
+      await this.putRecord({ ...record, deletedAt: now }, path)
     }
+    // Persist the trash entry BEFORE the physical rename so a crash leaves a
+    // recoverable conflict (metadata present, source/destination in flux).
+    const entry: FolderTrashEntry = {
+      trashEntryId,
+      workspaceId: WorkspaceId(this.config.workspaceId),
+      originalPath: relativePath,
+      archivedPath: archivedRel,
+      deletedAt: now,
+    }
+    await this.requireFolderTrash().put(String(trashEntryId), entry)
     await this.ctx.fs.rename(
       await this.ctx.fs.resolve(this.handle.notePath(relativePath)),
-      await this.ctx.fs.resolve(this.handle.archivePath(relativePath)),
+      await this.ctx.fs.resolve(this.handle.archivePath(archivedRel)),
     )
     await this.requireOrder().delete(this.orderKey(relativePath))
     await this.removeChildFromOrder(parentOf(relativePath), 'folder', posix.basename(relativePath))
+    return entry
   }
 
   /** Manual order for one parent folder ('' = workspace root). Empty = default sort. */

@@ -1004,7 +1004,7 @@ async function renderTrash(){
     const atts = await api('listTrashAttachments')
     const folders = await api('listTrashFolders')
     const rows = []
-    for (const f of folders) rows.push('<div class="tree-row"><span class="ic">📁</span><span class="nm">' + esc(f) + '/</span><button class="btn small" data-action="restore-folder" data-path="' + esc(f) + '">' + esc(t('reconcile')) + '</button></div>')
+    for (const f of folders) rows.push('<div class="tree-row"><span class="ic">📁</span><span class="nm">' + esc(f.originalPath) + '/</span><button class="btn small" data-action="restore-folder" data-id="' + esc(f.trashEntryId) + '">' + esc(t('reconcile')) + '</button><button class="btn small danger" data-action="purge-folder" data-id="' + esc(f.trashEntryId) + '">' + esc(t('del')) + '</button></div>')
     for (const n of notes) rows.push('<div class="tree-row"><span class="ic">📄</span><span class="nm">' + esc(n.title) + '</span><button class="btn small" data-action="restore-note" data-id="' + esc(n.noteId) + '">' + esc(t('reconcile')) + '</button><button class="btn small danger" data-action="purge-note" data-id="' + esc(n.noteId) + '">' + esc(t('del')) + '</button></div>')
     for (const a of atts) rows.push('<div class="tree-row"><span class="ic">📎</span><span class="nm">' + esc(a.filename) + '</span><button class="btn small" data-action="restore-attachment" data-id="' + esc(a.attachmentId) + '">' + esc(t('reconcile')) + '</button><button class="btn small danger" data-action="purge-attachment" data-id="' + esc(a.attachmentId) + '">' + esc(t('del')) + '</button></div>')
     $('#list').innerHTML = '<div class="list-head">' + esc(t('trash')) + '</div>'
@@ -1222,7 +1222,8 @@ document.addEventListener('click', (e) => {
   else if (act === 'purge-note') { if (confirm(t('delNoteConfirm'))) api('purgeNote', { noteId: id }).then(() => renderTrash()).then(refreshHeader) }
   else if (act === 'restore-attachment') { api('restoreAttachment', { attachmentId: id }).then(() => renderTrash()).then(refreshHeader) }
   else if (act === 'purge-attachment') { if (confirm(t('delAttachmentConfirm'))) api('purgeAttachment', { attachmentId: id }).then(() => renderTrash()).then(refreshHeader) }
-  else if (act === 'restore-folder') { api('restoreFolder', { path }).then(() => renderTrash()) }
+  else if (act === 'restore-folder') { api('restoreFolder', { trashEntryId: id }).then(() => renderTrash()).then(refreshHeader).catch(e => toast(e.message, 'err')) }
+  else if (act === 'purge-folder') { if (confirm(t('folderDeleteConfirm', { n: '' }))) api('purgeFolder', { trashEntryId: id }).then(() => renderTrash()).then(refreshHeader) }
 })
 function selectionSourceRef(){
   if (state.selectedNoteId === null) return null

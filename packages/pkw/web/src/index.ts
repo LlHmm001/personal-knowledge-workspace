@@ -21,7 +21,7 @@ import { posix, extname, resolve as pathResolve, sep } from 'node:path'
 import { readFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import z from '@deepseek-ai/schemastery'
-import { AttachmentId, NoteId, TaskId, TaskMatrixId } from '@deepseek-ai/dsh-pkw-domain'
+import { AttachmentId, FolderTrashEntryId, NoteId, TaskId, TaskMatrixId } from '@deepseek-ai/dsh-pkw-domain'
 import type { OrderChild } from '@deepseek-ai/dsh-pkw-notes'
 import PkwEventStoreService from '@deepseek-ai/dsh-pkw-events'
 import PkwWorkspaceService from '@deepseek-ai/dsh-pkw-workspace'
@@ -349,7 +349,7 @@ export class PkwWebService extends Service {
             sync: this.syncView('attachment', String(a.id), snap),
           }))
       }
-      case 'listTrashFolders': return this.notes.listTrashFolders()
+      case 'listTrashFolders': return (await this.notes.listTrashFolders()).map(e => ({ trashEntryId: String(e.trashEntryId), originalPath: e.originalPath, deletedAt: e.deletedAt }))
       case 'listAttachments': {
         const snap = this.syncSnapshot()
         return this.attachments.list().map(a => ({
@@ -450,15 +450,15 @@ export class PkwWebService extends Service {
         return { deleted: true }
       }
       case 'trashFolder': {
-        await this.notes.trashFolder(String(args.path))
-        return { trashed: true }
+        const e = await this.notes.trashFolder(String(args.path))
+        return { trashed: true, trashEntryId: String(e.trashEntryId), originalPath: e.originalPath }
       }
       case 'restoreFolder': {
-        await this.notes.restoreFolder(String(args.path))
+        await this.notes.restoreFolder(FolderTrashEntryId(String(args.trashEntryId)))
         return { restored: true }
       }
       case 'purgeFolder': {
-        await this.notes.purgeFolder(String(args.path))
+        await this.notes.purgeFolder(FolderTrashEntryId(String(args.trashEntryId)))
         return { purged: true }
       }
       case 'setOrder': {
