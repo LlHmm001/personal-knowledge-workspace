@@ -39,6 +39,11 @@ aside{border-right:1px solid var(--border);background:var(--panel);display:flex;
 .tree-row .ic{flex:0 0 auto;font-size:12px}
 .tree-row .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1 1 auto}
 .tree-row .badge{margin-left:2px}
+.trash-item{gap:8px;cursor:default}.trash-check{margin:0;cursor:pointer;flex:0 0 auto}
+.trash-main{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;overflow:hidden}
+.trash-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}
+.trash-selbar{position:sticky;top:0;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:6px 10px;margin-bottom:10px;display:flex;align-items:center;gap:8px;z-index:5}
+.select-all{display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:13px}
 .list-section{padding:10px 12px 4px;font-size:11px;letter-spacing:.04em;color:var(--muted);font-weight:650;text-transform:uppercase}
 .tree-row.note .nm{font-weight:500}
 .tree-children{margin-left:14px;border-left:1px solid var(--border);padding-left:4px}
@@ -253,6 +258,13 @@ const STR = {
     tableAlignLeft:'左对齐', tableAlignCenter:'居中对齐', tableAlignRight:'右对齐',
     tableDeleteRow:'删除当前行', tableDeleteCol:'删除当前列', tableDeleteTable:'删除表格', tableInsertSize:'插入表格',
     footnote:'脚注', footnoteContent:'脚注内容', footnoteInsert:'插入脚注', footnoteEdit:'编辑脚注', footnoteJump:'跳转到脚注', footnoteDelete:'删除脚注', footnoteBack:'回到引用', footnoteSelectText:'选中文字后插入脚注', footnoteEmpty:'（未选中文字，将在光标处插入引用）',
+    trashAll:'全部', trashNotes:'笔记', trashFolders:'文件夹', trashAttachments:'附件', trashTypeFilter:'类型',
+    trashEmptyTrash:'清空回收站', trashSelectAll:'全选', trashSelected:'已选择 {n} 项', trashRestore:'恢复', trashPermanentDelete:'永久删除', trashClearSelection:'取消选择',
+    trashEmptyTitle:'回收站为空', trashEmptyBody:'删除的笔记、文件夹和附件会出现在这里。',
+    trashEmptyConfirmTitle:'清空回收站？', trashEmptyConfirmBody:'回收站中的全部 {n} 项内容将被永久删除，此操作无法撤销。',
+    trashEmptyConfirmStats:'笔记 {n} · 文件夹 {f} · 附件 {a}',
+    trashPurgeConfirmTitle:'永久删除 {n} 项？', trashPurgeConfirmBody:'这些内容删除后无法从 PKW 回收站恢复。',
+    trashRestoring:'正在恢复…', trashDeleting:'正在删除…', trashEmptied:'回收站已清空', trashRestored:'已恢复 {n} 项', trashRestoredPartial:'已恢复 {n} 项，{m} 项失败', trashPurged:'已永久删除 {n} 项', trashPurgedPartial:'已永久删除 {n} 项，{m} 项失败', trashDeletedTime:'删除于 {t}',
   },
   en: {
     overview:'Overview', notes:'Notes', attachments:'Attachment library', tasks:'Tasks', trash:'Trash', search:'Search',
@@ -294,6 +306,13 @@ const STR = {
     tableAlignLeft:'Align left', tableAlignCenter:'Align center', tableAlignRight:'Align right',
     tableDeleteRow:'Delete row', tableDeleteCol:'Delete column', tableDeleteTable:'Delete table', tableInsertSize:'Insert table',
     footnote:'Footnote', footnoteContent:'Footnote content', footnoteInsert:'Insert footnote', footnoteEdit:'Edit footnote', footnoteJump:'Jump to footnote', footnoteDelete:'Delete footnote', footnoteBack:'Back to reference', footnoteSelectText:'Select text then insert footnote', footnoteEmpty:'(no selection — reference inserted at cursor)',
+    trashAll:'All', trashNotes:'Notes', trashFolders:'Folders', trashAttachments:'Attachments', trashTypeFilter:'Type',
+    trashEmptyTrash:'Empty Trash', trashSelectAll:'Select all', trashSelected:'{n} selected', trashRestore:'Restore', trashPermanentDelete:'Delete permanently', trashClearSelection:'Clear selection',
+    trashEmptyTitle:'Trash is empty', trashEmptyBody:'Deleted notes, folders and attachments will appear here.',
+    trashEmptyConfirmTitle:'Empty Trash?', trashEmptyConfirmBody:'All {n} items in Trash will be permanently deleted. This cannot be undone.',
+    trashEmptyConfirmStats:'{n} notes · {f} folders · {a} attachments',
+    trashPurgeConfirmTitle:'Delete {n} items permanently?', trashPurgeConfirmBody:'These items cannot be restored from Trash afterwards.',
+    trashRestoring:'Restoring…', trashDeleting:'Deleting…', trashEmptied:'Trash emptied', trashRestored:'Restored {n} items', trashRestoredPartial:'Restored {n} items, {m} failed', trashPurged:'Deleted {n} items permanently', trashPurgedPartial:'Deleted {n} items permanently, {m} failed', trashDeletedTime:'Deleted {t}',
   },
 }
 const PKW_BUILD = '1d93f55'
@@ -326,6 +345,9 @@ const state = {
   trashCache: null,
   summaryCache: null,
   scroll: { main: {}, list: {} },
+  trashSelection: new Set(),
+  trashFilter: 'all',
+  trashBusy: false,
 }
 // ── View switching: navigation guard + single-flight + instrumentation ──────
 let viewSeq = 0
@@ -1204,14 +1226,139 @@ function renderMatrixGrid(matrices, all, matrixId){
     '<div class="quad-grid">' + grid + '</div>' + doneHtml
 }
 
+function trashReconcile(selected, freshKeys){
+  const set = new Set(freshKeys)
+  const out = new Set()
+  selected.forEach(k => { if (set.has(k)) out.add(k) })
+  return out
+}
+function trashSelectAllState(selected, visible){
+  if (!visible.length) return 'none'
+  let hit = 0
+  for (const k of visible) if (selected.has(k)) hit++
+  if (hit === 0) return 'none'
+  if (hit === visible.length) return 'all'
+  return 'partial'
+}
+function trashKindIcon(kind){ return kind === 'note' ? '📄' : kind === 'folder' ? '📁' : '📎' }
+function trashKindLabel(kind){ return kind === 'note' ? t('trashNotes') : kind === 'folder' ? t('trashFolders') : t('trashAttachments') }
+function trashItems(notes, atts, folders){
+  const items = []
+  for (const n of notes) items.push({ key: 'note:' + n.noteId, kind: 'note', id: n.noteId, name: n.title, sub: n.deletedAt || n.updatedAt || '', path: n.relativePath })
+  for (const f of folders) items.push({ key: 'folder:' + f.trashEntryId, kind: 'folder', id: f.trashEntryId, name: f.originalPath, sub: f.deletedAt || '', path: f.originalPath })
+  for (const a of atts) items.push({ key: 'attachment:' + a.attachmentId, kind: 'attachment', id: a.attachmentId, name: a.filename, sub: a.deletedAt || '', path: '' })
+  return items
+}
+function trashVisible(notes, atts, folders){
+  const all = trashItems(notes, atts, folders)
+  return state.trashFilter === 'all' ? all : all.filter(x => x.kind === state.trashFilter)
+}
+function trashItemRow(it, checked){
+  const meta = esc(trashKindLabel(it.kind)) + (it.sub ? ' · ' + t('trashDeletedTime', { t: it.sub }) : '') + (it.path ? ' · ' + esc(it.path) : '')
+  return '<div class="tree-row trash-item" data-key="' + esc(it.key) + '">' +
+    '<input type="checkbox" class="trash-check" data-key="' + esc(it.key) + '"' + (checked ? ' checked' : '') + '>' +
+    '<span class="ic">' + trashKindIcon(it.kind) + '</span>' +
+    '<span class="trash-main"><span class="trash-name">' + esc(it.name) + '</span><span class="muted small">' + meta + '</span></span>' +
+    '<button class="btn small" data-action="restore-one" data-key="' + esc(it.key) + '">' + esc(t('trashRestore')) + '</button>' +
+    '<button class="btn small danger" data-action="purge-one" data-key="' + esc(it.key) + '">' + esc(t('trashPermanentDelete')) + '</button>' +
+    '</div>'
+}
+function trashVisibleKeysNow(){
+  return Array.prototype.slice.call(document.querySelectorAll('.trash-check')).map(cb => cb.dataset.key)
+}
+function updateTrashSelectionUI(){
+  const visible = trashVisibleKeysNow()
+  const selCount = state.trashSelection.size
+  const sa = trashSelectAllState(state.trashSelection, visible)
+  const saEl = $('#trashSelectAll'); if (saEl) { saEl.checked = (sa === 'all'); saEl.indeterminate = (sa === 'partial'); saEl.disabled = state.trashBusy }
+  const bar = $('#trashSelBar')
+  if (bar) bar.innerHTML = selCount > 0
+    ? '<span class="muted">' + esc(t('trashSelected', { n: selCount })) + '</span>' +
+      '<button class="btn small" data-action="trash-restore" ' + (state.trashBusy ? 'disabled' : '') + '>' + (state.trashBusy ? esc(t('trashRestoring')) : esc(t('trashRestore'))) + '</button>' +
+      '<button class="btn small danger" data-action="trash-purge" ' + (state.trashBusy ? 'disabled' : '') + '>' + (state.trashBusy ? esc(t('trashDeleting')) : esc(t('trashPermanentDelete'))) + '</button>' +
+      '<button class="btn small" data-action="trash-clear-selection" ' + (state.trashBusy ? 'disabled' : '') + '>' + esc(t('trashClearSelection')) + '</button>'
+    : ''
+}
 function renderTrashFrom(notes, atts, folders){
-  const rows = []
-  for (const f of folders) rows.push('<div class="tree-row"><span class="ic">📁</span><span class="nm">' + esc(f.originalPath) + '/</span><button class="btn small" data-action="restore-folder" data-id="' + esc(f.trashEntryId) + '">' + esc(t('reconcile')) + '</button><button class="btn small danger" data-action="purge-folder" data-id="' + esc(f.trashEntryId) + '">' + esc(t('del')) + '</button></div>')
-  for (const n of notes) rows.push('<div class="tree-row"><span class="ic">📄</span><span class="nm">' + esc(n.title) + '</span><button class="btn small" data-action="restore-note" data-id="' + esc(n.noteId) + '">' + esc(t('reconcile')) + '</button><button class="btn small danger" data-action="purge-note" data-id="' + esc(n.noteId) + '">' + esc(t('del')) + '</button></div>')
-  for (const a of atts) rows.push('<div class="tree-row"><span class="ic">📎</span><span class="nm">' + esc(a.filename) + '</span><button class="btn small" data-action="restore-attachment" data-id="' + esc(a.attachmentId) + '">' + esc(t('reconcile')) + '</button><button class="btn small danger" data-action="purge-attachment" data-id="' + esc(a.attachmentId) + '">' + esc(t('del')) + '</button></div>')
-  $('#list').innerHTML = '<div class="list-head">' + esc(t('trash')) + '</div>'
-  $('#main').innerHTML = '<h2>' + esc(t('trash')) + '</h2>' + (rows.length ? rows.join('') : '<div class="empty">' + esc(t('noRecent')) + '</div>')
+  const visible = trashVisible(notes, atts, folders)
+  const keys = visible.map(x => x.key)
+  state.trashSelection = trashReconcile(state.trashSelection, keys)
+  const counts = { all: notes.length + atts.length + folders.length, note: notes.length, folder: folders.length, attachment: atts.length }
+  const filterRows = [['all', t('trashAll'), '🗑'], ['note', t('trashNotes'), '📄'], ['folder', t('trashFolders'), '📁'], ['attachment', t('trashAttachments'), '📎']]
+    .map(([f, label, ic]) => '<div class="tree-row' + (state.trashFilter === f ? ' active' : '') + '" data-action="trash-filter" data-filter="' + f + '"><span class="ic">' + ic + '</span><span class="nm">' + esc(label) + ' (' + (counts[f] || 0) + ')</span></div>').join('')
+  $('#list').innerHTML = '<div class="list-head">' + esc(t('trash')) + '</div><div class="list-section">' + esc(t('trashTypeFilter')) + '</div>' + filterRows
+  const sa = trashSelectAllState(state.trashSelection, keys)
+  const rows = visible.map(it => trashItemRow(it, state.trashSelection.has(it.key))).join('')
+  $('#main').innerHTML = '<h2>' + esc(t('trash')) + '<span class="sub">' + counts.all + '</span></h2>' +
+    '<div class="toolbar"><label class="select-all"><input type="checkbox" id="trashSelectAll"' + (sa === 'all' ? ' checked' : '') + ' ' + (state.trashBusy ? 'disabled' : '') + '> ' + esc(t('trashSelectAll')) + '</label><span class="spacer"></span>' +
+    '<button class="btn danger" data-action="empty-trash" ' + (counts.all === 0 || state.trashBusy ? 'disabled' : '') + '>' + esc(t('trashEmptyTrash')) + '</button></div>' +
+    '<div id="trashSelBar" class="trash-selbar"></div>' +
+    (rows ? rows : '<div class="empty"><h3>' + esc(t('trashEmptyTitle')) + '</h3><p class="muted">' + esc(t('trashEmptyBody')) + '</p></div>')
+  const saEl = $('#trashSelectAll'); if (saEl) saEl.indeterminate = (sa === 'partial')
+  updateTrashSelectionUI()
   restoreScroll()
+}
+function toggleTrashKey(key, checked){
+  if (checked) state.trashSelection.add(key); else state.trashSelection.delete(key)
+  updateTrashSelectionUI()
+}
+function selectAllVisible(checked){
+  const visible = trashVisibleKeysNow()
+  for (const k of visible) { if (checked) state.trashSelection.add(k); else state.trashSelection.delete(k) }
+  document.querySelectorAll('.trash-check').forEach(cb => { cb.checked = state.trashSelection.has(cb.dataset.key) })
+  updateTrashSelectionUI()
+}
+function clearTrashSelection(){
+  state.trashSelection.clear()
+  document.querySelectorAll('.trash-check').forEach(cb => { cb.checked = false })
+  updateTrashSelectionUI()
+}
+function doBatchRestore(keys){
+  if (state.trashBusy) return
+  state.trashBusy = true; updateTrashSelectionUI()
+  api('batchRestoreTrash', { items: keys.map(k => ({ key: k })) }).then(r => {
+    state.trashBusy = false
+    const ok = r.ok || [], failed = r.failed || []
+    for (const k of ok) state.trashSelection.delete(k)
+    if (failed.length === 0) toast(t('trashRestored', { n: ok.length }), 'ok')
+    else toast(t('trashRestoredPartial', { n: ok.length, m: failed.length }), 'warn')
+    refreshTrash()
+  }).catch(e => { state.trashBusy = false; toast(t('genericError') + ': ' + e.message, 'err'); updateTrashSelectionUI() })
+}
+function doBatchPurge(keys){
+  if (state.trashBusy) return
+  state.trashBusy = true; updateTrashSelectionUI()
+  api('batchPurgeTrash', { items: keys.map(k => ({ key: k })) }).then(r => {
+    state.trashBusy = false
+    const ok = r.ok || [], failed = r.failed || []
+    for (const k of ok) state.trashSelection.delete(k)
+    if (failed.length === 0) toast(t('trashPurged', { n: ok.length }), 'ok')
+    else toast(t('trashPurgedPartial', { n: ok.length, m: failed.length }), 'warn')
+    refreshTrash()
+  }).catch(e => { state.trashBusy = false; toast(t('genericError') + ': ' + e.message, 'err'); updateTrashSelectionUI() })
+}
+function trashConfirmDialog(title, body, okLabel, onOk){
+  const overlay = document.createElement('div'); overlay.className = 'modal-overlay'
+  overlay.innerHTML = '<div class="modal trash-confirm"><h3>' + esc(title) + '</h3><p class="muted">' + body + '</p><div class="toolbar"><button class="btn" id="tcCancel">' + esc(t('cancel')) + '</button><button class="btn danger" id="tcOk">' + esc(okLabel) + '</button></div></div>'
+  document.body.appendChild(overlay)
+  const q = (s) => overlay.querySelector(s)
+  q('#tcCancel').addEventListener('click', () => overlay.remove())
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove() })
+  q('#tcOk').addEventListener('click', () => { overlay.remove(); onOk() })
+}
+function confirmBatchPurge(keys){
+  trashConfirmDialog(t('trashPurgeConfirmTitle', { n: keys.length }), esc(t('trashPurgeConfirmBody')), t('trashPermanentDelete'), () => doBatchPurge(keys))
+}
+function confirmEmptyTrash(){
+  const c = state.trashCache || { notes: [], atts: [], folders: [] }
+  const total = c.notes.length + c.atts.length + c.folders.length
+  if (total === 0) return
+  const stats = t('trashEmptyConfirmStats', { n: c.notes.length, f: c.folders.length, a: c.atts.length })
+  trashConfirmDialog(t('trashEmptyConfirmTitle'), esc(t('trashEmptyConfirmBody', { n: total })) + '<br><span class="muted small">' + esc(stats) + '</span>', t('trashEmptyTrash'), () => {
+    const c2 = state.trashCache || { notes: [], atts: [], folders: [] }
+    const keys = trashItems(c2.notes, c2.atts, c2.folders).map(x => x.key)
+    doBatchPurge(keys)
+  })
 }
 async function renderTrash(){
   const seq = viewSeq
@@ -1351,6 +1498,12 @@ function showMatrixContextMenu(x, y, matrixId){
     { label: '✏️ ' + t('renameFolder'), action: 'matrix-rename', id: matrixId },
     { label: '📦 ' + t('matrixArchive'), action: 'matrix-archive', id: matrixId },
     { label: '🗑 ' + t('matrixRemove'), action: 'matrix-remove', id: matrixId, danger: true },
+  ])
+}
+function showTrashContextMenu(x, y, key){
+  showContextMenu(x, y, [
+    { label: '↩ ' + t('trashRestore'), action: 'restore-one', attrs: { 'data-key': key } },
+    { label: '🗑 ' + t('trashPermanentDelete'), action: 'purge-one', attrs: { 'data-key': key }, danger: true },
   ])
 }
 function editorInsert(md){
@@ -1631,6 +1784,8 @@ document.addEventListener('contextmenu', (e) => {
     editorContextMenu(e.clientX, e.clientY, hasSel)
     return
   }
+  const trashRow = e.target.closest('.trash-item')
+  if (trashRow) { e.preventDefault(); showTrashContextMenu(e.clientX, e.clientY, trashRow.dataset.key); return }
   const noteRow = e.target.closest('.tree-row.note[data-action="open-note"]')
   if (noteRow) { e.preventDefault(); showNoteContextMenu(e.clientX, e.clientY, noteRow.dataset.id); return }
   const folderRow = e.target.closest('.tree-row.folder[data-action="select-folder"]')
@@ -1790,12 +1945,20 @@ document.addEventListener('click', (e) => {
   else if (act === 'copy-wikilink') { api('getNote', { noteId: id }).then(d => navigator.clipboard.writeText('[[' + (d.note.title || id) + ']]')).then(() => toast(t('ok'), 'ok')).catch(e => toast(t('genericError') + ': ' + e.message, 'err')) }
   else if (act === 'task-up') moveTaskOrder(id, -1)
   else if (act === 'task-down') moveTaskOrder(id, 1)
-  else if (act === 'restore-note') { api('restoreNote', { noteId: id }).then(() => refreshTrash()).then(refreshHeader) }
-  else if (act === 'purge-note') { if (confirm(t('delNoteConfirm'))) api('purgeNote', { noteId: id }).then(() => refreshTrash()).then(refreshHeader) }
-  else if (act === 'restore-attachment') { api('restoreAttachment', { attachmentId: id }).then(() => refreshTrash()).then(refreshHeader) }
-  else if (act === 'purge-attachment') { if (confirm(t('delAttachmentConfirm'))) api('purgeAttachment', { attachmentId: id }).then(() => refreshTrash()).then(refreshHeader) }
-  else if (act === 'restore-folder') { api('restoreFolder', { trashEntryId: id }).then(() => refreshTrash()).then(refreshHeader).catch(e => toast(e.message, 'err')) }
-  else if (act === 'purge-folder') { if (confirm(t('folderDeleteConfirm', { n: '' }))) api('purgeFolder', { trashEntryId: id }).then(() => refreshTrash()).then(refreshHeader) }
+  else if (act === 'trash-filter') { state.trashFilter = el.dataset.filter || 'all'; if (state.trashCache) renderTrashFrom(state.trashCache.notes, state.trashCache.atts, state.trashCache.folders) }
+  else if (act === 'restore-one') { doBatchRestore([el.dataset.key]) }
+  else if (act === 'purge-one') { confirmBatchPurge([el.dataset.key]) }
+  else if (act === 'trash-restore') { doBatchRestore(Array.from(state.trashSelection)) }
+  else if (act === 'trash-purge') { confirmBatchPurge(Array.from(state.trashSelection)) }
+  else if (act === 'trash-clear-selection') { clearTrashSelection() }
+  else if (act === 'empty-trash') { confirmEmptyTrash() }
+})
+// Trash selection is pure local state: checkbox/select-all toggles never fetch.
+document.addEventListener('change', (e) => {
+  const check = e.target.closest('.trash-check')
+  if (check) { toggleTrashKey(check.dataset.key, check.checked); return }
+  const sa = e.target.closest('#trashSelectAll')
+  if (sa) { selectAllVisible(sa.checked); return }
 })
 function selectionSourceRef(){
   if (state.selectedNoteId === null) return null

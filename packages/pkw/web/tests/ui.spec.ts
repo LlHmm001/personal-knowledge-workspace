@@ -77,4 +77,16 @@ describe('PKW web UI (served page)', () => {
     expect(js).toContain('saveScroll')
     expect(js).toContain('restoreScroll')
   })
+
+  it('wires trash manager: selection, batch restore/purge, empty-trash, stable identity', () => {
+    const js = script()
+    expect(js).toContain('trashSelection')
+    expect(js).toContain("api('batchRestoreTrash'")
+    expect(js).toContain("api('batchPurgeTrash'")
+    expect(js).toContain('confirmEmptyTrash')
+    expect(js).toContain('trashSelectAllState')
+    expect(js).toContain('trashReconcile')
+    expect(js).toContain("'note:'")
+    expect(js).toContain('trash-check')
+  })
 })
