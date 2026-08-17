@@ -77,6 +77,10 @@ export class PkwWebService extends Service {
   })
 
   private workspaceId = ''
+  private notes!: NotesService
+  private attachments!: AttachmentsService
+  private weknora!: WeKnoraClient
+  private sync!: WeKnoraSyncService
 
   constructor(ctx: Context, private readonly config: Config) {
     super(ctx, 'pkwWeb')
@@ -106,6 +110,14 @@ export class PkwWebService extends Service {
       retryMaxMs: this.config.retryMaxMs,
       recoveryGraceAttempts: this.config.recoveryGraceAttempts,
     })
+
+    // Capture the service instances via the reflect store (global), NOT the
+    // inject-based context property (ctx.pkwNotes would require inject and fail
+    // across the child-fiber boundary).
+    this.notes = this.ctx.get('pkwNotes') as NotesService
+    this.attachments = this.ctx.get('pkwAttachments') as AttachmentsService
+    this.weknora = this.ctx.get('pkwWeKnora') as WeKnoraClient
+    this.sync = this.ctx.get('pkwWeKnoraSync') as WeKnoraSyncService
 
     // Route surface. Disposers are owned by this fiber via ctx.effect.
     this.ctx.effect(() => this.ctx.webServer.register({
@@ -138,14 +150,14 @@ export class PkwWebService extends Service {
   async call(method: string, args: Json): Promise<unknown> {
     switch (method) {
       case 'summary': return this.summary()
-      case 'listNotes': return this.ctx.pkwNotes.list().map(n => ({
+      case 'listNotes': return this.notes.list().map(n => ({
         noteId: String(n.noteId), relativePath: n.relativePath, title: n.title,
         tags: n.tags, updatedAt: n.updatedAt, observedRevision: n.observedRevision, deleted: n.deletedAt !== undefined,
       }))
       case 'getNote': {
         const noteId = NoteId(String(args.noteId))
-        const doc = await this.ctx.pkwNotes.getDocument(noteId)
-        const mapping = this.ctx.pkwWeKnoraSync.getMapping(noteId)
+        const doc = await this.notes.getDocument(noteId)
+        const mapping = this.sync.getMapping(noteId)
         return {
           note: { noteId: String(doc.note.noteId), relativePath: doc.note.relativePath, title: doc.note.title, tags: doc.note.tags, updatedAt: doc.note.updatedAt, observedRevision: doc.note.observedRevision },
           markdown: doc.markdown,
@@ -157,41 +169,41 @@ export class PkwWebService extends Service {
         }
       }
       case 'createNote': {
-        const rec = await this.ctx.pkwNotes.create({ relativePath: String(args.relativePath), markdown: String(args.markdown) })
+        const rec = await this.notes.create({ relativePath: String(args.relativePath), markdown: String(args.markdown) })
         return { noteId: String(rec.noteId), relativePath: rec.relativePath }
       }
       case 'saveNote': {
-        const rec = await this.ctx.pkwNotes.update(NoteId(String(args.noteId)), String(args.markdown))
+        const rec = await this.notes.update(NoteId(String(args.noteId)), String(args.markdown))
         return { noteId: String(rec.noteId), updatedAt: rec.updatedAt, observedRevision: rec.observedRevision }
       }
       case 'moveNote': {
-        const rec = await this.ctx.pkwNotes.move(NoteId(String(args.noteId)), String(args.relativePath))
+        const rec = await this.notes.move(NoteId(String(args.noteId)), String(args.relativePath))
         return { noteId: String(rec.noteId), relativePath: rec.relativePath }
       }
       case 'deleteNote': {
-        await this.ctx.pkwNotes.delete(NoteId(String(args.noteId)))
+        await this.notes.delete(NoteId(String(args.noteId)))
         return { deleted: true }
       }
-      case 'listAttachments': return this.ctx.pkwAttachments.list().map(a => ({
+      case 'listAttachments': return this.attachments.list().map(a => ({
         attachmentId: String(a.id), filename: a.filename, mimeType: a.mimeType, sizeBytes: a.sizeBytes,
         observedRevision: a.observedRevision, createdAt: a.createdAt, deleted: a.deletedAt !== undefined,
       }))
       case 'uploadAttachment': {
         const content = Buffer.from(String(args.contentBase64), 'base64')
-        const rec = await this.ctx.pkwAttachments.importFile({ content, filename: String(args.filename), mimeType: String(args.mimeType) })
+        const rec = await this.attachments.importFile({ content, filename: String(args.filename), mimeType: String(args.mimeType) })
         return { attachmentId: String(rec.id), filename: rec.filename, sizeBytes: rec.sizeBytes }
       }
       case 'deleteAttachment': {
-        await this.ctx.pkwAttachments.remove(AttachmentId(String(args.attachmentId)))
+        await this.attachments.remove(AttachmentId(String(args.attachmentId)))
         return { deleted: true }
       }
       case 'search': {
-        return this.ctx.pkwWeKnoraSync.search(String(args.query), { limit: typeof args.limit === 'number' ? args.limit : 10 })
+        return this.sync.search(String(args.query), { limit: typeof args.limit === 'number' ? args.limit : 10 })
       }
-      case 'syncNow': return this.ctx.pkwWeKnoraSync.drain().then(() => ({ drained: true }))
-      case 'reconcile': return this.ctx.pkwWeKnoraSync.reconcile()
+      case 'syncNow': return this.sync.drain().then(() => ({ drained: true }))
+      case 'reconcile': return this.sync.reconcile()
       case 'noteSyncInfo': {
-        const mapping = this.ctx.pkwWeKnoraSync.getMapping(NoteId(String(args.noteId)))
+        const mapping = this.sync.getMapping(NoteId(String(args.noteId)))
         return mapping ?? null
       }
       default: throw new Error(`unknown pkw method: ${method}`)
@@ -199,17 +211,17 @@ export class PkwWebService extends Service {
   }
 
   private async summary(): Promise<unknown> {
-    const credential = await this.ctx.pkwWeKnora.credentialStatus()
-    const integration = await this.ctx.pkwWeKnoraSync.integrationState()
+    const credential = await this.weknora.credentialStatus()
+    const integration = await this.sync.integrationState()
     return {
       workspaceId: this.workspaceId,
       kbId: this.config.kbId,
       weknoraBaseUrl: this.config.weknoraBaseUrl,
       credential: credential,
       integration: integration,
-      notes: this.ctx.pkwNotes.list().length,
-      attachments: this.ctx.pkwAttachments.list().length,
-      mappings: this.ctx.pkwWeKnoraSync.listMappings().length,
+      notes: this.notes.list().length,
+      attachments: this.attachments.list().length,
+      mappings: this.sync.listMappings().length,
     }
   }
 }

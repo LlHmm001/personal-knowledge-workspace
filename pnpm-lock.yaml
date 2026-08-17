@@ -35,6 +35,8 @@ importers:
 
   packages/pkw/notes: {}
 
+  packages/pkw/web: {}
+
   packages/pkw/weknora: {}
 
   packages/pkw/weknora-sync:
