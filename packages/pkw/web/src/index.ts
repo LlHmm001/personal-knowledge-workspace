@@ -17,13 +17,15 @@
 import { Service, type Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { posix } from 'node:path'
+import { posix, extname, resolve as pathResolve } from 'node:path'
+import { readFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import z from '@deepseek-ai/schemastery'
 import { AttachmentId, NoteId } from '@deepseek-ai/dsh-pkw-domain'
 import type { OrderChild } from '@deepseek-ai/dsh-pkw-notes'
 import PkwEventStoreService from '@deepseek-ai/dsh-pkw-events'
 import PkwWorkspaceService from '@deepseek-ai/dsh-pkw-workspace'
-import NotesService from '@deepseek-ai/dsh-pkw-notes'
+import NotesService, { splitFrontmatter } from '@deepseek-ai/dsh-pkw-notes'
 import AttachmentsService from '@deepseek-ai/dsh-pkw-attachments'
 import WeKnoraClient from '@deepseek-ai/dsh-pkw-weknora'
 import WeKnoraSyncService from '@deepseek-ai/dsh-pkw-weknora-sync'
@@ -68,6 +70,21 @@ async function readJsonBody(req: IncomingMessage): Promise<Json> {
 function folderOf(relativePath: string): string {
   const idx = relativePath.lastIndexOf('/')
   return idx === -1 ? '' : relativePath.slice(0, idx)
+}
+
+const VDITOR_MIME: Record<string, string> = {
+  '.js': 'application/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
+  '.json': 'application/json; charset=utf-8',
+  '.wasm': 'application/wasm',
 }
 
 interface TreeChild {
@@ -179,6 +196,35 @@ export class PkwWebService extends Service {
         void this.handleApi(req, res)
       },
     }), 'pkw.web.api')
+
+    // Vditor self-hosted assets: serve from the installed vditor dist with an
+    // extension allowlist + path-traversal guard (never the whole node_modules).
+    const vditorEntry = createRequire(import.meta.url).resolve('vditor/dist/index.min.js')
+    const vditorDist = vditorEntry.slice(0, vditorEntry.length - 'index.min.js'.length)
+    this.ctx.effect(() => this.ctx.webServer.register({
+      kind: 'prefix', path: '/pkw/assets/vditor', handler: (req, res) => {
+        void this.serveVditorAsset(req, res, vditorDist)
+      },
+    }), 'pkw.web.vditorAssets')
+  }
+
+  private async serveVditorAsset(req: IncomingMessage, res: ServerResponse, dist: string): Promise<void> {
+    try {
+      const url = new URL(req.url ?? '/', 'http://localhost')
+      const sub = url.pathname.slice('/pkw/assets/vditor/'.length)
+      const target = pathResolve(dist, sub)
+      if (!target.startsWith(pathResolve(dist))) {
+        json(res, 403, { ok: false, error: 'forbidden' })
+        return
+      }
+      const mime = VDITOR_MIME[extname(target).toLowerCase()] ?? 'application/octet-stream'
+      const data = await readFile(target)
+      res.writeHead(200, { 'Content-Type': mime, 'Cache-Control': 'public, max-age=86400' })
+      res.end(data)
+    } catch {
+      res.writeHead(404, { 'Content-Type': 'text/plain' })
+      res.end('not found')
+    }
   }
 
   private async handleApi(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -214,9 +260,12 @@ export class PkwWebService extends Service {
       case 'getNote': {
         const noteId = NoteId(String(args.noteId))
         const doc = await this.notes.getDocument(noteId)
+        const { frontmatterRaw, body } = splitFrontmatter(doc.markdown)
         return {
           note: { noteId: String(doc.note.noteId), relativePath: doc.note.relativePath, title: doc.note.title, tags: doc.note.tags, updatedAt: doc.note.updatedAt, observedRevision: doc.note.observedRevision },
           markdown: doc.markdown,
+          frontmatter: frontmatterRaw,
+          body,
           attachments: doc.attachments.map(a => ({ attachmentId: String(a.attachmentId), relativePath: a.relativePath })),
           sync: this.syncView('note', String(noteId), this.syncSnapshot()),
         }
@@ -227,6 +276,17 @@ export class PkwWebService extends Service {
       }
       case 'saveNote': {
         const rec = await this.notes.update(NoteId(String(args.noteId)), String(args.markdown))
+        return { noteId: String(rec.noteId), updatedAt: rec.updatedAt, observedRevision: rec.observedRevision }
+      }
+      case 'saveNoteBody': {
+        // Live editor only edits the body; the Host re-attaches the preserved
+        // frontmatter (stable id) so the editor never owns it.
+        const noteId = NoteId(String(args.noteId))
+        const doc = await this.notes.getDocument(noteId)
+        const { frontmatterRaw } = splitFrontmatter(doc.markdown)
+        const body = String(args.body)
+        const markdown = frontmatterRaw === '' ? body : `${frontmatterRaw}\n${body}`
+        const rec = await this.notes.update(noteId, markdown)
         return { noteId: String(rec.noteId), updatedAt: rec.updatedAt, observedRevision: rec.observedRevision }
       }
       case 'moveNote': {

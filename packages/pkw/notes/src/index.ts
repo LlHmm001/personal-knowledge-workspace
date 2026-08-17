@@ -201,7 +201,13 @@ export class NotesService extends Service {
     if (existing === undefined) throw new Error(`pkwNotes: unknown note '${noteId}'`)
     const parsed = parseFrontmatter(markdown)
     let next = markdown
-    if (parsed.frontmatter.id === undefined || parsed.frontmatter.id === '') next = injectNoteId(markdown, String(noteId))
+    if (parsed.frontmatter.id === undefined || parsed.frontmatter.id === '') {
+      next = injectNoteId(markdown, String(noteId))
+    } else if (parsed.frontmatter.id !== String(noteId)) {
+      // Stable identity invariant: a Note's id must never be changed by editing its
+      // frontmatter; reject a different id instead of silently re-identifying.
+      throw new Error(`pkwNotes: cannot change note identity from '${noteId}' to '${parsed.frontmatter.id}'`)
+    }
     await this.ctx.fs.writeText(await this.ctx.fs.resolve(this.handle.notePath(existing.relativePath)), next)
     const hash = contentHash(next)
     if (hash === existing.contentHash) return existing
@@ -649,5 +655,8 @@ function rewriteManagedLinks(markdown: string, fromDepth: number, toDepth: numbe
   })
   return rewritten.replace(/\u0000(\d+)\u0000/g, (_m, i: string) => blocks[Number(i)]!)
 }
+
+export { parseFrontmatter, splitFrontmatter, replaceNoteId, injectNoteId, deriveTitle } from './frontmatter.ts'
+export type { NoteFrontmatter } from './frontmatter.ts'
 
 export default NotesService

@@ -22,6 +22,14 @@ function stripQuotes(value: string | undefined): string | undefined {
   return value
 }
 
+/** Split a leading `---` YAML block from the body; the raw block is preserved verbatim. */
+export function splitFrontmatter(markdown: string): { frontmatterRaw: string; body: string } {
+  const normalized = markdown.replace(/^\uFEFF/, '')
+  const match = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*\r?\n?/.exec(normalized)
+  if (match === null) return { frontmatterRaw: '', body: markdown }
+  return { frontmatterRaw: match[0].replace(/\r?\n$/, ''), body: markdown.slice(match[0].length) }
+}
+
 /** Extract `id`/`title`/`tags` from a leading `---` block, leaving the body untouched. */
 export function parseFrontmatter(markdown: string): { frontmatter: NoteFrontmatter; body: string } {
   const normalized = markdown.replace(/^\uFEFF/, '') // strip a UTF-8 BOM
