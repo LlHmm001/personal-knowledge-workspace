@@ -21,6 +21,8 @@ export { parseAttachmentReference, parseCalloutBlock, parseWikiLink, serializeCa
 export type { AttachmentRef, CalloutBlock, WikiLink } from './markdown-semantics.ts'
 export { escapeHtml, protectWikiLinks, restoreWikiLinks, rewriteAttachmentUrls } from './lute-pipeline.ts'
 export type { WikiLinkToken } from './lute-pipeline.ts'
+export { appendFootnoteDefinition, countFootnoteReferences, deleteFootnote, editFootnoteDefinition, footnoteKeys, listFootnoteDefinitions, nextFootnoteKey, removeFootnoteDefinition } from './footnote.ts'
+export type { FootnoteDef } from './footnote.ts'
 export { addColumnLeft, addColumnRight, addRowAbove, addRowBelow, deleteColumn, deleteRow, deleteTable, findTableBlock, findTableBlockByIndex, listTableBlocks, parseTableBlock, resolveTableCell, serializeTableBlock, setColumnAlign } from './table.ts'
 export type { ColumnAlign, TableBlock } from './table.ts'
 export { applyCompletionToggle, baselineFromSubtasks, completedCount, deriveCompletionChanges, deriveSubtaskSeed, isCompletionDirty, projectionOf, removeCompletionDraft } from './subtask-draft.ts'
