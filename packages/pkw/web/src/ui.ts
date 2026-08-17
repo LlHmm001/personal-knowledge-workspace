@@ -1412,6 +1412,8 @@ document.addEventListener('click', (e) => {
   if (!e.target.closest('#wikiSuggest')) dismissWikiSuggest()
   if (!e.target.closest('#ctxMenu')) dismissContextMenu()
   if (!e.target.closest('#selTaskBtn')) dismissSelButton()
+  const wiki = e.target.closest('[data-wiki]')
+  if (wiki) { openWikiTarget(wiki.dataset.wiki); return }
   const nav = e.target.closest('.nav button'); if (nav) { setView(nav.dataset.view); return }
   const el = e.target.closest('[data-action]'); if (!el) return
   const act = el.dataset.action, id = el.dataset.id, path = el.dataset.path, mode = el.dataset.mode

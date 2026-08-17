@@ -40,4 +40,10 @@ describe('PKW web UI (served page)', () => {
     expect(js).toContain('document.hidden')
     expect(js).not.toContain('setInterval(() => { if (state.view === \'notes\')')
   })
+
+  it('routes wiki-link clicks (data-wiki) to openWikiTarget', () => {
+    const js = script()
+    expect(js).toContain("closest('[data-wiki]')")
+    expect(js).toContain('openWikiTarget(wiki.dataset.wiki)')
+  })
 })
