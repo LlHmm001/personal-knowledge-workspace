@@ -97,6 +97,12 @@ aside.right h3:first-child{margin-top:0}
 .modal{background:var(--panel);border-radius:12px;padding:18px;min-width:320px;max-width:520px;box-shadow:0 8px 30px rgba(0,0,0,.25)}
 .modal h3{margin:0 0 12px;font-size:15px}.modal input,.modal select{width:100%;padding:8px;border:1px solid var(--border);border-radius:8px;font-size:13px;margin-bottom:10px}
 .modal .modal-actions{display:flex;gap:8px;justify-content:flex-end}
+.modal .form{margin-bottom:10px}.modal .form label{display:block;font-size:12px;color:var(--muted);margin-bottom:3px}
+.quad-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.quad{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:10px;min-height:140px}
+.quad-head{display:flex;align-items:center;gap:8px;padding-bottom:6px;border-bottom:1px solid var(--border);margin-bottom:6px;font-size:13px}
+.quad-head .count{margin-left:auto;font-size:12px;color:var(--muted)}
+.quad .empty.small{padding:8px;font-size:12px}
+@media (max-width:760px){.quad-grid{grid-template-columns:1fr}}
 .wikilink-suggest{position:absolute;z-index:80;background:var(--panel);border:1px solid var(--border);border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.15);max-height:240px;overflow:auto;min-width:240px}
 .wikilink-suggest .item{padding:7px 12px;cursor:pointer;font-size:13px}.wikilink-suggest .item:hover,.wikilink-suggest .item.sel{background:#eef2f8}
 @media(max-width:960px){#app{grid-template-columns:200px 1fr}aside.right{display:none}}
@@ -155,6 +161,10 @@ const STR = {
     properties:'属性', tags:'标签', title:'标题', outline:'大纲', backlinks:'反向链接', noOutline:'暂无标题', noBacklinks:'暂无反向链接',
     wikiPlaceholder:'输入 [[ 引用其他笔记', autosaveFailed:'自动保存失败', externalModified:'文件已在外部修改。选择「重载」使用磁盘版本，或「保留我的」继续编辑。', reload:'重载', keepMine:'保留我的',
     quickSwitch:'快速切换笔记', typeToSearch:'输入标题或路径…',
+    taskAll:'全部任务', taskToday:'今日', taskUpcoming:'即将到来', taskCompleted:'已完成', taskInbox:'收件箱（未分类）',
+    q1:'重要且紧急', q2:'重要不紧急', q3:'紧急不重要', q4:'不紧急不重要',
+    taskQuickAdd:'快速添加任务', taskTitle:'标题', taskMatrix:'矩阵', taskQuadrant:'象限', taskPriority:'优先级', taskDue:'截止日期', taskSave:'创建', taskCancel:'取消',
+    noteToTask:'笔记 → 待办', selectionToTask:'选区 → 待办', taskNoTasks:'暂无任务。', taskTomorrow:'明天', taskYesterday:'昨天', taskOverdue:'已逾期',
   },
   en: {
     overview:'Overview', notes:'Notes', attachments:'Attachments', tasks:'Tasks', trash:'Trash', search:'Search',
@@ -180,6 +190,10 @@ const STR = {
     properties:'Properties', tags:'Tags', title:'Title', outline:'Outline', backlinks:'Backlinks', noOutline:'No headings', noBacklinks:'No backlinks',
     wikiPlaceholder:'Type [[ to reference another note', autosaveFailed:'Autosave failed', externalModified:'File changed externally. Choose 「Reload」 for the disk version or 「Keep mine」 to continue editing.', reload:'Reload', keepMine:'Keep mine',
     quickSwitch:'Quick switch note', typeToSearch:'Type a title or path…',
+    taskAll:'All tasks', taskToday:'Today', taskUpcoming:'Upcoming', taskCompleted:'Completed', taskInbox:'Inbox (unassigned)',
+    q1:'Important & Urgent', q2:'Important, Not Urgent', q3:'Urgent, Not Important', q4:'Not Urgent, Not Important',
+    taskQuickAdd:'Quick add task', taskTitle:'Title', taskMatrix:'Matrix', taskQuadrant:'Quadrant', taskPriority:'Priority', taskDue:'Due date', taskSave:'Create', taskCancel:'Cancel',
+    noteToTask:'Note → Task', selectionToTask:'Selection → Task', taskNoTasks:'No tasks yet.', taskTomorrow:'Tomorrow', taskYesterday:'Yesterday', taskOverdue:'Overdue',
   },
 }
 let lang = localStorage.getItem('pkw-lang') === 'en' ? 'en' : 'zh'
@@ -203,6 +217,7 @@ const state = {
   treeRoot: [],
   collapsed: new Set(),
   editor: { noteId: null, persistedMarkdown: '', dirty: false, saving: false, mode: localStorage.getItem('pkw-editor-mode') || 'live' },
+  taskView: localStorage.getItem('pkw-task-view') || 'all',
 }
 
 function toast(msg, kind){ const el = $('#toast'); el.innerHTML = '<div class="toast ' + (kind || 'ok') + '">' + esc(msg) + '</div>'; el.style.display = 'block'; clearTimeout(toast._t); toast._t = setTimeout(() => { el.style.display = 'none' }, 3200) }
@@ -399,6 +414,7 @@ function renderEditorShell(d){
     '<button class="btn" data-action="rename-note">' + esc(t('renameMove')) + '</button>' +
     '<button class="btn" data-action="move-note" data-id="' + esc(state.selectedNoteId) + '">' + esc(t('moveNoteTo')) + '</button>' +
     '<button class="btn" data-action="sync-note" data-id="' + esc(state.selectedNoteId) + '">' + esc(t('syncNow')) + '</button>' +
+    '<button class="btn" data-action="selection-to-task">' + esc(t('selectionToTask')) + '</button>' +
     '<button class="btn danger" data-action="delete-note">' + esc(t('del')) + '</button>' +
     '<span id="saveStatus" class="saved">✓ ' + esc(t('saved')) + '</span>' +
     '<span class="spacer"></span>' + modeBtn('live', 'modeLive') + modeBtn('source', 'modeSource') + modeBtn('reading', 'modeReading') +
@@ -412,9 +428,38 @@ function renderEditorShell(d){
 }
 function bindEditor(){
   if (state.editor.mode === 'live') initVditor()
-  else if (state.editor.mode === 'source') { const el = $('#editor'); if (el) el.addEventListener('input', onEditorInput) }
+  else if (state.editor.mode === 'source') { const el = $('#editor'); if (el) { el.addEventListener('input', onEditorInput); el.addEventListener('keyup', wikiAutocomplete) } }
   else renderPreview()
 }
+function wikiAutocomplete(e){
+  const el = $('#editor'); if (!el) return
+  dismissWikiSuggest()
+  if (e && (e.key === 'Escape' || e.key === 'Enter' || e.key === 'ArrowUp' || e.key === 'ArrowDown')) return
+  const pos = el.selectionStart, text = el.value.slice(0, pos)
+  const m = /\\[\\[$]?\\[\\[([^\\[\\]]*)$/.exec(text)
+  if (!m) return
+  const q = m[1]
+  api('getTree', { sortMode: 'manual' }).then(tree => {
+    const notes = []; collectNotes(tree.root || [], notes)
+    const list = notes.filter(n => !q || n.title.toLowerCase().includes(q.toLowerCase())).slice(0, 10)
+    if (!list.length) return
+    const rect = el.getBoundingClientRect()
+    const div = document.createElement('div')
+    div.className = 'wikilink-suggest'; div.id = 'wikiSuggest'
+    div.style.left = rect.left + 'px'; div.style.top = (rect.bottom + 4) + 'px'
+    div.innerHTML = list.map((n, i) => '<div class="item' + (i === 0 ? ' sel' : '') + '" data-wikititle="' + esc(n.title) + '">' + esc(n.title) + '</div>').join('')
+    div.addEventListener('click', ev => { const t = ev.target.closest('.item'); if (t) { insertWikiLink(el, t.dataset.wikititle, pos, q.length) } })
+    document.body.appendChild(div)
+  }).catch(() => {})
+}
+function insertWikiLink(el, title, pos, qLen){
+  const start = pos - 2 - qLen
+  const tail = el.value.slice(pos)
+  el.value = el.value.slice(0, start) + '[[' + title + ']]' + tail
+  el.selectionStart = el.selectionEnd = start + title.length + 4
+  dismissWikiSuggest(); el.dispatchEvent(new Event('input')); el.focus()
+}
+function dismissWikiSuggest(){ const s = $('#wikiSuggest'); if (s) s.remove() }
 function initVditor(){
   const el = $('#vditor')
   if (!el || typeof window.Vditor === 'undefined') return
@@ -489,6 +534,7 @@ function detailNote(d){
   const s = d.sync
   const fm = parseFrontmatterClient(d.markdown)
   return '<h3>' + esc(t('properties')) + '</h3>' +
+    '<button class="btn small" data-action="note-to-task" data-id="' + esc(d.note.noteId) + '">' + esc(t('noteToTask')) + '</button>' +
     (fm.title ? '<div class="kv"><b>' + esc(t('title')) + '</b> <span class="v">' + esc(fm.title) + '</span></div>' : '') +
     (fm.tags && fm.tags.length ? '<div class="kv"><b>' + esc(t('tags')) + '</b> <span class="v">' + esc(fm.tags.join(', ')) + '</span></div>' : '') +
     '<div class="kv"><b>' + esc(t('path')) + '</b> <span class="v mono">' + esc(d.note.relativePath) + '</span></div>' +
@@ -694,30 +740,77 @@ async function delAttachment(id){
   try { await api('deleteAttachment', { attachmentId: id }); state.selectedAttachmentId = null; toast(t('deletedMsg'), 'ok'); await renderAttachments(); refreshHeader() }
   catch (e) { toast(t('genericError') + ': ' + e.message, 'err') }
 }
+function quadrantOf(x){ return x.important ? (x.urgent ? 1 : 2) : (x.urgent ? 3 : 4) }
+function matrixName(matrices, id){ const m = matrices.find(m => m.matrixId === id); return m ? m.name : id }
+function setTaskView(v){ state.taskView = v; localStorage.setItem('pkw-task-view', v); renderTasks() }
+function dueLabel(iso){
+  if (!iso) return ''
+  const d = new Date(iso.length <= 10 ? iso + 'T00:00:00' : iso)
+  if (isNaN(d.getTime())) return iso
+  const now = new Date(); const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const that = new Date(d.getFullYear(), d.getMonth(), d.getDate())
+  const diff = Math.round((that - today) / 86400000)
+  if (diff === 0) return t('taskToday')
+  if (diff === 1) return t('taskTomorrow')
+  if (diff === -1) return t('taskYesterday')
+  if (diff < -1) return t('taskOverdue') + ' ' + (-diff) + 'd'
+  return (d.getMonth() + 1) + '/' + d.getDate()
+}
+function taskRow(x, matrices){
+  const due = x.dueAt ? '<span class="muted mono">' + esc(dueLabel(x.dueAt)) + '</span>' : ''
+  const pri = x.priority !== undefined ? '<span class="badge warn">P' + x.priority + '</span>' : ''
+  const badge = x.matrixId ? '<span class="badge">' + esc(matrixName(matrices, x.matrixId)) + '</span>' : ''
+  return '<div class="tree-row" data-action="toggle-task" data-completed="' + (x.status === 'completed' ? '1' : '0') + '" data-id="' + esc(x.taskId) + '"><span class="ic">' + (x.status === 'completed' ? '☑' : '☐') + '</span><span class="nm">' + esc(x.title) + '</span>' + badge + pri + due + '</div>'
+}
 async function renderTasks(){
   $('#list').innerHTML = ''; $('#treeToolbar').innerHTML = ''; $('#detail').innerHTML = ''
   $('#main').innerHTML = '<div class="empty">' + esc(t('loading')) + '</div>'
   try {
     const matrices = await api('listMatrices')
-    const inbox = await api('listTasks', { matrixId: null })
-    const matrixRows = matrices.map(m =>
-      '<div class="tree-row" data-action="open-matrix" data-id="' + esc(m.matrixId) + '"><span class="ic">▦</span><span class="nm">' + esc(m.name) + '</span></div>'
-    ).join('')
-    const tasks = await api('listTasks', {})
-    const open = tasks.filter(x => x.status === 'open')
+    const all = await api('listTasks', {})
+    const counts = {}
+    for (const x of all) if (x.status === 'open') { const k = x.matrixId ?? 'inbox'; counts[k] = (counts[k] || 0) + 1 }
+    const views = [['all', t('taskAll')], ['today', t('taskToday')], ['upcoming', t('taskUpcoming')], ['completed', t('taskCompleted')]]
+    const viewRows = views.map(v => '<div class="tree-row' + (state.taskView === v[0] ? ' active' : '') + '" data-action="task-view" data-view="' + v[0] + '"><span class="ic">▤</span><span class="nm">' + esc(v[1]) + '</span></div>').join('')
+    const matrixRows = matrices.map(m => '<div class="tree-row' + (state.taskView === m.matrixId ? ' active' : '') + '" data-action="task-view" data-view="' + esc(m.matrixId) + '"><span class="ic">▦</span><span class="nm">' + esc(m.name) + ' (' + (counts[m.matrixId] || 0) + ')</span></div>').join('')
     $('#list').innerHTML =
       '<div class="list-head">' + esc(t('tasks')) + '</div>' +
-      '<div class="tree-row" data-action="open-matrix" data-id=""><span class="ic">📥</span><span class="nm">Inbox (' + inbox.length + ')</span></div>' +
+      viewRows +
+      '<div class="tree-row' + (state.taskView === 'inbox' ? ' active' : '') + '" data-action="task-view" data-view="inbox"><span class="ic">📥</span><span class="nm">Inbox (' + (counts.inbox || 0) + ')</span></div>' +
       matrixRows
-    $('#main').innerHTML =
-      '<h2>' + esc(t('tasks')) + '</h2>' +
-      '<div class="toolbar"><button class="btn primary" data-action="new-task">+ ' + esc(t('newNote')) + '</button><button class="btn" data-action="new-matrix">+ ' + esc(t('newFolder')) + '</button></div>' +
-      (open.length ? open.map(x =>
-        '<div class="tree-row" data-action="toggle-task" data-id="' + esc(x.taskId) + '"><span class="ic">' + (x.status === 'completed' ? '☑' : '☐') + '</span><span class="nm">' + esc(x.title) + '</span>' + (x.matrixId ? '<span class="badge">' + esc(matrixName(matrices, x.matrixId)) + '</span>' : '') + '</div>'
-      ).join('') : '<div class="empty">' + esc(t('emptyNotes')) + '</div>')
+    if (state.taskView === 'all' || state.taskView === 'today' || state.taskView === 'upcoming' || state.taskView === 'completed' || state.taskView === 'inbox') renderTaskList(matrices, all, state.taskView)
+    else renderMatrixGrid(matrices, all, state.taskView)
   } catch (e) { $('#main').innerHTML = '<div class="empty">' + esc(t('genericError')) + ': ' + esc(e.message) + '</div>' }
 }
-function matrixName(matrices, id){ const m = matrices.find(m => m.matrixId === id); return m ? m.name : id }
+function renderTaskList(matrices, all, filter){
+  const isToday = d => { const n = new Date(d); const now = new Date(); return n.getFullYear() === now.getFullYear() && n.getMonth() === now.getMonth() && n.getDate() === now.getDate() }
+  let list
+  if (filter === 'completed') list = all.filter(x => x.status === 'completed')
+  else if (filter === 'inbox') list = all.filter(x => x.matrixId === null && x.status === 'open')
+  else if (filter === 'today') list = all.filter(x => x.status === 'open' && (x.dueAt || x.scheduledAt) && (isToday(x.dueAt || x.scheduledAt) || new Date(x.dueAt || x.scheduledAt) < new Date()))
+  else if (filter === 'upcoming') list = all.filter(x => x.status === 'open' && (x.dueAt || x.scheduledAt) && new Date(x.dueAt || x.scheduledAt) > new Date())
+  else list = all.filter(x => x.status === 'open')
+  list.sort((a, b) => ((a.dueAt || a.scheduledAt) || '9999') < ((b.dueAt || b.scheduledAt) || '9999') ? -1 : 1)
+  $('#main').innerHTML =
+    '<h2>' + esc(t('tasks')) + '</h2>' +
+    '<div class="toolbar"><button class="btn primary" data-action="new-task">+ ' + esc(t('taskQuickAdd')) + '</button><button class="btn" data-action="new-matrix">+ ' + esc(t('newFolder')) + '</button></div>' +
+    (list.length ? list.map(x => taskRow(x, matrices)).join('') : '<div class="empty">' + esc(t('taskNoTasks')) + '</div>')
+}
+function renderMatrixGrid(matrices, all, matrixId){
+  const m = matrices.find(x => x.matrixId === matrixId)
+  const name = m ? m.name : matrixId
+  const open = all.filter(x => x.status === 'open' && x.matrixId === matrixId)
+  const cells = [[1, 'Q1', t('q1')], [2, 'Q2', t('q2')], [3, 'Q3', t('q3')], [4, 'Q4', t('q4')]]
+  const grid = cells.map(([q, label, title]) => {
+    const items = open.filter(x => quadrantOf(x) === q)
+    return '<div class="quad"><div class="quad-head"><b>' + label + '</b> <span class="muted">' + esc(title) + '</span><span class="count">' + items.length + '</span></div>' +
+      (items.length ? items.map(x => taskRow(x, matrices)).join('') : '<div class="empty small">—</div>') + '</div>'
+  }).join('')
+  $('#main').innerHTML =
+    '<h2>' + esc(name) + '<span class="sub">' + esc(t('taskMatrix')) + '</span></h2>' +
+    '<div class="toolbar"><button class="btn primary" data-action="new-task-matrix" data-id="' + esc(matrixId) + '">+ ' + esc(t('taskQuickAdd')) + '</button><button class="btn" data-action="new-matrix">+ ' + esc(t('newFolder')) + '</button></div>' +
+    '<div class="quad-grid">' + grid + '</div>'
+}
 
 async function renderTrash(){
   $('#list').innerHTML = ''; $('#treeToolbar').innerHTML = ''; $('#detail').innerHTML = ''
@@ -809,6 +902,7 @@ function insertAtCursor(el, text){
 
 // ── Delegated events ────────────────────────────────────────────────────────
 document.addEventListener('click', (e) => {
+  if (!e.target.closest('#wikiSuggest')) dismissWikiSuggest()
   const nav = e.target.closest('.nav button'); if (nav) { setView(nav.dataset.view); return }
   const el = e.target.closest('[data-action]'); if (!el) return
   const act = el.dataset.action, id = el.dataset.id, path = el.dataset.path, mode = el.dataset.mode
@@ -834,20 +928,73 @@ document.addEventListener('click', (e) => {
   else if (act === 'download-attachment') downloadAttachment(id)
   else if (act === 'delete-attachment') delAttachment(id)
   else if (act === 'go-attachments') setView('attachments')
-  else if (act === 'new-task') quickAddTask(null, null)
+  else if (act === 'new-task') quickTaskDialog(null, null)
+  else if (act === 'new-task-matrix') quickTaskDialog(id || null, null)
   else if (act === 'new-matrix') { const name = prompt(t('createFolderPrompt'), ''); if (name && name.trim()) api('createMatrix', { name: name.trim() }).then(() => renderTasks()) }
-  else if (act === 'open-matrix') { renderTasks() }
-  else if (act === 'toggle-task') { api('completeTask', { taskId: id }).then(() => renderTasks()) }
+  else if (act === 'task-view') setTaskView(el.dataset.view)
+  else if (act === 'note-to-task') quickTaskDialog(null, [{ kind: 'note', noteId: id }])
+  else if (act === 'selection-to-task') { const ref = selectionSourceRef(); if (ref) quickTaskDialog(null, [ref]); else toast(t('taskNoTasks'), 'warn') }
+  else if (act === 'toggle-task') { const t = el.dataset.completed === '1' ? api('reopenTask', { taskId: id }) : api('completeTask', { taskId: id }); t.then(() => renderTasks()) }
   else if (act === 'restore-note') { api('restoreNote', { noteId: id }).then(() => renderTrash()).then(refreshHeader) }
   else if (act === 'purge-note') { if (confirm(t('delNoteConfirm'))) api('purgeNote', { noteId: id }).then(() => renderTrash()).then(refreshHeader) }
   else if (act === 'restore-attachment') { api('restoreAttachment', { attachmentId: id }).then(() => renderTrash()).then(refreshHeader) }
   else if (act === 'purge-attachment') { if (confirm(t('delAttachmentConfirm'))) api('purgeAttachment', { attachmentId: id }).then(() => renderTrash()).then(refreshHeader) }
   else if (act === 'restore-folder') { api('restoreFolder', { path }).then(() => renderTrash()) }
 })
-function quickAddTask(matrixId, sourceRefs){
-  const title = prompt(t('newNotePrompt'), '')
-  if (title === null) return
-  api('createTask', { title, ...(matrixId ? { matrixId } : {}), ...(sourceRefs ? { sourceRefs } : {}) }).then(() => renderTasks())
+function selectionSourceRef(){
+  if (state.selectedNoteId === null) return null
+  const sel = window.getSelection()
+  const text = sel ? sel.toString().trim() : ''
+  if (!text || text.length > 500) return null
+  let prefix = '', suffix = ''
+  const node = sel.anchorNode
+  if (node && node.textContent) {
+    const full = node.textContent
+    const off = sel.anchorOffset
+    prefix = full.slice(Math.max(0, off - 80), off)
+    suffix = full.slice(off + text.length, off + text.length + 80)
+  }
+  return { kind: 'selection', noteId: state.selectedNoteId, exact: text, ...(prefix ? { prefix } : {}), ...(suffix ? { suffix } : {}) }
+}
+function quickTaskDialog(matrixId, sourceRefs){
+  const lastMatrix = localStorage.getItem('pkw-task-last-matrix') || ''
+  api('listMatrices').then(matrices => {
+    const opts = '<option value="">' + esc(t('taskInbox')) + '</option>' + matrices.map(m => '<option value="' + esc(m.matrixId) + '"' + (m.matrixId === (matrixId || lastMatrix) ? ' selected' : '') + '>' + esc(m.name) + '</option>').join('')
+    const srcNote = sourceRefs && sourceRefs[0] ? '<div class="form"><label>' + esc(t('noteLabel')) + '</label><span class="v mono">' + esc(sourceRefs[0].noteId) + '</span></div>' : ''
+    document.body.insertAdjacentHTML('beforeend',
+      '<div class="modal-overlay" id="taskModal"><div class="modal"><h3>' + esc(t('taskQuickAdd')) + '</h3>' +
+      '<div class="form"><label>' + esc(t('taskTitle')) + '</label><input id="tkTitle" /></div>' +
+      '<div class="form"><label>' + esc(t('taskMatrix')) + '</label><select id="tkMatrix">' + opts + '</select></div>' +
+      '<div class="form"><label>' + esc(t('taskQuadrant')) + '</label><select id="tkQuad">' +
+        '<option value="1">Q1 · ' + esc(t('q1')) + '</option><option value="2">Q2 · ' + esc(t('q2')) + '</option><option value="3">Q3 · ' + esc(t('q3')) + '</option><option value="4">Q4 · ' + esc(t('q4')) + '</option></select></div>' +
+      '<div class="form"><label>' + esc(t('taskPriority')) + '</label><select id="tkPri"><option value="">—</option><option value="1">P1</option><option value="2">P2</option><option value="3">P3</option><option value="4">P4</option></select></div>' +
+      '<div class="form"><label>' + esc(t('taskDue')) + '</label><input type="date" id="tkDue" /></div>' +
+      srcNote +
+      '<div class="toolbar"><button class="btn primary" id="tkSave">' + esc(t('taskSave')) + '</button><button class="btn" id="tkCancel">' + esc(t('taskCancel')) + '</button></div></div></div>'
+    )
+    const modal = $('#taskModal')
+    $('#tkCancel').addEventListener('click', () => modal.remove())
+    $('#tkSave').addEventListener('click', () => {
+      const title = $('#tkTitle').value.trim()
+      if (!title) { toast(t('taskTitle'), 'warn'); return }
+      const m = $('#tkMatrix').value
+      const quad = Number($('#tkQuad').value)
+      const pri = $('#tkPri').value
+      const due = $('#tkDue').value
+      if (m) localStorage.setItem('pkw-task-last-matrix', m)
+      api('createTask', {
+        title,
+        ...(m ? { matrixId: m } : {}),
+        important: quad === 1 || quad === 2,
+        urgent: quad === 1 || quad === 3,
+        ...(pri ? { priority: Number(pri) } : {}),
+        ...(due ? { dueAt: due } : {}),
+        ...(sourceRefs && sourceRefs.length ? { sourceRefs } : {}),
+      }).then(() => { modal.remove(); renderTasks() }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
+    })
+    modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove() })
+    $('#tkTitle').focus()
+  }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
 }
 $('#search').addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.value.trim()) { state.view = 'search'; render(); runSearch(e.target.value.trim()) } })
 document.addEventListener('keydown', (e) => {
