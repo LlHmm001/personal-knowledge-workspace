@@ -1432,6 +1432,7 @@ document.addEventListener('click', (e) => {
     t.then(() => { if (!isSubtask) renderTasks(); if (taskDetailRefreshSubtasks) taskDetailRefreshSubtasks() }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
   }
   else if (act === 'subtask-edit') { inlineEditSubtask(el, id) }
+  else if (act === 'subtask-toggle') { if (taskDetailToggleSubtask) taskDetailToggleSubtask(id) }
   else if (act === 'open-task-detail') taskDetailDialog(id)
   else if (act === 'task-due') { const due = prompt(t('taskDue'), ''); if (due !== null) api('updateTask', { taskId: id, patch: { dueAt: due } }).then(() => renderTasks()) }
   else if (act === 'task-delete') { const task = (state.tasksCache || []).find(x => x.taskId === id); const isSubtask = task && task.parentTaskId !== null; api('deleteTask', { taskId: id }).then(() => { if (!isSubtask) renderTasks(); if (taskDetailRefreshSubtasks) taskDetailRefreshSubtasks() }).catch(e => toast(t('genericError') + ': ' + e.message, 'err')) }
@@ -1493,6 +1494,7 @@ let taskDetailSessionSeq = 0
 let activeTaskDetailSession = 0
 let taskDetailRefreshSubtasks = null
 let taskDetailRequestClose = null
+let taskDetailToggleSubtask = null
 function inlineEditSubtask(span, taskId){
   const cur = span.textContent
   const input = document.createElement('input')
@@ -1526,7 +1528,12 @@ function taskDetailDialog(taskId){
   const prev = document.getElementById('taskDetailModal'); if (prev) prev.remove()
   const quad = quadrantOf(task)
   const srcNote = task.sourceRefs && task.sourceRefs[0] ? '<div class="form"><label>' + esc(t('noteLabel')) + '</label><span class="v mono" data-action="open-task-source" data-id="' + esc(task.sourceRefs[0].noteId) + '" data-exact="' + esc(task.sourceRefs[0].exact || '') + '" style="cursor:pointer">📄 ' + esc(task.sourceRefs[0].noteId) + '</span></div>' : ''
-  const renderSubRows = (list) => list.map(s => '<div class="subtask-row" data-id="' + esc(s.taskId) + '"><span class="ic" data-action="toggle-task" data-completed="' + (s.status === 'completed' ? '1' : '0') + '" data-id="' + esc(s.taskId) + '">' + (s.status === 'completed' ? '☑' : '☐') + '</span><span class="nm subtask-title" data-action="subtask-edit" data-id="' + esc(s.taskId) + '" title="' + esc(t('renameMove')) + '">' + esc(s.title) + '</span><span class="subtask-del" data-action="task-delete" data-id="' + esc(s.taskId) + '" title="' + esc(t('taskDelete')) + '">×</span></div>').join('')
+  // Subtask completion draft: Store baseline + local draft = Detail projection.
+  let subtaskBaseline = {}
+  let subtaskDraft = {}
+  let subtaskList = []
+  const proj = (s) => (s.taskId in subtaskDraft ? subtaskDraft[s.taskId] : (s.status === 'completed'))
+  const renderSubRows = (list) => list.map(s => '<div class="subtask-row" data-id="' + esc(s.taskId) + '"><span class="ic" data-action="subtask-toggle" data-id="' + esc(s.taskId) + '">' + (proj(s) ? '☑' : '☐') + '</span><span class="nm subtask-title" data-action="subtask-edit" data-id="' + esc(s.taskId) + '" title="' + esc(t('renameMove')) + '">' + esc(s.title) + '</span><span class="subtask-del" data-action="task-delete" data-id="' + esc(s.taskId) + '" title="' + esc(t('taskDelete')) + '">×</span></div>').join('')
   // Shell renders immediately from the already-cached task object; matrices and
   // subtasks load async and patch their own sections (never block the shell).
   const mOpts = task.matrixId ? '<option value="' + esc(task.matrixId) + '" selected>' + esc(task.matrixId) + '</option>' : '<option value="" selected>' + esc(t('taskInbox')) + '</option>'
@@ -1571,23 +1578,39 @@ function taskDetailDialog(taskId){
     document.body.appendChild(modal)
     const qs = (sel) => modal.querySelector(sel)
     const isActive = () => sessionId === activeTaskDetailSession
-    let dirty = false
+    let parentDirty = false
     let saving = false
     let subtaskSubmitting = false
+    const isDirty = () => parentDirty || Object.keys(subtaskDraft).some(k => subtaskBaseline[k] !== subtaskDraft[k])
     const updateState = () => {
       const st = qs('#tdState')
       const sv = qs('#tdSave')
-      if (st) { st.className = saving ? 'saving' : (dirty ? 'dirty' : 'saved'); st.textContent = saving ? ('… ' + t('saving')) : (dirty ? ('● ' + t('unsaved')) : ('✓ ' + t('saved'))) }
-      if (sv) { sv.disabled = !dirty || saving; sv.textContent = saving ? t('saving') : t('taskSaveEdit') }
+      const d = isDirty()
+      if (st) { st.className = saving ? 'saving' : (d ? 'dirty' : 'saved'); st.textContent = saving ? ('… ' + t('saving')) : (d ? ('● ' + t('unsaved')) : ('✓ ' + t('saved'))) }
+      if (sv) { sv.disabled = !d || saving; sv.textContent = saving ? t('saving') : t('taskSaveEdit') }
     }
-    const markDirty = () => { if (!dirty) { dirty = true; updateState() } }
+    const markDirty = () => { if (!parentDirty) { parentDirty = true; updateState() } }
+    const renderSubtaskSection = () => {
+      const box = qs('#tdSubtasks')
+      if (box) box.innerHTML = renderSubRows(subtaskList) || '<span class="muted">' + esc(t('taskNoTasks')) + '</span>'
+      const cnt = qs('#tdSubCount')
+      if (cnt) cnt.textContent = subtaskList.filter(proj).length + ' / ' + subtaskList.length
+    }
+    const toggleSubtask = (subId) => {
+      const s = subtaskList.find(x => x.taskId === subId)
+      if (!s) return
+      subtaskDraft = { ...subtaskDraft, [subId]: !proj(s) }
+      renderSubtaskSection()
+      updateState()
+    }
+    taskDetailToggleSubtask = toggleSubtask
     let guardEl = null
     const dismissGuard = () => { if (guardEl) { guardEl.remove(); guardEl = null } }
-    const close = () => { dismissGuard(); if (isActive()) activeTaskDetailSession = 0; taskDetailRefreshSubtasks = null; taskDetailRequestClose = null; modal.remove() }
+    const close = () => { dismissGuard(); if (isActive()) activeTaskDetailSession = 0; taskDetailRefreshSubtasks = null; taskDetailRequestClose = null; taskDetailToggleSubtask = null; modal.remove() }
     const requestClose = () => {
       if (saving) return
       if (guardEl) { dismissGuard(); return } // Esc/backdrop on the guard → cancel, stay
-      if (!dirty) { close(); return }
+      if (!isDirty()) { close(); return }
       // Custom three-way close guard (session-scoped element ref, no global id).
       const w = document.createElement('div')
       w.innerHTML = '<div class="modal-overlay close-guard-overlay"><div class="modal close-guard"><h3>' + esc(t('closeGuardTitle')) + '</h3><p class="muted">' + esc(t('closeGuardBody')) + '</p><div class="toolbar"><button class="btn" id="cgCancel">' + esc(t('cancel')) + '</button><button class="btn danger" id="cgDiscard">' + esc(t('discard')) + '</button><button class="btn primary" id="cgSaveClose">' + esc(t('saveAndClose')) + '</button></div></div></div>'
@@ -1603,10 +1626,12 @@ function taskDetailDialog(taskId){
     // Re-fetch + patch ONLY the #tdSubtasks section (never the whole modal).
     const refreshSubtasks = () => api('listSubtasks', { parentTaskId: taskId }).then(list => {
       if (!isActive()) return
-      const box = qs('#tdSubtasks')
-      if (box) box.innerHTML = renderSubRows(list) || '<span class="muted">' + esc(t('taskNoTasks')) + '</span>'
-      const cnt = qs('#tdSubCount')
-      if (cnt) cnt.textContent = list.filter(s => s.status === 'completed').length + ' / ' + list.length
+      subtaskList = list
+      subtaskBaseline = {}
+      for (const s of list) subtaskBaseline[s.taskId] = (s.status === 'completed')
+      // Prune pending entries for children that no longer exist (deleted).
+      for (const k of Object.keys(subtaskDraft)) if (!(k in subtaskBaseline)) delete subtaskDraft[k]
+      renderSubtaskSection()
     })
     taskDetailRefreshSubtasks = refreshSubtasks
     const doSave = (andClose) => {
@@ -1614,7 +1639,8 @@ function taskDetailDialog(taskId){
       saving = true
       updateState()
       const q = Number(qs('#tdQuad').value)
-      api('updateTask', { taskId, patch: {
+      const changes = Object.keys(subtaskDraft).filter(k => subtaskBaseline[k] !== subtaskDraft[k]).map(k => ({ taskId: k, completed: subtaskDraft[k] }))
+      const parent = api('updateTask', { taskId, patch: {
         title: qs('#tdTitle').value.trim(),
         description: qs('#tdDesc').value,
         status: qs('#tdStatus').value,
@@ -1624,9 +1650,13 @@ function taskDetailDialog(taskId){
         ...(qs('#tdSched').value ? { scheduledAt: qs('#tdSched').value } : {}),
         ...(qs('#tdDue').value ? { dueAt: qs('#tdDue').value } : {}),
         tags: (qs('#tdTags').value || '').split(',').map(s => s.trim()).filter(Boolean),
-      } }).then(() => {
+      } })
+      const childOps = changes.map(c => c.completed ? api('completeTask', { taskId: c.taskId }) : api('reopenTask', { taskId: c.taskId }))
+      Promise.all([parent, ...childOps]).then(() => {
         if (!isActive()) return
-        dirty = false
+        parentDirty = false
+        for (const c of changes) subtaskBaseline[c.taskId] = c.completed
+        subtaskDraft = {}
         saving = false
         updateState()
         renderTasks()
