@@ -148,6 +148,19 @@ describe('PKW tasks core', () => {
     expect(tasks.listTasks({ matrixId: m.matrixId })).toHaveLength(0)
   })
 
+  it('reordering one matrix preserves another matrix\'s relative order', async () => {
+    const { tasks } = await boot()
+    const work = await tasks.createMatrix({ name: '工作' })
+    const startup = await tasks.createMatrix({ name: '创业' })
+    const w1 = await tasks.createTask({ title: 'W1', matrixId: work.matrixId })
+    const w2 = await tasks.createTask({ title: 'W2', matrixId: work.matrixId })
+    const s1 = await tasks.createTask({ title: 'S1', matrixId: startup.matrixId })
+    const s2 = await tasks.createTask({ title: 'S2', matrixId: startup.matrixId })
+    await tasks.reorderTasks([w2.taskId, w1.taskId])
+    expect(tasks.listTasks({ matrixId: work.matrixId }).map(t => t.title)).toEqual(['W2', 'W1'])
+    expect(tasks.listTasks({ matrixId: startup.matrixId }).map(t => t.title)).toEqual(['S1', 'S2'])
+  })
+
   it('delete (trash) then restore a task', async () => {
     const { tasks } = await boot()
     const t = await tasks.createTask({ title: 'trash me' })

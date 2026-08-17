@@ -237,11 +237,16 @@ export class TasksService extends Service {
       if (t === undefined) continue
       next.push(t)
     }
+    const remaining: Task[] = []
     for (const [, t] of tasks.entries()) {
       if (t.deletedAt !== undefined) continue
       if (idSet.has(String(t.taskId))) continue
-      next.push(t)
+      remaining.push(t)
     }
+    // Preserve the relative order of every task NOT in this reorder scope, so
+    // reordering one matrix/quadrant never scrambles another's manual order.
+    remaining.sort((a, b) => a.manualOrder - b.manualOrder)
+    next.push(...remaining)
     let order = 0
     for (const t of next) {
       await tasks.put(t.taskId, { ...t, manualOrder: order, updatedAt: this.now() })
