@@ -192,6 +192,7 @@ aside.right h3:first-child{margin-top:0}
 .task-card.dragging{opacity:.45}
 .task-card.selected{background:var(--bg-selected);border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
 .marquee{position:fixed;border:1px solid var(--accent);background:var(--accent-soft);z-index:85;pointer-events:none}
+.graph-legend-item.dim{opacity:.35}
 .drop-over{outline:2px dashed var(--accent);outline-offset:-2px;background:var(--co-note-bg)}
 .task-src{margin-left:6px;cursor:pointer;opacity:.65}.task-src:hover{opacity:1}
 .task-mv{margin-left:auto;display:inline-flex;gap:2px;opacity:.55}.task-mv span{cursor:pointer;padding:0 5px;border-radius:4px}.task-mv span:hover{background:var(--bg-hover);opacity:1}
@@ -391,6 +392,8 @@ const state = {
   inspectorCollapsed: false,
   selectedTaskIds: new Set(),
   knowledgeTab: 'wiki',
+  wikiFolder: '',
+  graphTypes: [],
 }
 // ── View switching: navigation guard + single-flight + instrumentation ──────
 let viewSeq = 0
@@ -1564,8 +1567,19 @@ function renderSearchView(){ $('#list').innerHTML = ''; $('#treeToolbar').innerH
 // ── Knowledge view (Wiki / Graph / Search) — WeKnora-derived projection ──────
 function renderKnowledgeView(){
   const tabs = [['search', t('knowledgeSearchTab')], ['wiki', t('knowledgeWiki')], ['graph', t('knowledgeGraph')]]
-  $('#list').innerHTML = '<div class="list-head">' + esc(t('knowledge')) + '</div><div class="list-section">' + esc(t('knowledge')) + '</div>' +
+  let listHtml = '<div class="list-head">' + esc(t('knowledge')) + '</div><div class="list-section">' + esc(t('knowledge')) + '</div>' +
     tabs.map(([v, label]) => '<div class="tree-row' + (state.knowledgeTab === v ? ' active' : '') + '" data-action="knowledge-tab" data-tab="' + v + '"><span class="ic">' + (v === 'search' ? '🔍' : v === 'wiki' ? '📖' : '🕸') + '</span><span class="nm">' + esc(label) + '</span></div>').join('')
+  if (state.knowledgeTab === 'wiki') {
+    listHtml += '<div class="list-section">' + esc(t('folder')) + '</div>' +
+      '<div class="tree-row' + (state.wikiFolder === '' ? ' active' : '') + '" data-action="wiki-folder" data-folder=""><span class="ic">🗂</span><span class="nm">' + esc(t('trashAll')) + '</span></div>' +
+      '<div id="wikiFolders"></div>'
+    api('listWikiFolders').then(r => {
+      const folders = (r && r.folders) || []
+      const box = $('#wikiFolders')
+      if (box) box.innerHTML = folders.map(f => '<div class="tree-row' + (state.wikiFolder === f.id ? ' active' : '') + '" data-action="wiki-folder" data-folder="' + esc(f.id) + '"><span class="ic">📁</span><span class="nm">' + esc(f.name) + '</span><span class="badge">' + (f.page_count || 0) + '</span></div>').join('')
+    }).catch(() => {})
+  }
+  $('#list').innerHTML = listHtml
   if (state.knowledgeTab === 'search') { renderSearchView(); return }
   if (state.knowledgeTab === 'wiki') { renderWikiList(); return }
   renderGraphView()
@@ -1574,7 +1588,7 @@ async function renderWikiList(){
   $('#treeToolbar').innerHTML = ''; $('#detail').innerHTML = ''
   $('#main').innerHTML = '<div class="empty">' + esc(t('loading')) + '</div>'
   try {
-    const r = await api('listWikiPages', { pageSize: 200 })
+    const r = await loadOnce('listWikiPages', { pageSize: 200, folderId: state.wikiFolder })
     const pages = (r && r.pages) || []
     if (!pages.length) { $('#main').innerHTML = '<div class="empty"><h3>' + esc(t('wikiEmpty')) + '</h3></div>'; return }
     $('#main').innerHTML = '<h2>' + esc(t('knowledgeWiki')) + '<span class="sub">' + ((r && r.total) || pages.length) + '</span></h2>' +
@@ -1615,13 +1629,13 @@ function graphColor(type){
 function renderGraphView(){
   $('#treeToolbar').innerHTML = ''; $('#detail').innerHTML = ''
   $('#main').innerHTML = '<div class="empty">' + esc(t('loading')) + '</div>'
-  api('getWikiGraph', { mode: 'overview', limit: 500 }).then(g => {
+  api('getWikiGraph', { mode: 'overview', limit: 500, types: state.graphTypes.length ? state.graphTypes : undefined }).then(g => {
     const nodes = g.nodes || [], edges = g.edges || []
     if (!nodes.length) { $('#main').innerHTML = '<div class="empty"><h3>' + esc(t('graphEmpty')) + '</h3></div>'; return }
     $('#main').innerHTML = '<h2>' + esc(t('knowledgeGraph')) + '<span class="sub">' + (g.meta ? g.meta.total : nodes.length) + '</span></h2>' +
       '<div class="toolbar"><button class="btn small" data-action="graph-fit">' + esc(t('graphFit')) + '</button><button class="btn small" data-action="graph-toggle-rel">' + esc(t('graphHideRelations')) + '</button></div>' +
       '<canvas id="graphCanvas" style="width:100%;height:58vh;border:1px solid var(--border);border-radius:8px;background:var(--bg-surface)"></canvas>' +
-      '<div class="muted small" style="margin-top:6px">' + ['summary', 'entity', 'concept', 'synthesis', 'comparison'].map(ty => '<span class="badge" style="background:' + graphColor(ty) + ';color:#fff;margin-right:6px">' + esc(ty) + '</span>').join('') + '</div>'
+      '<div class="muted small" style="margin-top:6px">' + ['summary', 'entity', 'concept', 'synthesis', 'comparison'].map(ty => '<span class="badge graph-legend-item' + (state.graphTypes.includes(ty) ? '' : ' dim') + '" data-action="graph-filter-type" data-type="' + ty + '" style="background:' + graphColor(ty) + ';color:#fff;margin-right:6px;cursor:pointer">' + esc(ty) + '</span>').join('') + '</div>'
     drawGraph(nodes, edges)
   }).catch(() => { $('#main').innerHTML = '<div class="empty">' + esc(t('knowledgeUnavailable')) + '</div>' })
 }
@@ -2377,10 +2391,12 @@ document.addEventListener('click', (e) => {
   else if (act === 'theme-light') setTheme('light')
   else if (act === 'theme-dark') setTheme('dark')
   else if (act === 'knowledge-tab') { state.knowledgeTab = el.dataset.tab || 'wiki'; renderKnowledgeView() }
+  else if (act === 'wiki-folder') { state.wikiFolder = el.dataset.folder || ''; renderKnowledgeView() }
   else if (act === 'open-wiki-page') openWikiPage(el.dataset.slug)
   else if (act === 'back-wiki') renderWikiList()
   else if (act === 'graph-fit') { const c = $('#graphCanvas'); if (c && c._fit) c._fit() }
   else if (act === 'graph-toggle-rel') { const c = $('#graphCanvas'); if (c && c._toggleRel) c._toggleRel() }
+  else if (act === 'graph-filter-type') { const ty = el.dataset.type; const i = state.graphTypes.indexOf(ty); if (i >= 0) state.graphTypes.splice(i, 1); else state.graphTypes.push(ty); renderGraphView() }
 })
 // Trash selection is pure local state: checkbox/select-all toggles never fetch.
 document.addEventListener('change', (e) => {

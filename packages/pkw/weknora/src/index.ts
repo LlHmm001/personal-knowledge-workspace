@@ -138,8 +138,8 @@ export interface WikiFolder {
 }
 
 export interface WikiFolderList {
+  parent_id?: string
   folders?: WikiFolder[]
-  data?: WikiFolder[]
 }
 
 export interface WikiGraphNode {
@@ -390,10 +390,11 @@ export class WeKnoraClient extends Service {
 
   // ── Wiki (read-only parity; same generated result as WeKnora) ──────────────
 
-  async listWikiPages(kbId: string, opts: { query?: string; pageType?: string; page?: number; pageSize?: number } = {}): Promise<WikiPageList> {
+  async listWikiPages(kbId: string, opts: { query?: string; pageType?: string; folderId?: string; page?: number; pageSize?: number } = {}): Promise<WikiPageList> {
     const qs = new URLSearchParams()
     if (opts.query) qs.set('query', opts.query)
     if (opts.pageType) qs.set('page_type', opts.pageType)
+    if (opts.folderId !== undefined) qs.set('folder_id', opts.folderId)
     qs.set('page', String(opts.page ?? 1))
     qs.set('page_size', String(opts.pageSize ?? 200))
     return this.request<WikiPageList>('GET', `/knowledge-bases/${kbId}/wiki/pages?${qs.toString()}`)
