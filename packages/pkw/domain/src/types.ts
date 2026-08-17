@@ -391,6 +391,8 @@ export interface PkwTasksService {
   createMatrix(input: { name: string; description?: string; icon?: string; color?: string }): Promise<TaskMatrix>
   renameMatrix(matrixId: TaskMatrixId, name: string): Promise<TaskMatrix>
   archiveMatrix(matrixId: TaskMatrixId): Promise<void>
+  reassignMatrixTasks(fromMatrixId: TaskMatrixId, toMatrixId: TaskMatrixId | null): Promise<{ moved: number }>
+  removeMatrix(matrixId: TaskMatrixId, opts?: { reassignTo?: TaskMatrixId | null }): Promise<{ removed: boolean; moved: number }>
   listTasks(filter?: { matrixId?: TaskMatrixId | null; status?: TaskStatus; includeDeleted?: boolean }): Task[]
   createTask(input: CreateTaskInput): Promise<Task>
   updateTask(taskId: TaskId, patch: Partial<Omit<Task, 'taskId' | 'workspaceId' | 'createdAt'>>): Promise<Task>

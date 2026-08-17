@@ -118,6 +118,50 @@ export class TasksService extends Service {
     await this.emit('task.matrix_archived', MATRIX_AGG, String(matrixId), { matrixId: String(matrixId) })
   }
 
+  /**
+   * Bulk-move every (non-deleted) task of a matrix to another matrix (or the
+   * Inbox when `toMatrixId` is null). TaskId/sourceRefs/important/urgent are
+   * preserved; one `task.matrix_changed` event per task keeps the audit trail
+   * granular. No orphan matrixId is ever left behind on the moved tasks.
+   */
+  async reassignMatrixTasks(fromMatrixId: TaskMatrixId, toMatrixId: TaskMatrixId | null): Promise<{ moved: number }> {
+    let moved = 0
+    for (const [id, t] of [...this.reqTasks().entries()]) {
+      if (t.deletedAt !== undefined) continue
+      if (String(t.matrixId) !== String(fromMatrixId)) continue
+      await this.reqTasks().put(id, { ...t, matrixId: toMatrixId, updatedAt: this.now() })
+      await this.emit('task.matrix_changed', TASK_AGG, String(id), {
+        taskId: String(id),
+        fromMatrixId: String(fromMatrixId),
+        toMatrixId: toMatrixId === null ? null : String(toMatrixId),
+        bulk: true,
+      })
+      moved++
+    }
+    return { moved }
+  }
+
+  /**
+   * Permanently remove a matrix. Empty matrices remove directly. A non-empty
+   * matrix rejects with its task counts unless `reassignTo` is supplied, in
+   * which case all its tasks are bulk-reassigned first (Inbox = `null`).
+   */
+  async removeMatrix(matrixId: TaskMatrixId, opts: { reassignTo?: TaskMatrixId | null } = {}): Promise<{ removed: boolean; moved: number }> {
+    const m = this.reqMatrices().get(matrixId)
+    if (m === undefined) return { removed: false, moved: 0 }
+    const tasks = this.listTasks({ matrixId })
+    const open = tasks.filter(t => t.status === 'open').length
+    if (tasks.length > 0) {
+      if (opts.reassignTo === undefined) {
+        throw new Error(`pkwTasks: matrix '${matrixId}' is not empty (${open} open / ${tasks.length} total); reassign tasks or move them to Inbox first`)
+      }
+      await this.reassignMatrixTasks(matrixId, opts.reassignTo)
+    }
+    await this.reqMatrices().delete(matrixId)
+    await this.emit('task.matrix_deleted', MATRIX_AGG, String(matrixId), { matrixId: String(matrixId), moved: tasks.length })
+    return { removed: true, moved: tasks.length }
+  }
+
   // ── tasks ─────────────────────────────────────────────────────────────────
 
   listTasks(filter: { matrixId?: TaskMatrixId | null; status?: TaskStatus; includeDeleted?: boolean } = {}): Task[] {

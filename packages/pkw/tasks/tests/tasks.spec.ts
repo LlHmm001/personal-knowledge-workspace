@@ -107,6 +107,47 @@ describe('PKW tasks core', () => {
     expect(tasks.listTasks({ matrixId: m.matrixId }).map(t => t.title)).toEqual(['C', 'A', 'B'])
   })
 
+  it('removeMatrix deletes an empty matrix', async () => {
+    const { tasks } = await boot()
+    const m = await tasks.createMatrix({ name: '空矩阵' })
+    const r = await tasks.removeMatrix(m.matrixId)
+    expect(r).toEqual({ removed: true, moved: 0 })
+    expect(tasks.listMatrices({ includeArchived: true }).some(x => x.matrixId === m.matrixId)).toBe(false)
+  })
+
+  it('removeMatrix on a non-empty matrix rejects without reassignTo', async () => {
+    const { tasks } = await boot()
+    const m = await tasks.createMatrix({ name: '工作' })
+    await tasks.createTask({ title: 'A', matrixId: m.matrixId })
+    await expect(tasks.removeMatrix(m.matrixId)).rejects.toThrow('not empty')
+  })
+
+  it('removeMatrix with reassignTo bulk-moves tasks preserving TaskId/sourceRefs/important/urgent', async () => {
+    const { tasks } = await boot()
+    const work = await tasks.createMatrix({ name: '工作' })
+    const life = await tasks.createMatrix({ name: '生活' })
+    const t = await tasks.createTask({ title: '迁移我', matrixId: work.matrixId, important: true, urgent: false, sourceRefs: [{ kind: 'note', noteId: 'note_abc' }] })
+    const r = await tasks.removeMatrix(work.matrixId, { reassignTo: life.matrixId })
+    expect(r.moved).toBe(1)
+    expect(tasks.listMatrices({ includeArchived: true }).some(x => x.matrixId === work.matrixId)).toBe(false)
+    const moved = tasks.listTasks({ matrixId: life.matrixId }).find(x => x.taskId === t.taskId)!
+    expect(moved.taskId).toBe(t.taskId)
+    expect(moved.important).toBe(true)
+    expect(moved.urgent).toBe(false)
+    expect(moved.sourceRefs).toEqual([{ kind: 'note', noteId: 'note_abc' }])
+  })
+
+  it('reassignMatrixTasks bulk-moves to Inbox (null) and reports count', async () => {
+    const { tasks } = await boot()
+    const m = await tasks.createMatrix({ name: '创业' })
+    await tasks.createTask({ title: 'A', matrixId: m.matrixId })
+    await tasks.createTask({ title: 'B', matrixId: m.matrixId })
+    const r = await tasks.reassignMatrixTasks(m.matrixId, null)
+    expect(r.moved).toBe(2)
+    expect(tasks.listTasks({ matrixId: null }).some(x => x.title === 'A' || x.title === 'B')).toBe(true)
+    expect(tasks.listTasks({ matrixId: m.matrixId })).toHaveLength(0)
+  })
+
   it('delete (trash) then restore a task', async () => {
     const { tasks } = await boot()
     const t = await tasks.createTask({ title: 'trash me' })

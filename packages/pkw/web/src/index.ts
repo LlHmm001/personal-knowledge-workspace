@@ -450,6 +450,8 @@ export class PkwWebService extends Service {
       case 'createMatrix': return this.tasks.createMatrix({ name: String(args.name), ...(args.description !== undefined ? { description: String(args.description) } : {}), ...(args.icon !== undefined ? { icon: String(args.icon) } : {}), ...(args.color !== undefined ? { color: String(args.color) } : {}) })
       case 'renameMatrix': return this.tasks.renameMatrix(TaskMatrixId(String(args.matrixId)), String(args.name))
       case 'archiveMatrix': return this.tasks.archiveMatrix(TaskMatrixId(String(args.matrixId))).then(() => ({ archived: true }))
+      case 'reassignMatrixTasks': return this.tasks.reassignMatrixTasks(TaskMatrixId(String(args.matrixId)), args.toMatrixId !== undefined && args.toMatrixId !== null ? TaskMatrixId(String(args.toMatrixId)) : null)
+      case 'removeMatrix': return this.tasks.removeMatrix(TaskMatrixId(String(args.matrixId)), args.reassignTo !== undefined && args.reassignTo !== null ? { reassignTo: TaskMatrixId(String(args.reassignTo)) } : {})
       case 'listTasks': return this.tasks.listTasks({
         ...(args.matrixId !== undefined && args.matrixId !== null ? { matrixId: TaskMatrixId(String(args.matrixId)) } : {}),
         ...(args.status !== undefined ? { status: String(args.status) as never } : {}),
