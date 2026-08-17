@@ -111,6 +111,15 @@ aside.right h3:first-child{margin-top:0}
 .modal textarea{min-height:96px;resize:vertical;line-height:1.6}
 .modal .modal-actions{display:flex;gap:8px;justify-content:flex-end}
 .modal .form{margin-bottom:10px}.modal .form label{display:block;font-size:12px;color:var(--muted);margin-bottom:3px}
+#taskDetailModal .modal{width:880px;max-width:calc(100vw - 64px);max-height:88vh;overflow:auto}
+@media (max-width:800px){#taskDetailModal .modal{width:calc(100vw - 24px)}}
+.subtask-row{display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:6px;font-size:13px}
+.subtask-row:hover{background:#f3f6fb}
+.subtask-row .nm{flex:1;cursor:pointer}
+.subtask-del{opacity:0;cursor:pointer;color:var(--muted);font-size:15px;padding:0 5px;border:0;background:none}
+.subtask-row:hover .subtask-del{opacity:1}.subtask-del:hover{color:var(--err)}
+.subtask-head{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-bottom:4px;font-weight:650}
+.subtask-edit-input{flex:1;padding:4px 6px;border:1px solid var(--accent);border-radius:6px;font-size:13px;font-family:inherit}
 .quad-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.quad{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:10px;min-height:140px}
 .quad-head{display:flex;align-items:center;gap:8px;padding-bottom:6px;border-bottom:1px solid var(--border);margin-bottom:6px;font-size:13px}
 .quad-head .count{margin-left:auto;font-size:12px;color:var(--muted)}
@@ -1397,6 +1406,7 @@ document.addEventListener('click', (e) => {
   else if (act === 'selection-to-task') { const ref = selectionSourceRef(); if (ref) quickTaskDialog(null, [ref], { title: ref.exact.replace(/\\n/g, ' ').trim().slice(0, 60), description: ref.exact }); else toast(t('taskNoTasks'), 'warn') }
   else if (act === 'open-task-source') { state.highlightText = el.dataset.exact || ''; setView('notes'); openNote(id) }
   else if (act === 'toggle-task') { const t = el.dataset.completed === '1' ? api('reopenTask', { taskId: id }) : api('completeTask', { taskId: id }); t.then(() => { renderTasks(); if (taskDetailRefreshSubtasks) taskDetailRefreshSubtasks() }).catch(e => toast(t('genericError') + ': ' + e.message, 'err')) }
+  else if (act === 'subtask-edit') { inlineEditSubtask(el, id) }
   else if (act === 'open-task-detail') taskDetailDialog(id)
   else if (act === 'task-due') { const due = prompt(t('taskDue'), ''); if (due !== null) api('updateTask', { taskId: id, patch: { dueAt: due } }).then(() => renderTasks()) }
   else if (act === 'task-delete') { api('deleteTask', { taskId: id }).then(() => renderTasks()) }
@@ -1457,6 +1467,28 @@ function selectionSourceRef(){
 let taskDetailSessionSeq = 0
 let activeTaskDetailSession = 0
 let taskDetailRefreshSubtasks = null
+function inlineEditSubtask(span, taskId){
+  const cur = span.textContent
+  const input = document.createElement('input')
+  input.value = cur
+  input.className = 'subtask-edit-input'
+  span.replaceWith(input)
+  input.focus()
+  let done = false
+  const commit = () => {
+    if (done) return
+    done = true
+    const v = input.value.trim()
+    if (v && v !== cur) {
+      api('updateTask', { taskId, patch: { title: v } }).then(() => { if (taskDetailRefreshSubtasks) taskDetailRefreshSubtasks() }).catch(e => { toast(t('genericError') + ': ' + e.message, 'err'); input.value = cur })
+    } else {
+      input.replaceWith(span)
+    }
+  }
+  const cancel = () => { if (done) return; done = true; input.replaceWith(span) }
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); commit() } else if (e.key === 'Escape') { cancel() } })
+  input.addEventListener('blur', commit)
+}
 function taskDetailDialog(taskId){
   const task = (state.tasksCache || []).find(t => t.taskId === taskId)
   if (!task) return
@@ -1468,11 +1500,11 @@ function taskDetailDialog(taskId){
   const prev = document.getElementById('taskDetailModal'); if (prev) prev.remove()
   const quad = quadrantOf(task)
   const srcNote = task.sourceRefs && task.sourceRefs[0] ? '<div class="form"><label>' + esc(t('noteLabel')) + '</label><span class="v mono" data-action="open-task-source" data-id="' + esc(task.sourceRefs[0].noteId) + '" data-exact="' + esc(task.sourceRefs[0].exact || '') + '" style="cursor:pointer">📄 ' + esc(task.sourceRefs[0].noteId) + '</span></div>' : ''
-  const renderSubRows = (list) => list.map(s => '<div class="tree-row task-card" data-action="open-task-detail" data-id="' + esc(s.taskId) + '"><span class="ic" data-action="toggle-task" data-completed="' + (s.status === 'completed' ? '1' : '0') + '" data-id="' + esc(s.taskId) + '">' + (s.status === 'completed' ? '☑' : '☐') + '</span><span class="nm">' + esc(s.title) + '</span></div>').join('')
+  const renderSubRows = (list) => list.map(s => '<div class="subtask-row" data-id="' + esc(s.taskId) + '"><span class="ic" data-action="toggle-task" data-completed="' + (s.status === 'completed' ? '1' : '0') + '" data-id="' + esc(s.taskId) + '">' + (s.status === 'completed' ? '☑' : '☐') + '</span><span class="nm subtask-title" data-action="subtask-edit" data-id="' + esc(s.taskId) + '" title="' + esc(t('renameMove')) + '">' + esc(s.title) + '</span><span class="subtask-del" data-action="task-delete" data-id="' + esc(s.taskId) + '" title="' + esc(t('taskDelete')) + '">×</span></div>').join('')
   // Shell renders immediately from the already-cached task object; matrices and
   // subtasks load async and patch their own sections (never block the shell).
   const mOpts = task.matrixId ? '<option value="' + esc(task.matrixId) + '" selected>' + esc(task.matrixId) + '</option>' : '<option value="" selected>' + esc(t('taskInbox')) + '</option>'
-  const subSection = '<div class="form"><label>' + esc(t('subtasks')) + '</label><div id="tdSubtasks"><span class="muted">' + esc(t('loading')) + '</span></div><div class="toolbar" style="margin-top:4px"><input id="tdNewSub" placeholder="' + esc(t('subtaskAdd')) + '" style="flex:1" /><button class="btn small" id="tdAddSub">+</button></div></div>'
+  const subSection = '<div class="form"><div class="subtask-head"><span>' + esc(t('subtasks')) + '</span><span class="muted" id="tdSubCount"></span></div><div id="tdSubtasks"><span class="muted">' + esc(t('loading')) + '</span></div><div class="toolbar" style="margin-top:4px"><input id="tdNewSub" placeholder="' + esc(t('subtaskAdd')) + '" style="flex:1" /><button class="btn small" id="tdAddSub">+</button></div></div>'
   const wrapper = document.createElement('div')
     wrapper.innerHTML =
       '<div class="modal-overlay" id="taskDetailModal"><div class="modal"><h3>' + esc(t('taskDetail')) + '</h3>' +
@@ -1499,6 +1531,8 @@ function taskDetailDialog(taskId){
       if (!isActive()) return
       const box = qs('#tdSubtasks')
       if (box) box.innerHTML = renderSubRows(list) || '<span class="muted">' + esc(t('taskNoTasks')) + '</span>'
+      const cnt = qs('#tdSubCount')
+      if (cnt) cnt.textContent = list.filter(s => s.status === 'completed').length + ' / ' + list.length
     })
     taskDetailRefreshSubtasks = refreshSubtasks
     // Subtask create is an INDEPENDENT Task Store mutation: it must never
