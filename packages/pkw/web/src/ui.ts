@@ -263,6 +263,7 @@ const STR = {
     themeSystem:'跟随系统', themeLight:'浅色', themeDark:'深色',
     knowledge:'知识库', knowledgeIndexed:'已索引', knowledgePending:'待索引', knowledgeNotIndexed:'未索引', knowledgeParseFailed:'解析失败', relatedNotes:'相关笔记', refAttachments:'引用附件', mime:'类型',
     parseStatus:'解析状态', summary:'摘要', reparse:'重新解析', reparseStarted:'已提交重新解析',
+    noteMissing:'笔记文件已不存在', noteMissingBody:'笔记“{id}”的 Markdown 文件在工作区中找不到，可能已被外部删除或移动。', rescan:'重新扫描', removeFromWorkspace:'从工作区移除', removeMissingConfirm:'从工作区移除“{id}”？该笔记文件已不存在。此操作将清理 PKW 中的残留记录和知识库投影，无法从回收站恢复该文件。',
     knowledgeWiki:'Wiki', knowledgeGraph:'图谱', knowledgeSearchTab:'搜索', wikiGenerated:'WeKnora 生成内容', wikiOpenNote:'打开笔记', wikiEmpty:'该知识库尚未生成 Wiki 页面。', wikiSearchPlaceholder:'搜索 Wiki 页面…', graphEmpty:'图谱暂无节点。', graphFit:'适应屏幕', graphHideRelations:'隐藏关系', graphShowRelations:'显示关系', graphFull:'全库概览', knowledgeUnavailable:'WeKnora 暂不可用',
     companionNote:'建立伴随笔记', noteLocation:'笔记位置', kbIndex:'知识库索引', kbIndexHint:'索引可解析附件', uploadedNoNote:'文件已上传，但伴随笔记创建失败', uploadedCompanion:'已生成 {n} 篇伴随笔记',
     uploadProgress:'上传中…', uploadSuccess:'已上传', uploadFailed:'上传失败', searching:'搜索中…', noHits:'没有命中「{q}」。', searchHint:'输入关键词搜索本地笔记与附件（经 WeKnora hybrid search）。',
@@ -319,6 +320,7 @@ const STR = {
     themeSystem:'Follow system', themeLight:'Light', themeDark:'Dark',
     knowledge:'Knowledge', knowledgeIndexed:'Indexed', knowledgePending:'Pending', knowledgeNotIndexed:'Not indexed', knowledgeParseFailed:'Parse failed', relatedNotes:'Related notes', refAttachments:'Referenced attachments', mime:'Type',
     parseStatus:'Parse status', summary:'Summary', reparse:'Reparse', reparseStarted:'Reparse submitted',
+    noteMissing:'Note file is missing', noteMissingBody:'The Markdown file for note "{id}" cannot be found in the workspace. It may have been deleted or moved externally.', rescan:'Rescan', removeFromWorkspace:'Remove from workspace', removeMissingConfirm:'Remove "{id}" from the workspace? Its file is already missing. This will clean up the leftover PKW records and knowledge projection, and the file cannot be restored from Trash.',
     knowledgeWiki:'Wiki', knowledgeGraph:'Graph', knowledgeSearchTab:'Search', wikiGenerated:'WeKnora generated', wikiOpenNote:'Open note', wikiEmpty:'This knowledge base has no generated Wiki pages yet.', wikiSearchPlaceholder:'Search Wiki pages…', graphEmpty:'No graph nodes.', graphFit:'Fit screen', graphHideRelations:'Hide relations', graphShowRelations:'Show relations', graphFull:'Full library', knowledgeUnavailable:'WeKnora unavailable',
     companionNote:'Create companion note', noteLocation:'Note location', kbIndex:'Knowledge indexing', kbIndexHint:'Index parseable attachments', uploadedNoNote:'File uploaded, but companion note creation failed', uploadedCompanion:'Created {n} companion notes',
     uploadProgress:'Uploading…', uploadSuccess:'Uploaded', uploadFailed:'Upload failed', searching:'Searching…', noHits:'No hits for 「{q}」.', searchHint:'Type a query to search notes & attachments (via WeKnora hybrid search).',
@@ -675,7 +677,9 @@ function destroyVditor(){ if (setupLiveAttachmentRewrite._obs) { setupLiveAttach
 async function openNote(noteId){
   state.selectedNoteId = noteId; state.selectedFolder = null
   destroyVditor()
+  state.editor = { noteId, persistedMarkdown: '', dirty: false, saving: false, mode: localStorage.getItem('pkw-editor-mode') || 'live' }
   $('#main').innerHTML = '<div class="empty">' + esc(t('loading')) + '</div>'
+  $('#detail').innerHTML = '' // clear stale Inspector immediately
   try {
     const d = await api('getNote', { noteId })
     state.editor = { noteId, persistedMarkdown: d.markdown, body: d.body || '', frontmatter: d.frontmatter || '', dirty: false, saving: false, mode: localStorage.getItem('pkw-editor-mode') || 'live', observedRevision: d.note && d.note.observedRevision, contentHash: d.note && d.note.contentHash }
@@ -684,7 +688,14 @@ async function openNote(noteId){
     $('#detail').innerHTML = detailNote(d)
     await renderTree()
     kickSyncPoll(d.sync)
-  } catch (e) { $('#main').innerHTML = '<div class="empty">' + esc(t('genericError')) + ': ' + esc(e.message) + '</div>' }
+  } catch (e) {
+    if (String(e.message || '').indexOf('file is missing') >= 0) renderMissingNote(noteId)
+    else { $('#main').innerHTML = '<div class="empty">' + esc(t('genericError')) + ': ' + esc(e.message) + '</div>'; $('#detail').innerHTML = '' }
+  }
+}
+function renderMissingNote(noteId){
+  $('#main').innerHTML = '<div class="empty"><h3>⚠ ' + esc(t('noteMissing')) + '</h3><p class="muted">' + esc(t('noteMissingBody', { id: noteId })) + '</p><div class="cta"><button class="btn" data-action="rescan-notes">' + esc(t('rescan')) + '</button> <button class="btn danger" data-action="remove-missing-note" data-id="' + esc(noteId) + '">' + esc(t('removeFromWorkspace')) + '</button></div></div>'
+  $('#detail').innerHTML = '<h3>⚠ ' + esc(t('noteMissing')) + '</h3><div class="kv"><b>' + esc(t('noteId')) + '</b> <span class="v mono">' + esc(noteId) + '</span></div>'
 }
 function renderEditorShell(d){
   const mode = state.editor.mode
@@ -1090,6 +1101,17 @@ async function delNote(noteId){
     if (state.selectedNoteId === id) { state.selectedNoteId = null; state.editor = { noteId: null, persistedMarkdown: '', dirty: false, saving: false, mode: 'live' } }
     toast(t('deletedMsg'), 'ok'); render()
   } catch (e) { toast(t('genericError') + ': ' + e.message, 'err') }
+}
+function removeMissingNote(noteId){
+  trashConfirmDialog(t('removeFromWorkspace'), esc(t('removeMissingConfirm', { id: noteId })), t('removeFromWorkspace'), () => {
+    api('deleteNote', { noteId }).then(() => {
+      state.selectedNoteId = null
+      state.editor = { noteId: null, persistedMarkdown: '', dirty: false, saving: false, mode: 'live' }
+      $('#detail').innerHTML = ''
+      toast(t('deletedMsg'), 'ok')
+      renderTree(); refreshHeader()
+    }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
+  })
 }
 async function newFolder(parentPath){
   const name = prompt(t('createFolderPrompt'), ''); if (!name || !name.trim()) return
@@ -2339,6 +2361,8 @@ document.addEventListener('click', (e) => {
   else if (act === 'rename-note') renameNote(id)
   else if (act === 'move-note') moveNote(id)
   else if (act === 'delete-note') delNote(id)
+  else if (act === 'rescan-notes') { renderTree(); refreshHeader() }
+  else if (act === 'remove-missing-note') { removeMissingNote(id) }
   else if (act === 'rename-folder') renameFolder(path)
   else if (act === 'delete-folder') deleteFolder(path)
   else if (act === 'sync-note') syncEntity('note', id)

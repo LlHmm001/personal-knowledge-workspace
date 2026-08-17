@@ -350,4 +350,13 @@ describe('PKW Web Host Bridge (real Core integration)', () => {
     // Force-sync a non-indexable attachment → skipped (no KnowledgeId), so it rejects.
     await expect(web.call('syncEntity', { entityType: 'attachment', entityId: up.attachmentId })).rejects.toThrow(/did not converge/)
   })
+
+  it('ghost note: deleteNote is idempotent after external file removal', async () => {
+    const { web, dir } = await boot()
+    const n = await web.call('createNote', { relativePath: 'ghost.md', markdown: '# g\n' }) as { noteId: string }
+    await rm(join(dir, 'notes', 'ghost.md'))
+    await web.call('deleteNote', { noteId: n.noteId }) // must not throw ENOENT
+    const list = await web.call('listNotes', {}) as Array<{ noteId: string }>
+    expect(list.some(x => x.noteId === n.noteId)).toBe(false) // gone from tree
+  })
 })

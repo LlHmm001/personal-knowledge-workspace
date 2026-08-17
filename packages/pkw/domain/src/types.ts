@@ -266,6 +266,8 @@ export interface PkwNotesService {
   get(noteId: NoteId): NoteIndexRecord | undefined
   getDocument(noteId: NoteId): Promise<NoteDocument>
   resolveByPath(relativePath: string): NoteIndexRecord | undefined
+  findNoteById(noteIdStr: string): Promise<string | undefined>
+  listMissingNotes(): Promise<Array<{ noteId: string; relativePath: string }>>
   create(input: CreateNoteInput): Promise<NoteIndexRecord>
   update(noteId: NoteId, markdown: string): Promise<NoteIndexRecord>
   move(noteId: NoteId, newRelativePath: string): Promise<NoteIndexRecord>

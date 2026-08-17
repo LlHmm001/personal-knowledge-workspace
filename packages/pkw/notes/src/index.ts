@@ -152,9 +152,49 @@ export class NotesService extends Service {
   async getDocument(noteId: NoteId): Promise<NoteDocument> {
     const record = this.requireTable().get(noteId)
     if (record === undefined) throw new Error(`pkwNotes: unknown note '${noteId}'`)
-    const markdown = await this.ctx.fs.readText(await this.ctx.fs.resolve(this.handle.notePath(record.relativePath)))
+    let markdown: string
+    let rel = record.relativePath
+    try {
+      markdown = await this.ctx.fs.readText(await this.ctx.fs.resolve(this.handle.notePath(rel)))
+    } catch {
+      // Canonical file missing at the recorded path. Attempt NoteId reconcile:
+      // an external move/rename keeps the frontmatter id, so relocate by NoteId
+      // (never mint a new NoteId).
+      const relocated = await this.findNoteById(String(noteId))
+      if (relocated !== undefined && relocated !== rel) {
+        await this.requirePaths().delete(rel)
+        await this.putRecord({ ...record, relativePath: relocated, updatedAt: new Date().toISOString() }, relocated)
+        rel = relocated
+        markdown = await this.ctx.fs.readText(await this.ctx.fs.resolve(this.handle.notePath(relocated)))
+      } else {
+        throw new Error(`pkwNotes: note '${noteId}' file is missing`)
+      }
+    }
     const attachments = collectManagedLinks(record.workspaceId, markdown)
-    return { note: record, markdown, attachments }
+    return { note: { ...record, relativePath: rel }, markdown, attachments }
+  }
+
+  /** Scan the workspace for a Markdown file whose frontmatter id equals `noteIdStr`. */
+  async findNoteById(noteIdStr: string): Promise<string | undefined> {
+    const { parseFrontmatter } = await import('./frontmatter.ts')
+    const observed = new Map<string, { target: import('@deepseek-ai/dsh-fs').FsTarget; relativePath: string; markdown: string; hash: string }>()
+    await walkNotes(this.ctx, this.handle, observed)
+    for (const [rel, obs] of observed) {
+      const parsed = parseFrontmatter(obs.markdown)
+      if (parsed.frontmatter.id === noteIdStr) return rel
+    }
+    return undefined
+  }
+
+  /** List non-deleted registry records whose canonical Markdown file is missing. */
+  async listMissingNotes(): Promise<Array<{ noteId: string; relativePath: string }>> {
+    const out: Array<{ noteId: string; relativePath: string }> = []
+    for (const [, record] of this.requireTable().entries()) {
+      if (record.deletedAt !== undefined) continue
+      const stat = await this.ctx.fs.stat(await this.ctx.fs.resolve(this.handle.notePath(record.relativePath)))
+      if (stat === undefined) out.push({ noteId: String(record.noteId), relativePath: record.relativePath })
+    }
+    return out
   }
 
   resolveByPath(relativePath: string): NoteIndexRecord | undefined {
@@ -269,10 +309,12 @@ export class NotesService extends Service {
   async delete(noteId: NoteId): Promise<void> {
     const existing = this.requireTable().get(noteId)
     if (existing === undefined || existing.deletedAt !== undefined) return
-    await this.ctx.fs.rename(
-      await this.ctx.fs.resolve(this.handle.notePath(existing.relativePath)),
-      await this.ctx.fs.resolve(this.handle.archivePath(existing.relativePath)),
-    )
+    // Idempotent for a canonical file that is already absent: skip the rename
+    // (nothing to archive) but still run the soft-delete lifecycle.
+    const src = await this.ctx.fs.resolve(this.handle.notePath(existing.relativePath))
+    if (await this.ctx.fs.stat(src) !== undefined) {
+      await this.ctx.fs.rename(src, await this.ctx.fs.resolve(this.handle.archivePath(existing.relativePath)))
+    }
     const payload: NoteEventPayload = {
       noteId: String(noteId),
       relativePath: existing.relativePath,

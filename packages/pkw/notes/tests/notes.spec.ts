@@ -373,4 +373,41 @@ describe('pkw notes + attachments core', () => {
     expect(notes.getOrder('G').map(o => o.id)).toEqual([String(c.noteId), String(a.noteId), String(b.noteId)])
     expect(notes.getOrder('F')).toEqual([])
   })
+
+  it('delete is idempotent when the canonical file is externally removed', async () => {
+    const { notes, dir } = await boot()
+    const note = await notes.create({ relativePath: 'ghost.md', markdown: '# ghost\n' })
+    await rm(join(dir, 'notes', 'ghost.md'))
+    await notes.delete(note.noteId) // must NOT throw ENOENT
+    expect(notes.get(note.noteId)!.deletedAt).toBeDefined()
+    await notes.delete(note.noteId) // second delete: no-op
+    expect(notes.get(note.noteId)!.deletedAt).toBeDefined()
+  })
+
+  it('getDocument relocates by NoteId when the file was externally moved', async () => {
+    const { notes, dir } = await boot()
+    const note = await notes.create({ relativePath: 'a.md', markdown: '# a\n' })
+    const idStr = String(note.noteId)
+    await rm(join(dir, 'notes', 'a.md'))
+    await writeFile(join(dir, 'notes', 'moved.md'), '---\nid: ' + idStr + '\n---\n\n# a moved\n')
+    const doc = await notes.getDocument(note.noteId) // should relocate to moved.md
+    expect(doc.note.relativePath).toBe('moved.md')
+    expect(doc.markdown).toContain('# a moved')
+  })
+
+  it('getDocument throws a distinct missing error when the file is truly gone', async () => {
+    const { notes, dir } = await boot()
+    const note = await notes.create({ relativePath: 'gone.md', markdown: '# gone\n' })
+    await rm(join(dir, 'notes', 'gone.md'))
+    await expect(notes.getDocument(note.noteId)).rejects.toThrow(/file is missing/)
+  })
+
+  it('listMissingNotes detects registry records whose file is missing', async () => {
+    const { notes, dir } = await boot()
+    const a = await notes.create({ relativePath: 'a.md', markdown: '# a\n' })
+    await notes.create({ relativePath: 'b.md', markdown: '# b\n' })
+    await rm(join(dir, 'notes', 'a.md'))
+    const missing = await notes.listMissingNotes()
+    expect(missing.map(m => m.noteId)).toEqual([String(a.noteId)])
+  })
 })

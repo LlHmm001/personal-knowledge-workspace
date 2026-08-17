@@ -156,4 +156,12 @@ describe('PKW web UI (served page)', () => {
     expect(js).toContain("api('getWikiGraph'")
     expect(js).toContain('graphCanvas')
   })
+
+  it('wires missing-canonical-note recovery (missing state + remove + idempotent delete)', () => {
+    const js = script()
+    expect(js).toContain('renderMissingNote')
+    expect(js).toContain('removeMissingNote')
+    expect(js).toContain('remove-missing-note')
+    expect(js).toContain('rescan-notes')
+  })
 })
