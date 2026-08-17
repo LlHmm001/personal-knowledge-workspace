@@ -709,28 +709,40 @@ function updateSaveStatus(){
   else if (state.editor.dirty) { st.className = 'dirty'; st.textContent = '● ' + t('unsaved') }
   else { st.className = 'saved'; st.textContent = '✓ ' + t('saved') }
 }
+function applyPreviewHighlight(pv){
+  const q = state.highlightText
+  if (!q) return
+  state.highlightText = ''
+  const walker = document.createTreeWalker(pv, NodeFilter.SHOW_TEXT)
+  let n
+  while ((n = walker.nextNode())) {
+    const i = n.nodeValue.indexOf(q)
+    if (i >= 0) {
+      const mark = document.createElement('mark')
+      mark.textContent = q
+      const tail = n.splitText(i + q.length)
+      const head = n.splitText(i)
+      head.parentNode.replaceChild(mark, head)
+      mark.scrollIntoView({ block: 'center' })
+      break
+    }
+  }
+}
 function renderPreview(){
   const fm = parseFrontmatterClient(state.editor.persistedMarkdown || '')
   const pv = $('#preview')
-  if (pv) pv.innerHTML = renderMarkdown(fm.body) || '<span class="muted">' + esc(t('emptyPreview')) + '</span>'
-  const q = state.highlightText
-  if (q && pv) {
-    const walker = document.createTreeWalker(pv, NodeFilter.SHOW_TEXT)
-    let n
-    while ((n = walker.nextNode())) {
-      const i = n.nodeValue.indexOf(q)
-      if (i >= 0) {
-        const mark = document.createElement('mark')
-        mark.textContent = q
-        const tail = n.splitText(i + q.length)
-        const head = n.splitText(i)
-        head.parentNode.replaceChild(mark, head)
-        mark.scrollIntoView({ block: 'center' })
-        break
-      }
-    }
-    state.highlightText = ''
-  }
+  if (!pv) return
+  const body = fm.body
+  const finish = () => applyPreviewHighlight(pv)
+  // First paint: synchronous homemade fallback (instant), then the canonical
+  // Host Lute render replaces it. On Lute failure the fallback stays.
+  pv.innerHTML = renderMarkdown(body) || '<span class="muted">' + esc(t('emptyPreview')) + '</span>'
+  if (!body.trim()) { finish(); return }
+  api('renderMarkdown', { markdown: body }).then(html => {
+    if (!pv.isConnected) return
+    pv.innerHTML = html || '<span class="muted">' + esc(t('emptyPreview')) + '</span>'
+    finish()
+  }).catch(() => { finish() })
 }
 async function openWikiTarget(target){
   // resolve [[Note]] target to a stable NoteId via the tree/title index.

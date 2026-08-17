@@ -24,17 +24,16 @@ Observed output:
 | GFM table | ✅ `<table><thead>…` | correct |
 | fenced code | ✅ `<pre><code class="language-js">` | correct, language preserved |
 | heading / list / blockquote | ✅ | correct |
-| callout `> [!NOTE]` | ❌ renders as plain `<blockquote><p>[!NOTE]…` | **`callout:true` does not trigger callout rendering in raw Lute** |
+| callout `> [!NOTE]` | ✅ `<div class="callout" data-subtype="NOTE">…` | **requires `lute.SetCallout(true)`, NOT `Lute.New({callout:true})`** (see Update below) |
 | wiki link `[[…]]` | ❌ (not a Lute core syntax) | PKW/Obsidian extension |
 
 ## Conclusion
 
 1. **Lute-only is feasible for standard Markdown** (table/code/heading/…), and `lute.min.js` loads standalone (`global.Lute` with `New()` → `Md2HTML()`).
-2. **Lute's core does NOT natively render Obsidian callouts or PKW wiki links** — these are PKW extensions. Vditor's *IR mode* shows callouts visually through Vditor's own preview/CSS layer, not through raw `Lute.Md2HTML`.
-3. Therefore a **PKW Markdown Extension Layer is genuinely required**, not optional:
-   - `parseCallout()` / callout recognition (shared by Live + Reading)
-   - wiki-link recognition
-   - managed-attachment recognition
+2. **Lute's core DOES natively render Obsidian callouts** via `lute.SetCallout(true)` (the earlier `Lute.New({callout:true})` probe used the wrong API and produced a false negative). Wiki links `[[…]]` are NOT Lute syntax and still need a PKW extension.
+3. Therefore a **PKW Markdown Extension Layer is still required, but it is now minimal**:
+   - callout recognition — NOT needed (Lute `SetCallout(true)` renders it; only CSS is needed)
+   - wiki-link recognition + protect/restore (the only pre/post-processor step)
 
 ## Decision
 
@@ -53,3 +52,10 @@ Observed output:
 - Live-side callout visual box (Vditor IR) still shows blockquote — needs Vditor `afterRender`/render-hook wiring.
 - Reading-side Lute.Md2HTML integration is verified feasible but not yet wired (fallback homemade renderer still primary).
 - `fixtures/editor-compatibility.md` + automated parity tests pending.
+
+## Update (Reading→Lute adapter wired)
+
+- **Correction:** `lute.SetCallout(true)` renders Obsidian callouts natively (the earlier `New({callout:true})` probe was a false negative). Vditor's own `MARKDOWN_OPTIONS` uses `callout: true` via `setLute` → `lute.SetCallout(options.callout)`.
+- **Wired:** Host-side `renderMarkdown` RPC (`packages/pkw/web/src/lute.ts`) loads the pinned `lute.min.js` into an isolated `node:vm` sandbox once (lazy singleton), runs `protectWikiLinks → Md2HTML → restoreWikiLinks`, and returns HTML. `renderPreview()` now paints the homemade renderer synchronously as a first-paint fallback, then replaces it with the canonical Lute HTML; on Lute failure the fallback stays.
+- **Extension layer is now minimal:** `packages/pkw/domain/src/lute-pipeline.ts` (pure) only protects/restores wiki links (`[[X]]`, `[[X|Alias]]`, `![[X]]`), skipping fenced + inline code, with HTML-escaped output. Callouts/tables/code/footnotes/inline are Lute-native.
+- **Still deferred:** Live-side callout CSS/visual box in IR, wiki-link CLICK wiring (`openWikiTarget` is not yet bound), attachment-card image src resolution, and the fixture browser-acceptance pass.

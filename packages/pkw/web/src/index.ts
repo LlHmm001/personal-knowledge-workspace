@@ -31,6 +31,7 @@ import TasksService from '@deepseek-ai/dsh-pkw-tasks'
 import WeKnoraClient from '@deepseek-ai/dsh-pkw-weknora'
 import WeKnoraSyncService from '@deepseek-ai/dsh-pkw-weknora-sync'
 import { renderPage } from './ui.ts'
+import { renderMarkdownToHtml } from './lute.ts'
 
 export interface Config {
   /** Workspace root directory (notes/ + attachments/ live under it). */
@@ -294,6 +295,10 @@ export class PkwWebService extends Service {
           attachments: doc.attachments.map(a => ({ attachmentId: String(a.attachmentId), relativePath: a.relativePath })),
           sync: this.syncView('note', String(noteId), this.syncSnapshot()),
         }
+      }
+      case 'renderMarkdown': {
+        // Reading-mode HTML via the shared Lute engine (callout/table/code/wiki).
+        return renderMarkdownToHtml(String(args.markdown ?? ''))
       }
       case 'createNote': {
         const rec = await this.notes.create({ relativePath: String(args.relativePath), markdown: String(args.markdown) })
