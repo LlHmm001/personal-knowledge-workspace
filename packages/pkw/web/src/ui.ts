@@ -1659,11 +1659,27 @@ function taskDetailDialog(taskId){
       for (const k of Object.keys(subtaskDraft)) if (!(k in subtaskBaseline)) delete subtaskDraft[k]
       if (prevKey !== nextKey) renderSubtaskSection()
     }
-    // Cache-first + stale-while-revalidate + dedup (no duplicate in-flight request).
+    // Cache-first + first-open tasksCache seed + stale-while-revalidate + dedup.
     const refreshSubtasks = () => {
+      let seedSource = 'none'
       const cached = subtaskCache.get(taskId)
-      if (cached) applyList(cached) // render cached immediately, then revalidate
-      return fetchSubtasks(taskId).then(list => { if (isActive()) applyList(list) })
+      if (cached !== undefined) { seedSource = 'subtask-cache'; applyList(cached) }
+      else {
+        // First-open seed from the existing full tasksCache snapshot (root + child).
+        const tc = state.tasksCache || []
+        if (tc.length > 0) {
+          const seed = tc.filter(t => t.parentTaskId === taskId)
+          seedSource = 'tasks-cache'
+          subtaskCache.set(taskId, seed)
+          applyList(seed) // positive (or valid empty) projection — no loading flash
+        }
+      }
+      const t0 = performance.now()
+      return fetchSubtasks(taskId).then(list => {
+        const dur = performance.now() - t0
+        console.debug('[pkw.subtasks] seed=' + seedSource + ' revalidateMs=' + Math.round(dur) + ' count=' + list.length)
+        if (isActive()) applyList(list)
+      })
     }
     taskDetailRefreshSubtasks = refreshSubtasks
     const doSave = (andClose) => {
@@ -1705,7 +1721,17 @@ function taskDetailDialog(taskId){
       subtaskSubmitting = true
       const pq = quadrantOf(task)
       api('createTask', { title, parentTaskId: taskId, ...(task.matrixId ? { matrixId: task.matrixId } : {}), important: pq === 1 || pq === 2, urgent: pq === 1 || pq === 3 })
-        .then(() => refreshSubtasks())
+        .then(created => {
+          // Optimistically append the new child to the cache so the cache-first
+          // paint shows it immediately; the revalidate below reconciles with store.
+          if (created && created.taskId) {
+            const cached = subtaskCache.get(taskId) || []
+            if (!cached.some(x => x.taskId === created.taskId)) {
+              subtaskCache.set(taskId, cached.concat([created]))
+            }
+          }
+          return refreshSubtasks()
+        })
         .then(() => {
           if (!isActive()) return
           input.value = ''

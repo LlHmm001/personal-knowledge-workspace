@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyCompletionToggle, baselineFromSubtasks, completedCount, deriveCompletionChanges, isCompletionDirty, projectionOf, removeCompletionDraft } from '../src/index.ts'
+import { applyCompletionToggle, baselineFromSubtasks, completedCount, deriveCompletionChanges, deriveSubtaskSeed, isCompletionDirty, projectionOf, removeCompletionDraft } from '../src/index.ts'
 
 describe('subtask completion draft', () => {
   const base = { a: false, b: true, c: false }
@@ -41,5 +41,31 @@ describe('subtask completion draft', () => {
   it('removeCompletionDraft drops a pending entry', () => {
     const d = { a: true, b: false }
     expect(removeCompletionDraft(d, 'a')).toEqual({ b: false })
+  })
+
+  it('deriveSubtaskSeed: subtaskCache wins over tasksCache', () => {
+    const r = deriveSubtaskSeed('p', [{ taskId: 'x', title: 'X', status: 'open' }], [{ taskId: 'x', title: 'X', status: 'completed', parentTaskId: 'p' }])
+    expect(r.source).toBe('subtask-cache')
+    expect(r.items).toEqual([{ taskId: 'x', title: 'X', status: 'open' }])
+  })
+
+  it('deriveSubtaskSeed: tasksCache positive seed', () => {
+    const tasks = [{ taskId: 'a', title: 'A', status: 'open', parentTaskId: 'p' }, { taskId: 'b', title: 'B', status: 'open', parentTaskId: null }]
+    const r = deriveSubtaskSeed('p', undefined, tasks)
+    expect(r.source).toBe('tasks-cache')
+    expect(r.items).toEqual([{ taskId: 'a', title: 'A', status: 'open' }])
+  })
+
+  it('deriveSubtaskSeed: empty tasksCache → none (unknown, not empty)', () => {
+    const r = deriveSubtaskSeed('p', undefined, [])
+    expect(r.source).toBe('none')
+    expect(r.items).toEqual([])
+  })
+
+  it('deriveSubtaskSeed: non-empty snapshot with no children → tasks-cache empty (valid no-subtask)', () => {
+    const tasks = [{ taskId: 'r', title: 'R', status: 'open', parentTaskId: null }]
+    const r = deriveSubtaskSeed('p', undefined, tasks)
+    expect(r.source).toBe('tasks-cache')
+    expect(r.items).toEqual([])
   })
 })
