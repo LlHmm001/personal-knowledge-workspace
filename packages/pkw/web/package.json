@@ -6,7 +6,14 @@
   "main": "src/index.ts",
   "types": "src/index.ts",
   "dependencies": {
+    "@deepseek-ai/dsh-pkw-attachments": "workspace:*",
+    "@deepseek-ai/dsh-pkw-domain": "workspace:*",
+    "@deepseek-ai/dsh-pkw-events": "workspace:*",
+    "@deepseek-ai/dsh-pkw-notes": "workspace:*",
     "@deepseek-ai/dsh-pkw-tasks": "workspace:*",
+    "@deepseek-ai/dsh-pkw-weknora": "workspace:*",
+    "@deepseek-ai/dsh-pkw-weknora-sync": "workspace:*",
+    "@deepseek-ai/dsh-pkw-workspace": "workspace:*",
     "vditor": "^3.11.1"
   }
 }

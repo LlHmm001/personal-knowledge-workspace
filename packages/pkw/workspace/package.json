@@ -4,5 +4,8 @@
   "description": "PKW workspace core (ctx.pkwWorkspace): workspace layout, path safety over ctx.fs, OperationContext factory; hard-depends on ctx.pkwEvents for mutations.",
   "type": "module",
   "main": "src/index.ts",
-  "types": "src/index.ts"
+  "types": "src/index.ts",
+  "dependencies": {
+    "@deepseek-ai/dsh-pkw-domain": "workspace:*"
+  }
 }

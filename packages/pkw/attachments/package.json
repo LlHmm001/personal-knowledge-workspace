@@ -5,5 +5,8 @@
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",
-  "dependencies": {}
+  "dependencies": {
+    "@deepseek-ai/dsh-pkw-domain": "workspace:*",
+    "@deepseek-ai/dsh-pkw-workspace": "workspace:*"
+  }
 }

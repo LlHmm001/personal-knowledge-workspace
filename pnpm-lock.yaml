@@ -21,7 +21,14 @@ importers:
         specifier: ^4.1.8
         version: 4.1.10(@types/node@22.20.1)(vite@8.2.1(@types/node@22.20.1))
 
-  packages/pkw/attachments: {}
+  packages/pkw/attachments:
+    dependencies:
+      '@deepseek-ai/dsh-pkw-domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@deepseek-ai/dsh-pkw-workspace':
+        specifier: workspace:*
+        version: link:../workspace
 
   packages/pkw/base: {}
 
@@ -31,17 +38,53 @@ importers:
         specifier: ^4.4.3
         version: 4.4.3
 
-  packages/pkw/events: {}
+  packages/pkw/events:
+    dependencies:
+      '@deepseek-ai/dsh-pkw-domain':
+        specifier: workspace:*
+        version: link:../domain
 
-  packages/pkw/notes: {}
+  packages/pkw/notes:
+    dependencies:
+      '@deepseek-ai/dsh-pkw-domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@deepseek-ai/dsh-pkw-workspace':
+        specifier: workspace:*
+        version: link:../workspace
 
-  packages/pkw/tasks: {}
+  packages/pkw/tasks:
+    dependencies:
+      '@deepseek-ai/dsh-pkw-domain':
+        specifier: workspace:*
+        version: link:../domain
 
   packages/pkw/web:
     dependencies:
+      '@deepseek-ai/dsh-pkw-attachments':
+        specifier: workspace:*
+        version: link:../attachments
+      '@deepseek-ai/dsh-pkw-domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@deepseek-ai/dsh-pkw-events':
+        specifier: workspace:*
+        version: link:../events
+      '@deepseek-ai/dsh-pkw-notes':
+        specifier: workspace:*
+        version: link:../notes
       '@deepseek-ai/dsh-pkw-tasks':
         specifier: workspace:*
         version: link:../tasks
+      '@deepseek-ai/dsh-pkw-weknora':
+        specifier: workspace:*
+        version: link:../weknora
+      '@deepseek-ai/dsh-pkw-weknora-sync':
+        specifier: workspace:*
+        version: link:../weknora-sync
+      '@deepseek-ai/dsh-pkw-workspace':
+        specifier: workspace:*
+        version: link:../workspace
       vditor:
         specifier: ^3.11.1
         version: 3.11.3
@@ -50,11 +93,21 @@ importers:
 
   packages/pkw/weknora-sync:
     dependencies:
+      '@deepseek-ai/dsh-pkw-domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@deepseek-ai/dsh-pkw-weknora':
+        specifier: workspace:*
+        version: link:../weknora
       zod:
         specifier: ^4.4.3
         version: 4.4.3
 
-  packages/pkw/workspace: {}
+  packages/pkw/workspace:
+    dependencies:
+      '@deepseek-ai/dsh-pkw-domain':
+        specifier: workspace:*
+        version: link:../domain
 
 packages:
 
