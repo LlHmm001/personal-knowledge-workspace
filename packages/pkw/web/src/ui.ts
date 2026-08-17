@@ -39,6 +39,7 @@ aside{border-right:1px solid var(--border);background:var(--panel);display:flex;
 .tree-row .ic{flex:0 0 auto;font-size:12px}
 .tree-row .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1 1 auto}
 .tree-row .badge{margin-left:2px}
+.list-section{padding:10px 12px 4px;font-size:11px;letter-spacing:.04em;color:var(--muted);font-weight:650;text-transform:uppercase}
 .tree-row.note .nm{font-weight:500}
 .tree-children{margin-left:14px;border-left:1px solid var(--border);padding-left:4px}
 main{overflow:auto;padding:20px 24px;background:var(--bg)}
@@ -142,7 +143,7 @@ mark{background:#ffe9a8;border-radius:2px;padding:0 2px}
 <script>
 const STR = {
   zh: {
-    overview:'总览', notes:'笔记', attachments:'附件', tasks:'待办', trash:'回收站', search:'搜索',
+    overview:'总览', notes:'笔记', attachments:'附件库', tasks:'待办', trash:'回收站', search:'搜索',
     searchPlaceholder:'搜索知识库 (hybrid search)…', workspaceLabel:'工作区', localSummary:'本地: {n} 笔记 · {m} 文件',
     connected:'已连接', unavailable:'不可用', notConfigured:'未配置', error:'错误',
     overviewTitle:'工作区概览', overviewNotes:'笔记', overviewAttachments:'附件', overviewMappings:'已同步对象', overviewPendingSync:'待同步', overviewSyncErrors:'同步错误',
@@ -152,13 +153,15 @@ const STR = {
     unsaved:'未保存', saved:'已保存', saveFailed:'保存失败',
     preview:'预览', newNotePrompt:'笔记标题（路径自动生成）', renamePrompt:'新相对路径', delNoteConfirm:'删除这篇笔记？', deletedMsg:'已删除', selectNote:'从左侧选择或新建一篇笔记。',
     untitled:'untitled', notSynced:'未同步', synced:'已同步', syncing:'同步中', pending:'待同步', failed:'失败', stale:'已过期', deleted:'已删除',
-    upload:'上传文件', emptyAttachments:'还没有附件。', attachmentsDesc:'上传 → 本地保存 → 异步同步到 WeKnora。', size:'大小', download:'下载', delAttachmentConfirm:'删除该附件？', attachmentDetailHint:'选中附件查看详情。',
+    upload:'上传文件', emptyAttachments:'还没有附件。', attachmentsDesc:'管理笔记中上传的文件。', size:'大小', download:'下载', delAttachmentConfirm:'删除该附件？', attachmentDetailHint:'选中附件查看详情。',
+    newMatrix:'新建四象限', smartViews:'智能视图', matrices:'四象限',
     uploadProgress:'上传中…', uploadSuccess:'已上传', uploadFailed:'上传失败', searching:'搜索中…', noHits:'没有命中「{q}」。', searchHint:'输入关键词搜索本地笔记与附件（经 WeKnora hybrid search）。',
     score:'得分', openNote:'打开笔记', openAttachment:'打开附件', externalWeKnora:'WeKnora 外部', noteLabel:'笔记', attachmentLabel:'附件',
     details:'详情', noteId:'NoteId', attachmentId:'AttachmentId', path:'路径', revision:'版本', updated:'更新时间', lastError:'最近错误', maintenance:'维护', advanced:'高级',
     workspaceSummary:'工作区摘要', kb:'知识库', state:'状态', parse:'解析', syncSection:'WeKnora 同步', noSyncInfo:'尚未同步。',
     reconcileDone:'重建完成', reconcileResult:'笔记修复 {a} · 附件修复 {b} · 待同步 {c} · 已删 {d}', syncingAll:'正在同步…', genericError:'操作失败', ok:'完成', emptyPreview:'（空）', searchFailed:'搜索失败',
-    folder:'文件夹', rootFolder:'（根目录）', newNoteHere:'在此新建笔记', newSubfolder:'新建子文件夹', renameFolder:'重命名', moveTo:'移动到…', deleteFolder:'删除文件夹',
+    folder:'文件夹', rootFolder:'（根目录）', newNoteHere:'在此新建笔记', newSubfolder:'新建子文件夹', renameFolder:'重命名', moveTo:'移动到…', deleteFolder:'删除文件夹', trashFolder:'移入回收站',
+    folderTrashTitle:'此文件夹包含 {n} 个笔记 · {m} 个子文件夹', folderTrashWhole:'整个文件夹和全部内容移入回收站', folderTrashKeep:'保留内容：移到上一级，仅删除当前文件夹',
     folderRenamePrompt:'新文件夹名称', folderDeleteConfirm:'删除文件夹「{n}」？', folderNotEmpty:'文件夹不为空，无法删除。', moveNoteTo:'移动笔记到', moveUp:'上移', moveDown:'下移',
     sortMode:'排序', sortManual:'手动', sortTitle:'标题', sortUpdated:'更新时间', cancel:'取消', createFolderPrompt:'文件夹名称', folderCreated:'文件夹已创建', selectFolder:'选择一个文件夹。',
     modeLive:'实时预览', modeSource:'源码', modeReading:'阅读',
@@ -174,7 +177,7 @@ const STR = {
     editorLoading:'正在加载编辑器…', buildInfo:'构建信息',
   },
   en: {
-    overview:'Overview', notes:'Notes', attachments:'Attachments', tasks:'Tasks', trash:'Trash', search:'Search',
+    overview:'Overview', notes:'Notes', attachments:'Attachment library', tasks:'Tasks', trash:'Trash', search:'Search',
     searchPlaceholder:'Search knowledge base (hybrid search)…', workspaceLabel:'Workspace', localSummary:'Local: {n} notes · {m} files',
     connected:'Connected', unavailable:'Unavailable', notConfigured:'Not configured', error:'error',
     overviewTitle:'Workspace Overview', overviewNotes:'Notes', overviewAttachments:'Attachments', overviewMappings:'Synced objects', overviewPendingSync:'Pending sync', overviewSyncErrors:'Sync errors',
@@ -184,13 +187,15 @@ const STR = {
     unsaved:'Unsaved', saved:'Saved', saveFailed:'Save failed',
     preview:'Preview', newNotePrompt:'Note title (path is auto-generated)', renamePrompt:'New relative path', delNoteConfirm:'Delete this note?', deletedMsg:'Deleted', selectNote:'Select or create a note from the left.',
     untitled:'untitled', notSynced:'Not synced', synced:'Synced', syncing:'Syncing', pending:'Pending', failed:'Failed', stale:'Stale', deleted:'Deleted',
-    upload:'Upload file', emptyAttachments:'No attachments yet.', attachmentsDesc:'Upload → local save → async WeKnora sync.', size:'Size', download:'Download', delAttachmentConfirm:'Delete this attachment?', attachmentDetailHint:'Select an attachment to view details.',
+    upload:'Upload file', emptyAttachments:'No attachments yet.', attachmentsDesc:'Manage files uploaded in notes.', size:'Size', download:'Download', delAttachmentConfirm:'Delete this attachment?', attachmentDetailHint:'Select an attachment to view details.',
+    newMatrix:'New matrix', smartViews:'Smart views', matrices:'Matrices',
     uploadProgress:'Uploading…', uploadSuccess:'Uploaded', uploadFailed:'Upload failed', searching:'Searching…', noHits:'No hits for 「{q}」.', searchHint:'Type a query to search notes & attachments (via WeKnora hybrid search).',
     score:'score', openNote:'Open note', openAttachment:'Open attachment', externalWeKnora:'external WeKnora', noteLabel:'Note', attachmentLabel:'Attachment',
     details:'Details', noteId:'NoteId', attachmentId:'AttachmentId', path:'Path', revision:'Revision', updated:'Updated', lastError:'Last error', maintenance:'Maintenance', advanced:'Advanced',
     workspaceSummary:'Workspace summary', kb:'KB', state:'State', parse:'Parse', syncSection:'WeKnora Sync', noSyncInfo:'Not synced yet.',
     reconcileDone:'Reconcile done', reconcileResult:'Notes repaired {a} · attachments repaired {b} · dirty {c} · deleted {d}', syncingAll:'Syncing…', genericError:'Operation failed', ok:'Done', emptyPreview:'(empty)', searchFailed:'Search failed',
-    folder:'Folder', rootFolder:'(root)', newNoteHere:'New note here', newSubfolder:'New subfolder', renameFolder:'Rename', moveTo:'Move to…', deleteFolder:'Delete folder',
+    folder:'Folder', rootFolder:'(root)', newNoteHere:'New note here', newSubfolder:'New subfolder', renameFolder:'Rename', moveTo:'Move to…', deleteFolder:'Delete folder', trashFolder:'Move to trash',
+    folderTrashTitle:'This folder contains {n} notes · {m} subfolders', folderTrashWhole:'Move the whole folder and all contents to trash', folderTrashKeep:'Keep contents: move to parent, delete only this folder',
     folderRenamePrompt:'New folder name', folderDeleteConfirm:'Delete folder 「{n}」?', folderNotEmpty:'Folder is not empty and cannot be deleted.', moveNoteTo:'Move note to', moveUp:'Move up', moveDown:'Move down',
     sortMode:'Sort', sortManual:'Manual', sortTitle:'Title', sortUpdated:'Updated', cancel:'Cancel', createFolderPrompt:'Folder name', folderCreated:'Folder created', selectFolder:'Select a folder.',
     modeLive:'Live Preview', modeSource:'Source', modeReading:'Reading',
@@ -295,7 +300,7 @@ async function renderOverview(){
     const integBadge = '<span class="badge ' + (integ ? 'ok' : 'warn') + '">' + (integ ? t('connected') : (s.credential === 'configured' ? t('unavailable') : t('notConfigured'))) + '</span>'
     let recentHtml = (s.recent || []).length ? (s.recent || []).map(r => '<div class="tree-row" data-action="' + (r.kind === 'note' ? 'open-note' : 'open-attachment') + '" data-id="' + esc(r.id) + '"><span class="nm">' + esc(r.title) + '</span></div>').join('') : '<div class="empty">' + esc(t('noRecent')) + '</div>'
     $('#main').innerHTML = '<h2>' + esc(t('overviewTitle')) + '<span class="sub">' + esc(s.workspaceName || '') + '</span></h2>' +
-      '<div class="toolbar"><button class="btn primary" data-action="new-note">+ ' + esc(t('newNote')) + '</button><button class="btn" data-action="go-attachments">' + esc(t('upload')) + '</button><button class="btn" data-action="sync-now">' + esc(t('syncNow')) + '</button><button class="btn" data-action="reconcile">' + esc(t('reconcile')) + '</button></div>' +
+      '<div class="toolbar"><button class="btn primary" data-action="new-note">+ ' + esc(t('newNote')) + '</button><button class="btn" data-action="sync-now">' + esc(t('syncNow')) + '</button><button class="btn" data-action="reconcile">' + esc(t('reconcile')) + '</button></div>' +
       '<div class="stats">' + rows.join('') + '</div><h2>' + esc(t('overviewIntegration')) + '</h2>' + integBadge + '<h2 style="margin-top:16px">' + esc(t('overviewRecent')) + '</h2>' + recentHtml
     $('#detail').innerHTML = detailWorkspace(s)
   } catch (e) { $('#main').innerHTML = '<div class="empty">' + esc(t('genericError')) + ': ' + esc(e.message) + '</div>' }
@@ -518,18 +523,49 @@ async function initVditor(){
       cdn: '/pkw/assets/vditor/3.11.3',
       height: '56vh',
       value: state.editor.body || '',
-      toolbar: ['undo', 'redo', '|', 'headings', 'bold', 'italic', 'strike', '|', 'list', 'ordered-list', 'check', '|', 'quote', 'inline-code', 'code', '|', 'link', 'table', '|', 'upload', '|', 'outline'],
+      toolbar: vditorToolbar(),
       hint: {
         parse: false,
         delay: 0,
         extend: [{ key: '/', hint: () => slashMenu() }],
       },
-      upload: { handler: (files) => { uploadVditorFiles(files) } },
+      upload: { handler: (files) => { uploadVditorFiles(files, true) } },
       input: () => { onEditorInput() },
     })
   } catch (e) {
     el.innerHTML = '<div class="empty">' + esc(t('genericError')) + ': ' + esc(e.message) + '</div>'
   }
+}
+function vditorToolbar(){
+  const calloutTypes = ['NOTE', 'TIP', 'INFO', 'IMPORTANT', 'QUESTION', 'EXAMPLE', 'WARNING']
+  const ic = (s) => '<span style="font-size:13px;line-height:1">' + s + '</span>'
+  return [
+    'undo', 'redo', '|',
+    'headings', '|',
+    'bold', 'italic', 'strike', 'mark', '|',
+    'list', 'ordered-list', 'check', '|',
+    'quote',
+    { name: 'callout', tip: t('slashCallout'), icon: ic('💡'), toolbar: calloutTypes.map(ty => ({ name: 'callout-' + ty, tip: ty, icon: ic('💡'), click: (_e, vd) => vd.insertValue('> [!' + ty + ']\\n> ') })) },
+    '|',
+    'link',
+    { name: 'wikilink', tip: t('slashWikiLink'), icon: ic('🔗'), click: (_e, vd) => vd.insertValue('[[note]]') },
+    '|',
+    'upload',
+    { name: 'attachment', tip: t('attachmentLabel'), icon: ic('📎'), click: () => pickAttachment() },
+    '|',
+    'table', '|',
+    'inline-code', 'code', '|',
+    { name: 'divider', tip: t('slashHr'), icon: ic('—'), click: (_e, vd) => vd.insertValue('---\\n') },
+    { name: 'footnote', tip: t('slashFootnote'), icon: ic('①'), click: (_e, vd) => vd.insertValue('[^1]') },
+    '|',
+    'outline',
+  ]
+}
+function pickAttachment(){
+  const inp = document.createElement('input')
+  inp.type = 'file'; inp.multiple = true
+  inp.onchange = () => { if (inp.files && inp.files.length) uploadVditorFiles(inp.files, false) }
+  inp.click()
 }
 function slashMenu(){
   const callout = (type) => ({ html: '💡 ' + esc(t('slashCallout')) + '·' + type, value: '> [!' + type + ']\\n> ' })
@@ -557,13 +593,15 @@ function slashMenu(){
     { html: '— ' + esc(t('slashHr')), value: '---\\n' },
   ]
 }
-function uploadVditorFiles(files){
+function uploadVditorFiles(files, asImage){
   for (const file of files) {
     const reader = new FileReader()
     reader.onload = () => {
       const base64 = String(reader.result).split(',')[1]
       api('uploadAttachment', { filename: file.name, mimeType: file.type || 'application/octet-stream', contentBase64: base64 }).then(up => {
-        if (vditor) vditor.insertValue('![](attachments/' + up.attachmentId + '/' + file.name + ')')
+        const ref = 'attachments/' + up.attachmentId + '/' + file.name
+        const md = asImage === false ? '[' + file.name + '](' + ref + ')' : '![](' + ref + ')'
+        if (vditor) vditor.insertValue(md)
         refreshHeader()
       }).catch(e => toast(t('uploadFailed') + ': ' + e.message, 'err'))
     }
@@ -770,10 +808,28 @@ async function renameFolder(path){
   try { await api('renameFolder', { path, newPath }); state.selectedFolder = newPath; await renderTree(); renderDetail(); renderFolderMain(newPath) }
   catch (e) { toast(t('genericError') + ': ' + e.message, 'err') }
 }
+function folderCounts(path){
+  let notes = 0, subfolders = 0
+  const walk = (nodes) => {
+    for (const n of nodes) {
+      if (n.kind === 'note') { if ((n.relativePath || '').startsWith(path + '/')) notes++ }
+      else if (n.kind === 'folder' && (n.path || '').startsWith(path + '/')) { subfolders++; walk(n.children || []) }
+    }
+  }
+  walk(state.treeRoot || [])
+  return { notes, subfolders }
+}
 async function deleteFolder(path){
-  if (!confirm(t('folderDeleteConfirm', { n: path.split('/').pop() }))) return
-  try { await api('deleteFolder', { path }); state.selectedFolder = null; toast(t('deletedMsg'), 'ok'); await renderTree(); renderDetail() }
-  catch (e) { toast((e.message && e.message.indexOf('not empty') >= 0 ? t('folderNotEmpty') : t('genericError') + ': ' + e.message), 'err') }
+  const { notes, subfolders } = folderCounts(path)
+  const name = path.split('/').pop()
+  if (notes === 0 && subfolders === 0) {
+    if (!confirm(t('folderDeleteConfirm', { n: name }))) return
+  } else {
+    // Non-empty folder: whole-subtree → trash (A). Never reject again.
+    if (!confirm(t('folderTrashTitle', { n: notes, m: subfolders }) + '\\n' + t('folderTrashWhole'))) return
+  }
+  try { await api('trashFolder', { path }); state.selectedFolder = null; toast(t('deletedMsg'), 'ok'); await renderTree(); renderDetail() }
+  catch (e) { toast(t('genericError') + ': ' + e.message, 'err') }
 }
 async function moveNote(noteId){
   showFolderPicker('', (target) => {
@@ -860,12 +916,11 @@ function dueLabel(iso){
 }
 function taskRow(x, matrices){
   const due = x.dueAt ? '<span class="muted mono">' + esc(dueLabel(x.dueAt)) + '</span>' : ''
-  const pri = x.priority !== undefined ? '<span class="badge warn">P' + x.priority + '</span>' : ''
   const badge = x.matrixId ? '<span class="badge">' + esc(matrixName(matrices, x.matrixId)) + '</span>' : ''
   const src = x.sourceRefs && x.sourceRefs[0] && x.sourceRefs[0].noteId
     ? '<span class="task-src" data-action="open-task-source" data-id="' + esc(x.sourceRefs[0].noteId) + '" data-exact="' + esc(x.sourceRefs[0].exact || '') + '" title="' + esc(t('openNote')) + '">📄</span>' : ''
   const mv = '<span class="task-mv"><span data-action="task-up" data-id="' + esc(x.taskId) + '" title="' + esc(t('moveUp')) + '">↑</span><span data-action="task-down" data-id="' + esc(x.taskId) + '" title="' + esc(t('moveDown')) + '">↓</span></span>'
-  return '<div class="tree-row" data-action="toggle-task" data-completed="' + (x.status === 'completed' ? '1' : '0') + '" data-id="' + esc(x.taskId) + '"><span class="ic">' + (x.status === 'completed' ? '☑' : '☐') + '</span><span class="nm">' + esc(x.title) + '</span>' + badge + pri + due + src + mv + '</div>'
+  return '<div class="tree-row" data-action="toggle-task" data-completed="' + (x.status === 'completed' ? '1' : '0') + '" data-id="' + esc(x.taskId) + '"><span class="ic">' + (x.status === 'completed' ? '☑' : '☐') + '</span><span class="nm">' + esc(x.title) + '</span>' + badge + due + src + mv + '</div>'
 }
 function moveTaskOrder(taskId, dir){
   const all = state.tasksCache || []
@@ -893,14 +948,16 @@ async function renderTasks(){
     state.tasksCache = all
     const counts = {}
     for (const x of all) if (x.status === 'open') { const k = x.matrixId ?? 'inbox'; counts[k] = (counts[k] || 0) + 1 }
-    const views = [['all', t('taskAll')], ['today', t('taskToday')], ['upcoming', t('taskUpcoming')], ['completed', t('taskCompleted')]]
-    const viewRows = views.map(v => '<div class="tree-row' + (state.taskView === v[0] ? ' active' : '') + '" data-action="task-view" data-view="' + v[0] + '"><span class="ic">▤</span><span class="nm">' + esc(v[1]) + '</span></div>').join('')
+    const views = [['inbox', 'Inbox'], ['today', t('taskToday')], ['upcoming', t('taskUpcoming')], ['all', t('taskAll')], ['completed', t('taskCompleted')]]
+    const viewRows = views.map(v => '<div class="tree-row' + (state.taskView === v[0] ? ' active' : '') + '" data-action="task-view" data-view="' + v[0] + '"><span class="ic">' + (v[0] === 'inbox' ? '📥' : '▤') + '</span><span class="nm">' + esc(v[1]) + (v[0] === 'inbox' ? ' (' + (counts.inbox || 0) + ')' : '') + '</span></div>').join('')
     const matrixRows = matrices.map(m => '<div class="tree-row' + (state.taskView === m.matrixId ? ' active' : '') + '" data-action="task-view" data-view="' + esc(m.matrixId) + '"><span class="ic">▦</span><span class="nm">' + esc(m.name) + ' (' + (counts[m.matrixId] || 0) + ')</span></div>').join('')
     $('#list').innerHTML =
       '<div class="list-head">' + esc(t('tasks')) + '</div>' +
+      '<div class="list-section">' + esc(t('smartViews')) + '</div>' +
       viewRows +
-      '<div class="tree-row' + (state.taskView === 'inbox' ? ' active' : '') + '" data-action="task-view" data-view="inbox"><span class="ic">📥</span><span class="nm">Inbox (' + (counts.inbox || 0) + ')</span></div>' +
-      matrixRows
+      '<div class="list-section">' + esc(t('matrices')) + '</div>' +
+      matrixRows +
+      '<div class="tree-row" data-action="new-matrix"><span class="ic">＋</span><span class="nm">' + esc(t('newMatrix')) + '</span></div>'
     if (state.taskView === 'all' || state.taskView === 'today' || state.taskView === 'upcoming' || state.taskView === 'completed' || state.taskView === 'inbox') renderTaskList(matrices, all, state.taskView)
     else renderMatrixGrid(matrices, all, state.taskView)
   } catch (e) { $('#main').innerHTML = '<div class="empty">' + esc(t('genericError')) + ': ' + esc(e.message) + '</div>' }
@@ -918,7 +975,7 @@ function renderTaskList(matrices, all, filter){
   list.sort((a, b) => ((a.dueAt || a.scheduledAt) || '9999') < ((b.dueAt || b.scheduledAt) || '9999') ? -1 : 1)
   $('#main').innerHTML =
     '<h2>' + esc(t('tasks')) + '</h2>' +
-    '<div class="toolbar"><button class="btn primary" data-action="new-task">+ ' + esc(t('taskQuickAdd')) + '</button><button class="btn" data-action="new-matrix">+ ' + esc(t('newFolder')) + '</button></div>' +
+    '<div class="toolbar"><button class="btn primary" data-action="new-task">+ ' + esc(t('taskQuickAdd')) + '</button><button class="btn" data-action="new-matrix">+ ' + esc(t('newMatrix')) + '</button></div>' +
     (list.length ? list.map(x => taskRow(x, matrices)).join('') : '<div class="empty">' + esc(t('taskNoTasks')) + '</div>')
 }
 function renderMatrixGrid(matrices, all, matrixId){
@@ -933,7 +990,7 @@ function renderMatrixGrid(matrices, all, matrixId){
   }).join('')
   $('#main').innerHTML =
     '<h2>' + esc(name) + '<span class="sub">' + esc(t('taskMatrix')) + '</span></h2>' +
-    '<div class="toolbar"><button class="btn primary" data-action="new-task-matrix" data-id="' + esc(matrixId) + '">+ ' + esc(t('taskQuickAdd')) + '</button><button class="btn" data-action="new-matrix">+ ' + esc(t('newFolder')) + '</button></div>' +
+    '<div class="toolbar"><button class="btn primary" data-action="new-task-matrix" data-id="' + esc(matrixId) + '">+ ' + esc(t('taskQuickAdd')) + '</button><button class="btn" data-action="new-matrix">+ ' + esc(t('newMatrix')) + '</button></div>' +
     '<div class="quad-grid">' + grid + '</div>'
 }
 
@@ -1164,11 +1221,11 @@ function quickTaskDialog(matrixId, sourceRefs){
     document.body.insertAdjacentHTML('beforeend',
       '<div class="modal-overlay" id="taskModal"><div class="modal"><h3>' + esc(t('taskQuickAdd')) + '</h3>' +
       '<div class="form"><label>' + esc(t('taskTitle')) + '</label><input id="tkTitle" /></div>' +
-      '<div class="form"><label>' + esc(t('taskMatrix')) + '</label><select id="tkMatrix">' + opts + '</select></div>' +
+      '<div class="form"><label>' + esc(t('matrices')) + '</label><select id="tkMatrix">' + opts + '</select></div>' +
       '<div class="form"><label>' + esc(t('taskQuadrant')) + '</label><select id="tkQuad">' +
         '<option value="1">Q1 · ' + esc(t('q1')) + '</option><option value="2">Q2 · ' + esc(t('q2')) + '</option><option value="3">Q3 · ' + esc(t('q3')) + '</option><option value="4">Q4 · ' + esc(t('q4')) + '</option></select></div>' +
-      '<div class="form"><label>' + esc(t('taskPriority')) + '</label><select id="tkPri"><option value="">—</option><option value="1">P1</option><option value="2">P2</option><option value="3">P3</option><option value="4">P4</option></select></div>' +
       '<div class="form"><label>' + esc(t('taskDue')) + '</label><input type="date" id="tkDue" /></div>' +
+      '<div class="form"><label>' + esc(t('tags')) + '</label><input id="tkTags" placeholder="tag1, tag2" /></div>' +
       srcNote +
       '<div class="toolbar"><button class="btn primary" id="tkSave">' + esc(t('taskSave')) + '</button><button class="btn" id="tkCancel">' + esc(t('taskCancel')) + '</button></div></div></div>'
     )
@@ -1179,16 +1236,16 @@ function quickTaskDialog(matrixId, sourceRefs){
       if (!title) { toast(t('taskTitle'), 'warn'); return }
       const m = $('#tkMatrix').value
       const quad = Number($('#tkQuad').value)
-      const pri = $('#tkPri').value
       const due = $('#tkDue').value
+      const tags = ($('#tkTags').value || '').split(',').map(s => s.trim()).filter(Boolean)
       if (m) localStorage.setItem('pkw-task-last-matrix', m)
       api('createTask', {
         title,
         ...(m ? { matrixId: m } : {}),
         important: quad === 1 || quad === 2,
         urgent: quad === 1 || quad === 3,
-        ...(pri ? { priority: Number(pri) } : {}),
         ...(due ? { dueAt: due } : {}),
+        ...(tags.length ? { tags } : {}),
         ...(sourceRefs && sourceRefs.length ? { sourceRefs } : {}),
       }).then(() => { modal.remove(); renderTasks() }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
     })
