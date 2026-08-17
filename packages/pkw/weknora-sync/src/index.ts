@@ -132,6 +132,21 @@ type DirtyRecord = z.infer<typeof dirtySchema>
 const ENTITY_NOTE = 'note'
 const ENTITY_ATTACHMENT = 'attachment'
 
+/**
+ * Normalize a Note's Markdown for the WeKnora manual-knowledge projection.
+ * Managed attachment references (`attachments/<id>/<file>`) are relative and
+ * would surface as "invalid image link" in WeKnora; rewrite them to readable
+ * text so the projection is honest and self-contained. Canonical Markdown is
+ * unchanged locally — this is projection-only.
+ */
+function normalizeForRemote(markdown: string): string {
+  const imgRe = /!\[[^\]]*\]\([^)]*attachments\/[^/]+\/([^)]+)\)/g
+  const fileRe = /\[([^\]]*)\]\([^)]*attachments\/[^/]+\/[^)]+\)/g
+  return markdown
+    .replace(imgRe, (_m, filename) => `图片附件：${filename}`)
+    .replace(fileRe, (_m, text) => text)
+}
+
 // Intent / mapping states.
 const S_PENDING = 'pending'
 const S_RUNNING = 'running'
@@ -454,7 +469,8 @@ export class WeKnoraSyncService extends Service {
     }
 
     const doc = await this.ctx.pkwNotes.getDocument(noteId)
-    const fingerprint = remoteManualFingerprint(doc.markdown)
+    const remoteMarkdown = normalizeForRemote(doc.markdown)
+    const fingerprint = remoteManualFingerprint(remoteMarkdown)
 
     if (mapping !== undefined && mapping.remoteFingerprint === fingerprint) {
       // No-op when already synced; reactivate a stale/deleted mapping on restore.
@@ -472,12 +488,12 @@ export class WeKnoraSyncService extends Service {
 
     if (mapping === undefined) {
       return pending !== undefined
-        ? this.resumeCreate(noteId, doc.markdown, fingerprint, pending)
-        : this.createManual(noteId, doc.markdown, fingerprint, doc.note.title)
+        ? this.resumeCreate(noteId, remoteMarkdown, fingerprint, pending)
+        : this.createManual(noteId, remoteMarkdown, fingerprint, doc.note.title)
     }
     return pending !== undefined
-      ? this.resumeUpdate(noteId, doc.markdown, fingerprint, mapping, pending)
-      : this.updateManual(noteId, doc.markdown, fingerprint, mapping, doc.note.title)
+      ? this.resumeUpdate(noteId, remoteMarkdown, fingerprint, mapping, pending)
+      : this.updateManual(noteId, remoteMarkdown, fingerprint, mapping, doc.note.title)
   }
 
   private async convergeDeleted(key: string, mapping: MappingRecord | undefined): Promise<void> {

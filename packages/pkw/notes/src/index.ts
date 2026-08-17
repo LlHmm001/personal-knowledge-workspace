@@ -312,7 +312,8 @@ export class NotesService extends Service {
     // Idempotent for a canonical file that is already absent: skip the rename
     // (nothing to archive) but still run the soft-delete lifecycle.
     const src = await this.ctx.fs.resolve(this.handle.notePath(existing.relativePath))
-    if (await this.ctx.fs.stat(src) !== undefined) {
+    const canonicalMissing = await this.ctx.fs.stat(src) === undefined
+    if (!canonicalMissing) {
       await this.ctx.fs.rename(src, await this.ctx.fs.resolve(this.handle.archivePath(existing.relativePath)))
     }
     const payload: NoteEventPayload = {
@@ -324,7 +325,7 @@ export class NotesService extends Service {
       beforeStateFingerprint: noteFingerprint(this.config.workspaceId, String(noteId), existing.relativePath, existing.contentHash, false),
     }
     await this.commitEvent(NOTE_DELETED, String(noteId), payload)
-    await this.putRecord({ ...existing, deletedAt: new Date().toISOString() }, existing.relativePath)
+    await this.putRecord({ ...existing, deletedAt: new Date().toISOString(), ...(canonicalMissing ? { canonicalMissing: true } : {}) }, existing.relativePath)
   }
 
   /** Restore a trashed (archived) note; NoteId is preserved. */

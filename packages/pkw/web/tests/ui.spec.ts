@@ -129,7 +129,7 @@ describe('PKW web UI (served page)', () => {
     const js = script()
     expect(js).toContain('rewriteLiveAttachmentImgs')
     expect(js).toContain('setupLiveAttachmentRewrite')
-    expect(js).toContain('img[src^="attachments/"]')
+    expect(js).toContain('managedAttachmentUrl')
     expect(js).toContain("'/pkw/attachment/'")
   })
 

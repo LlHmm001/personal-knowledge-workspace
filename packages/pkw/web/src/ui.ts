@@ -264,6 +264,7 @@ const STR = {
     knowledge:'知识库', knowledgeIndexed:'已索引', knowledgePending:'待索引', knowledgeNotIndexed:'未索引', knowledgeParseFailed:'解析失败', relatedNotes:'相关笔记', refAttachments:'引用附件', mime:'类型',
     parseStatus:'解析状态', summary:'摘要', reparse:'重新解析', reparseStarted:'已提交重新解析',
     noteMissing:'笔记文件已不存在', noteMissingBody:'笔记“{id}”的 Markdown 文件在工作区中找不到，可能已被外部删除或移动。', rescan:'重新扫描', removeFromWorkspace:'从工作区移除', removeMissingConfirm:'从工作区移除“{id}”？该笔记文件已不存在。此操作将清理 PKW 中的残留记录和知识库投影，无法从回收站恢复该文件。',
+    missingSource:'源文件已不存在',
     knowledgeWiki:'Wiki', knowledgeGraph:'图谱', knowledgeSearchTab:'搜索', wikiGenerated:'WeKnora 生成内容', wikiOpenNote:'打开笔记', wikiEmpty:'该知识库尚未生成 Wiki 页面。', wikiSearchPlaceholder:'搜索 Wiki 页面…', graphEmpty:'图谱暂无节点。', graphFit:'适应屏幕', graphHideRelations:'隐藏关系', graphShowRelations:'显示关系', graphFull:'全库概览', knowledgeUnavailable:'WeKnora 暂不可用',
     companionNote:'建立伴随笔记', noteLocation:'笔记位置', kbIndex:'知识库索引', kbIndexHint:'索引可解析附件', uploadedNoNote:'文件已上传，但伴随笔记创建失败', uploadedCompanion:'已生成 {n} 篇伴随笔记',
     uploadProgress:'上传中…', uploadSuccess:'已上传', uploadFailed:'上传失败', searching:'搜索中…', noHits:'没有命中「{q}」。', searchHint:'输入关键词搜索本地笔记与附件（经 WeKnora hybrid search）。',
@@ -321,6 +322,7 @@ const STR = {
     knowledge:'Knowledge', knowledgeIndexed:'Indexed', knowledgePending:'Pending', knowledgeNotIndexed:'Not indexed', knowledgeParseFailed:'Parse failed', relatedNotes:'Related notes', refAttachments:'Referenced attachments', mime:'Type',
     parseStatus:'Parse status', summary:'Summary', reparse:'Reparse', reparseStarted:'Reparse submitted',
     noteMissing:'Note file is missing', noteMissingBody:'The Markdown file for note "{id}" cannot be found in the workspace. It may have been deleted or moved externally.', rescan:'Rescan', removeFromWorkspace:'Remove from workspace', removeMissingConfirm:'Remove "{id}" from the workspace? Its file is already missing. This will clean up the leftover PKW records and knowledge projection, and the file cannot be restored from Trash.',
+    missingSource:'Source file missing',
     knowledgeWiki:'Wiki', knowledgeGraph:'Graph', knowledgeSearchTab:'Search', wikiGenerated:'WeKnora generated', wikiOpenNote:'Open note', wikiEmpty:'This knowledge base has no generated Wiki pages yet.', wikiSearchPlaceholder:'Search Wiki pages…', graphEmpty:'No graph nodes.', graphFit:'Fit screen', graphHideRelations:'Hide relations', graphShowRelations:'Show relations', graphFull:'Full library', knowledgeUnavailable:'WeKnora unavailable',
     companionNote:'Create companion note', noteLocation:'Note location', kbIndex:'Knowledge indexing', kbIndexHint:'Index parseable attachments', uploadedNoNote:'File uploaded, but companion note creation failed', uploadedCompanion:'Created {n} companion notes',
     uploadProgress:'Uploading…', uploadSuccess:'Uploaded', uploadFailed:'Upload failed', searching:'Searching…', noHits:'No hits for 「{q}」.', searchHint:'Type a query to search notes & attachments (via WeKnora hybrid search).',
@@ -785,26 +787,44 @@ function ensureVditorLoaded(){
   return vditorLoadPromise
 }
 // Managed attachment URL resolver (Live + Reading share one rule):
-// canonical "attachments/<id>/<file>" -> served "/pkw/attachment/<id>".
+// any of  attachments/<id>/<file>, ./attachments/<id>/<file>,
+// /pkw/attachments/<id>/<file>, same-origin absolute → /pkw/attachment/<id>.
+function managedAttachmentUrl(src){
+  if (!src) return null
+  let s = src
+  if (s.indexOf('./') === 0) s = s.slice(2)
+  const idx = s.indexOf('attachments/')
+  if (idx < 0) return null
+  const after = s.slice(idx + 'attachments/'.length)
+  const slash = after.indexOf('/')
+  if (slash < 0) return null
+  const id = after.slice(0, slash)
+  if (!id) return null
+  return '/pkw/attachment/' + id
+}
 function rewriteLiveAttachmentImgs(root){
   if (!root || !root.querySelectorAll) return
-  const imgs = root.querySelectorAll('img[src^="attachments/"]')
+  const imgs = root.querySelectorAll('img')
   for (let i = 0; i < imgs.length; i++) {
-    const src = imgs[i].getAttribute('src') || ''
+    const img = imgs[i]
+    const src = img.getAttribute('src') || ''
     if (src.indexOf('/pkw/attachment/') === 0) continue
-    const after = src.slice('attachments/'.length)
-    const slash = after.indexOf('/')
-    if (slash < 0) continue
-    imgs[i].setAttribute('src', '/pkw/attachment/' + after.slice(0, slash))
+    const resolved = managedAttachmentUrl(src)
+    if (resolved) {
+      console.debug('[pkw.live-img] src=' + src + ' currentSrc=' + (img.currentSrc || '') + ' resolved=' + resolved)
+      img.setAttribute('src', resolved)
+    }
   }
 }
 function setupLiveAttachmentRewrite(v){
   if (!v || !v.vditor || !v.vditor.ir || !v.vditor.ir.element) return
   const el = v.vditor.ir.element
+  // Initial sweep BEFORE observing: images already in the DOM must be rewritten
+  // too (not only future mutations).
   rewriteLiveAttachmentImgs(el)
   if (setupLiveAttachmentRewrite._obs) setupLiveAttachmentRewrite._obs.disconnect()
   setupLiveAttachmentRewrite._obs = new MutationObserver(() => rewriteLiveAttachmentImgs(el))
-  setupLiveAttachmentRewrite._obs.observe(el, { childList: true, subtree: true })
+  setupLiveAttachmentRewrite._obs.observe(el, { childList: true, subtree: true, attributes: true, attributeFilter: ['src'] })
 }
 async function initVditor(){
   const el = $('#vditor')
@@ -1455,7 +1475,7 @@ function trashKindIcon(kind){ return kind === 'note' ? '📄' : kind === 'folder
 function trashKindLabel(kind){ return kind === 'note' ? t('trashNotes') : kind === 'folder' ? t('trashFolders') : t('trashAttachments') }
 function trashItems(notes, atts, folders){
   const items = []
-  for (const n of notes) items.push({ key: 'note:' + n.noteId, kind: 'note', id: n.noteId, name: n.title, sub: n.deletedAt || n.updatedAt || '', path: n.relativePath })
+  for (const n of notes) items.push({ key: 'note:' + n.noteId, kind: 'note', id: n.noteId, name: n.title, sub: n.deletedAt || n.updatedAt || '', path: n.relativePath, missing: n.canonicalMissing === true })
   for (const f of folders) items.push({ key: 'folder:' + f.trashEntryId, kind: 'folder', id: f.trashEntryId, name: f.originalPath, sub: f.deletedAt || '', path: f.originalPath })
   for (const a of atts) items.push({ key: 'attachment:' + a.attachmentId, kind: 'attachment', id: a.attachmentId, name: a.filename, sub: a.deletedAt || '', path: '' })
   return items
@@ -1466,11 +1486,12 @@ function trashVisible(notes, atts, folders){
 }
 function trashItemRow(it, checked){
   const meta = esc(trashKindLabel(it.kind)) + (it.sub ? ' · ' + t('trashDeletedTime', { t: it.sub }) : '') + (it.path ? ' · ' + esc(it.path) : '')
+  const missingBadge = it.missing ? ' <span class="badge warn">⚠ ' + esc(t('missingSource')) + '</span>' : ''
   return '<div class="tree-row trash-item" data-key="' + esc(it.key) + '">' +
     '<input type="checkbox" class="trash-check" data-key="' + esc(it.key) + '"' + (checked ? ' checked' : '') + '>' +
     '<span class="ic">' + trashKindIcon(it.kind) + '</span>' +
-    '<span class="trash-main"><span class="trash-name">' + esc(it.name) + '</span><span class="muted small">' + meta + '</span></span>' +
-    '<button class="btn small" data-action="restore-one" data-key="' + esc(it.key) + '">' + esc(t('trashRestore')) + '</button>' +
+    '<span class="trash-main"><span class="trash-name">' + esc(it.name) + missingBadge + '</span><span class="muted small">' + meta + '</span></span>' +
+    (it.missing ? '' : '<button class="btn small" data-action="restore-one" data-key="' + esc(it.key) + '">' + esc(t('trashRestore')) + '</button>') +
     '<button class="btn small danger" data-action="purge-one" data-key="' + esc(it.key) + '">' + esc(t('trashPermanentDelete')) + '</button>' +
     '</div>'
 }

@@ -450,7 +450,7 @@ export class PkwWebService extends Service {
           .filter(n => n.deletedAt !== undefined)
           .map(n => ({
             noteId: String(n.noteId), relativePath: n.relativePath, folder: folderOf(n.relativePath),
-            title: n.title, updatedAt: n.updatedAt, deletedAt: n.deletedAt, deleted: true,
+            title: n.title, updatedAt: n.updatedAt, deletedAt: n.deletedAt, deleted: true, canonicalMissing: n.canonicalMissing === true,
             sync: this.syncView('note', String(n.noteId), snap),
           }))
       }

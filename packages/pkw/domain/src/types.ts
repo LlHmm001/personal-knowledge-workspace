@@ -192,6 +192,8 @@ export interface NoteIndexRecord {
   createdAt: string
   updatedAt: string
   deletedAt?: string
+  /** Set when the note was soft-deleted while its canonical file was already missing (not recoverable from Trash). */
+  canonicalMissing?: boolean
 }
 
 /** Attachment catalog record (workspace file is the binary source of truth). */
