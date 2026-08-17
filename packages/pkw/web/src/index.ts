@@ -586,7 +586,11 @@ export class PkwWebService extends Service {
       case 'renameMatrix': return this.tasks.renameMatrix(TaskMatrixId(String(args.matrixId)), String(args.name))
       case 'archiveMatrix': return this.tasks.archiveMatrix(TaskMatrixId(String(args.matrixId))).then(() => ({ archived: true }))
       case 'reassignMatrixTasks': return this.tasks.reassignMatrixTasks(TaskMatrixId(String(args.matrixId)), args.toMatrixId !== undefined && args.toMatrixId !== null ? TaskMatrixId(String(args.toMatrixId)) : null)
-      case 'removeMatrix': return this.tasks.removeMatrix(TaskMatrixId(String(args.matrixId)), args.reassignTo !== undefined && args.reassignTo !== null ? { reassignTo: TaskMatrixId(String(args.reassignTo)) } : {})
+      case 'removeMatrix': {
+        // null → move tasks to Inbox (explicit); undefined → require empty (reject if not).
+        const opts = args.reassignTo === undefined ? {} : { reassignTo: args.reassignTo === null ? null : TaskMatrixId(String(args.reassignTo)) }
+        return this.tasks.removeMatrix(TaskMatrixId(String(args.matrixId)), opts)
+      }
       case 'listTasks': return this.tasks.listTasks({
         ...(args.matrixId !== undefined && args.matrixId !== null ? { matrixId: TaskMatrixId(String(args.matrixId)) } : {}),
         ...(args.status !== undefined ? { status: String(args.status) as never } : {}),

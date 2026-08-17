@@ -316,4 +316,15 @@ describe('PKW Web Host Bridge (real Core integration)', () => {
     expect(r.failed.map(f => f.key)).toEqual(['bogus'])
     expect(r.failed[0]!.error).toContain('invalid trash key')
   })
+
+  it('removeMatrix with reassignTo:null moves tasks to Inbox (not a not-empty throw)', async () => {
+    const { web } = await boot()
+    const m = await web.call('createMatrix', { name: 'm' }) as { matrixId: string }
+    await web.call('createTask', { title: 't', matrixId: m.matrixId })
+    const r = await web.call('removeMatrix', { matrixId: m.matrixId, reassignTo: null }) as { removed: boolean; moved: number }
+    expect(r.removed).toBe(true)
+    expect(r.moved).toBe(1)
+    const tasks = await web.call('listTasks', {}) as Array<{ matrixId: string | null }>
+    expect(tasks.some(t => t.matrixId === null)).toBe(true)
+  })
 })
