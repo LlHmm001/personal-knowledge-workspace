@@ -470,6 +470,7 @@ export class PkwWebService extends Service {
       case 'completeTask': return this.tasks.completeTask(TaskId(String(args.taskId)))
       case 'reopenTask': return this.tasks.reopenTask(TaskId(String(args.taskId)))
       case 'moveTaskToMatrix': return this.tasks.moveTaskToMatrix(TaskId(String(args.taskId)), args.matrixId !== undefined && args.matrixId !== null ? TaskMatrixId(String(args.matrixId)) : null)
+      case 'reorderTasks': return this.tasks.reorderTasks(Array.isArray(args.taskIds) ? args.taskIds.map((id: unknown) => TaskId(String(id))) : [])
       case 'deleteTask': return this.tasks.deleteTask(TaskId(String(args.taskId))).then(() => ({ deleted: true }))
       case 'restoreTask': return this.tasks.restoreTask(TaskId(String(args.taskId)))
       default: throw new Error(`unknown pkw method: ${method}`)

@@ -96,6 +96,17 @@ describe('PKW tasks core', () => {
     expect(fromSelection.sourceRefs[0]).toMatchObject({ kind: 'selection', noteId: 'note_abc', exact: '重新整理商业模型', prefix: '创业', suffix: 'DDmind' })
   })
 
+  it('reorders tasks within a manual order (matrix/quadrant drag support)', async () => {
+    const { tasks } = await boot()
+    const m = await tasks.createMatrix({ name: '工作' })
+    const a = await tasks.createTask({ title: 'A', matrixId: m.matrixId })
+    const b = await tasks.createTask({ title: 'B', matrixId: m.matrixId })
+    const c = await tasks.createTask({ title: 'C', matrixId: m.matrixId })
+    expect(tasks.listTasks({ matrixId: m.matrixId }).map(t => t.title)).toEqual(['A', 'B', 'C'])
+    await tasks.reorderTasks([c.taskId, a.taskId, b.taskId])
+    expect(tasks.listTasks({ matrixId: m.matrixId }).map(t => t.title)).toEqual(['C', 'A', 'B'])
+  })
+
   it('delete (trash) then restore a task', async () => {
     const { tasks } = await boot()
     const t = await tasks.createTask({ title: 'trash me' })

@@ -184,6 +184,28 @@ export class TasksService extends Service {
     return next
   }
 
+  async reorderTasks(orderedTaskIds: TaskId[]): Promise<void> {
+    const tasks = this.reqTasks()
+    const idSet = new Set(orderedTaskIds.map((id) => String(id)))
+    const next: Task[] = []
+    for (const id of orderedTaskIds) {
+      const t = tasks.get(id)
+      if (t === undefined) continue
+      next.push(t)
+    }
+    for (const [, t] of tasks.entries()) {
+      if (t.deletedAt !== undefined) continue
+      if (idSet.has(String(t.taskId))) continue
+      next.push(t)
+    }
+    let order = 0
+    for (const t of next) {
+      await tasks.put(t.taskId, { ...t, manualOrder: order, updatedAt: this.now() })
+      order++
+    }
+    await this.emit('task.reordered', TASK_AGG, 'all', { taskIds: orderedTaskIds.map((id) => String(id)) })
+  }
+
   async moveTaskToMatrix(taskId: TaskId, matrixId: TaskMatrixId | null): Promise<Task> {
     const t = this.reqTasks().get(taskId)
     if (t === undefined) throw new Error(`pkwTasks: unknown task '${taskId}'`)

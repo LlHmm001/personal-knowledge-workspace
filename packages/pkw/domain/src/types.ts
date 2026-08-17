@@ -394,6 +394,7 @@ export interface PkwTasksService {
   completeTask(taskId: TaskId): Promise<Task>
   reopenTask(taskId: TaskId): Promise<Task>
   moveTaskToMatrix(taskId: TaskId, matrixId: TaskMatrixId | null): Promise<Task>
+  reorderTasks(orderedTaskIds: TaskId[]): Promise<void>
   deleteTask(taskId: TaskId): Promise<void>
   restoreTask(taskId: TaskId): Promise<Task>
 }
