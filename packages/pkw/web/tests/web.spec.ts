@@ -156,4 +156,46 @@ describe('PKW Web Host Bridge (real Core integration)', () => {
     expect(r.markedDirty).toBe(0)
     expect(r.markedDeleted).toBe(0)
   })
+
+  it('summary exposes workspace name, sync counters, and recent list for the overview', async () => {
+    const { web } = await boot()
+    const s = await web.call('summary', {}) as Record<string, unknown>
+    expect(s.workspaceName).toBeTypeOf('string')
+    expect(s.pendingSync).toBe(0)
+    expect(s.syncErrors).toBe(0)
+    expect(Array.isArray(s.recent)).toBe(true)
+  })
+
+  it('listNotes includes folder + per-entity sync view; listAttachments includes sync view', async () => {
+    const { web } = await boot()
+    await web.call('createNote', { relativePath: 'sub/a.md', markdown: '# hi\n' })
+    const notes = await web.call('listNotes', {}) as Array<Record<string, unknown>>
+    expect(notes[0]!.folder).toBe('sub')
+    expect(notes[0]!.sync).toBeDefined()
+    await web.call('uploadAttachment', { filename: 'x.txt', mimeType: 'text/plain', contentBase64: Buffer.from('hi').toString('base64') })
+    const atts = await web.call('listAttachments', {}) as Array<Record<string, unknown>>
+    expect(atts[0]!.sync).toBeDefined()
+  })
+
+  it('getAttachment + downloadAttachment round-trip through the bridge', async () => {
+    const { web } = await boot()
+    const up = await web.call('uploadAttachment', { filename: 'd.txt', mimeType: 'text/plain', contentBase64: Buffer.from('hello').toString('base64') }) as { attachmentId: string }
+    const d = await web.call('downloadAttachment', { attachmentId: up.attachmentId }) as { filename: string; contentBase64: string }
+    expect(d.filename).toBe('d.txt')
+    expect(Buffer.from(d.contentBase64, 'base64').toString()).toBe('hello')
+    const detail = await web.call('getAttachment', { attachmentId: up.attachmentId }) as { attachment: { filename: string } }
+    expect(detail.attachment.filename).toBe('d.txt')
+  })
+
+  it('syncEntity forces a note sync; reconcile returns the combined report', async () => {
+    const { web } = await boot()
+    const created = await web.call('createNote', { relativePath: 's.md', markdown: '# sync me\n' }) as { noteId: string }
+    const r = await web.call('syncEntity', { entityType: 'note', entityId: created.noteId }) as { synced: boolean }
+    expect(r.synced).toBe(true)
+    const rep = await web.call('reconcile', {}) as Record<string, number>
+    expect(rep.markedDirty).toBe(0)
+    expect(rep.markedDeleted).toBe(0)
+    expect(rep.notesRepaired).toBe(0)
+    expect(rep.attachmentsRepaired).toBe(0)
+  })
 })

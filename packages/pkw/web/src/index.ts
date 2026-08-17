@@ -62,6 +62,12 @@ async function readJsonBody(req: IncomingMessage): Promise<Json> {
   return text === '' ? {} : JSON.parse(text) as Json
 }
 
+/** Directory part of a note relative path ('' for files directly under `notes/`). */
+function folderOf(relativePath: string): string {
+  const idx = relativePath.lastIndexOf('/')
+  return idx === -1 ? '' : relativePath.slice(0, idx)
+}
+
 export class PkwWebService extends Service {
   static inject = ['storageDomain', 'fs', 'workspaceRegistry', 'webServer', 'timer']
   static Config: z<Config> = z.object({
@@ -77,6 +83,7 @@ export class PkwWebService extends Service {
   })
 
   private workspaceId = ''
+  private workspaceName = ''
   private notes!: NotesService
   private attachments!: AttachmentsService
   private weknora!: WeKnoraClient
@@ -91,6 +98,7 @@ export class PkwWebService extends Service {
     const existing = await registry.resolveByPath(this.config.workspacePath)
     const ws = existing ?? await registry.create(this.config.workspacePath, 'PKW Personal Knowledge Workspace')
     this.workspaceId = String(ws.id)
+    this.workspaceName = ws.title
 
     // PKW Core services, loaded into this plugin's fiber (browser never reaches them directly).
     await this.ctx.plugin(PkwEventStoreService)
@@ -150,27 +158,33 @@ export class PkwWebService extends Service {
   async call(method: string, args: Json): Promise<unknown> {
     switch (method) {
       case 'summary': return this.summary()
-      case 'listNotes': return this.notes.list().map(n => ({
-        noteId: String(n.noteId), relativePath: n.relativePath, title: n.title,
-        tags: n.tags, updatedAt: n.updatedAt, observedRevision: n.observedRevision, deleted: n.deletedAt !== undefined,
-      }))
+      case 'listNotes': {
+        const snap = this.syncSnapshot()
+        return this.notes.list().map(n => ({
+          noteId: String(n.noteId),
+          relativePath: n.relativePath,
+          folder: folderOf(n.relativePath),
+          title: n.title,
+          tags: n.tags,
+          updatedAt: n.updatedAt,
+          observedRevision: n.observedRevision,
+          deleted: n.deletedAt !== undefined,
+          sync: this.syncView('note', String(n.noteId), snap),
+        }))
+      }
       case 'getNote': {
         const noteId = NoteId(String(args.noteId))
         const doc = await this.notes.getDocument(noteId)
-        const mapping = this.sync.getMapping(noteId)
         return {
           note: { noteId: String(doc.note.noteId), relativePath: doc.note.relativePath, title: doc.note.title, tags: doc.note.tags, updatedAt: doc.note.updatedAt, observedRevision: doc.note.observedRevision },
           markdown: doc.markdown,
           attachments: doc.attachments.map(a => ({ attachmentId: String(a.attachmentId), relativePath: a.relativePath })),
-          sync: mapping === undefined ? undefined : {
-            knowledgeId: mapping.knowledgeId, kbId: this.config.kbId,
-            syncState: mapping.syncState, remoteParseStatus: mapping.remoteParseStatus, updatedAt: mapping.updatedAt,
-          },
+          sync: this.syncView('note', String(noteId), this.syncSnapshot()),
         }
       }
       case 'createNote': {
         const rec = await this.notes.create({ relativePath: String(args.relativePath), markdown: String(args.markdown) })
-        return { noteId: String(rec.noteId), relativePath: rec.relativePath }
+        return { noteId: String(rec.noteId), relativePath: rec.relativePath, title: rec.title }
       }
       case 'saveNote': {
         const rec = await this.notes.update(NoteId(String(args.noteId)), String(args.markdown))
@@ -184,10 +198,42 @@ export class PkwWebService extends Service {
         await this.notes.delete(NoteId(String(args.noteId)))
         return { deleted: true }
       }
-      case 'listAttachments': return this.attachments.list().map(a => ({
-        attachmentId: String(a.id), filename: a.filename, mimeType: a.mimeType, sizeBytes: a.sizeBytes,
-        observedRevision: a.observedRevision, createdAt: a.createdAt, deleted: a.deletedAt !== undefined,
-      }))
+      case 'listAttachments': {
+        const snap = this.syncSnapshot()
+        return this.attachments.list().map(a => ({
+          attachmentId: String(a.id),
+          filename: a.filename,
+          mimeType: a.mimeType,
+          sizeBytes: a.sizeBytes,
+          observedRevision: a.observedRevision,
+          createdAt: a.createdAt,
+          deleted: a.deletedAt !== undefined,
+          sync: this.syncView('attachment', String(a.id), snap),
+        }))
+      }
+      case 'getAttachment': {
+        const id = AttachmentId(String(args.attachmentId))
+        const rec = this.attachments.get(id)
+        if (rec === undefined) throw new Error(`pkwWeb: unknown attachment '${args.attachmentId}'`)
+        return {
+          attachment: {
+            attachmentId: String(rec.id), filename: rec.filename, mimeType: rec.mimeType,
+            sizeBytes: rec.sizeBytes, observedRevision: rec.observedRevision, createdAt: rec.createdAt,
+          },
+          sync: this.syncView('attachment', String(rec.id), this.syncSnapshot()),
+        }
+      }
+      case 'downloadAttachment': {
+        const id = AttachmentId(String(args.attachmentId))
+        const rec = this.attachments.get(id)
+        const bytes = await this.attachments.open(id)
+        return {
+          attachmentId: String(id),
+          filename: rec?.filename ?? 'attachment',
+          mimeType: rec?.mimeType ?? 'application/octet-stream',
+          contentBase64: Buffer.from(bytes).toString('base64'),
+        }
+      }
       case 'uploadAttachment': {
         const content = Buffer.from(String(args.contentBase64), 'base64')
         const rec = await this.attachments.importFile({ content, filename: String(args.filename), mimeType: String(args.mimeType) })
@@ -200,8 +246,31 @@ export class PkwWebService extends Service {
       case 'search': {
         return this.sync.search(String(args.query), { limit: typeof args.limit === 'number' ? args.limit : 10 })
       }
+      case 'syncEntity': {
+        const entityType = String(args.entityType)
+        if (entityType === 'note') {
+          await this.sync.syncNote(NoteId(String(args.entityId)))
+        } else if (entityType === 'attachment') {
+          await this.sync.syncAttachment(AttachmentId(String(args.entityId)))
+        } else {
+          throw new Error(`pkwWeb: unknown entity type '${entityType}'`)
+        }
+        return { synced: true }
+      }
       case 'syncNow': return this.sync.drain().then(() => ({ drained: true }))
-      case 'reconcile': return this.sync.reconcile()
+      case 'reconcile': {
+        const notesRep = await this.notes.reconcile()
+        const attRep = await this.attachments.reconcile()
+        const syncRep = await this.sync.reconcile()
+        return {
+          notesDecisions: notesRep.decisions.length,
+          notesRepaired: notesRep.repairedProjections,
+          attachmentsDecisions: attRep.decisions.length,
+          attachmentsRepaired: attRep.repairedProjections,
+          markedDirty: syncRep.markedDirty,
+          markedDeleted: syncRep.markedDeleted,
+        }
+      }
       case 'noteSyncInfo': {
         const mapping = this.sync.getMapping(NoteId(String(args.noteId)))
         return mapping ?? null
@@ -210,18 +279,67 @@ export class PkwWebService extends Service {
     }
   }
 
+  /** Active (non-terminal) intents by entity key + currently-dirty entity keys. */
+  private syncSnapshot(): { intents: Map<string, { state: string; lastError?: string }>; dirty: Set<string> } {
+    const intents = new Map<string, { state: string; lastError?: string }>()
+    for (const intent of this.sync.listIntents()) {
+      if (intent.state === 'pending' || intent.state === 'running' || intent.state === 'unknown' || intent.state === 'retryable') {
+        const key = `${intent.entityType}:${intent.entityId}`
+        if (!intents.has(key)) intents.set(key, { state: intent.state, lastError: intent.lastError })
+      }
+    }
+    const dirty = new Set<string>()
+    for (const rec of this.sync.listDirty()) if (rec.dirty) dirty.add(`${rec.entityType}:${rec.entityId}`)
+    return { intents, dirty }
+  }
+
+  /** UI-facing per-entity sync view (mapping + pending/error, no raw table shapes). */
+  private syncView(entityType: string, entityId: string, snap: ReturnType<PkwWebService['syncSnapshot']>): Record<string, unknown> {
+    const mapping = entityType === 'note'
+      ? this.sync.getMapping(NoteId(entityId))
+      : this.sync.getAttachmentMapping(AttachmentId(entityId))
+    const key = `${entityType}:${entityId}`
+    const intent = snap.intents.get(key)
+    return {
+      kbId: this.config.kbId,
+      knowledgeId: mapping?.knowledgeId,
+      syncState: mapping?.syncState,
+      remoteParseStatus: mapping?.remoteParseStatus,
+      updatedAt: mapping?.updatedAt,
+      pending: snap.dirty.has(key) || intent !== undefined,
+      error: intent?.lastError,
+    }
+  }
+
   private async summary(): Promise<unknown> {
     const credential = await this.weknora.credentialStatus()
     const integration = await this.sync.integrationState()
+    let pendingSync = 0
+    for (const rec of this.sync.listDirty()) if (rec.dirty) pendingSync += 1
+    let syncErrors = 0
+    for (const intent of this.sync.listIntents()) {
+      if (intent.state === 'retryable' || intent.state === 'unknown' || intent.state === 'permanent') syncErrors += 1
+    }
+    const notes = this.notes.list()
+    const attachments = this.attachments.list()
+    const recent = [
+      ...notes.map(n => ({ kind: 'note' as const, id: String(n.noteId), title: n.title, updatedAt: n.updatedAt })),
+      ...attachments.map(a => ({ kind: 'attachment' as const, id: String(a.id), title: a.filename, updatedAt: a.indexedAt })),
+    ].sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1)).slice(0, 8)
     return {
       workspaceId: this.workspaceId,
+      workspaceName: this.workspaceName,
+      workspacePath: this.config.workspacePath,
       kbId: this.config.kbId,
       weknoraBaseUrl: this.config.weknoraBaseUrl,
       credential: credential,
       integration: integration,
-      notes: this.notes.list().length,
-      attachments: this.attachments.list().length,
+      notes: notes.length,
+      attachments: attachments.length,
       mappings: this.sync.listMappings().length,
+      pendingSync,
+      syncErrors,
+      recent,
     }
   }
 }
