@@ -175,7 +175,7 @@ const STR = {
     noteToTask:'笔记 → 待办', selectionToTask:'选区 → 待办', taskNoTasks:'暂无任务。', taskTomorrow:'明天', taskYesterday:'昨天', taskOverdue:'已逾期',
     slashH1:'一级标题', slashH2:'二级标题', slashH3:'三级标题', slashList:'无序列表', slashTask:'任务列表', slashQuote:'引用', slashCalloutNote:'提示框', slashCalloutWarning:'警告框', slashTable:'表格', slashHr:'分割线',
     slashInlineCode:'行内代码', slashCodeBlock:'代码块', slashLink:'链接', slashWikiLink:'Wiki 链接', slashImage:'图片', slashFootnote:'脚注', slashCallout:'提示框',
-    editorLoading:'正在加载编辑器…', buildInfo:'构建信息',
+    editorLoading:'正在加载编辑器…', buildInfo:'构建信息', bold:'加粗', italic:'斜体', strike:'删除线',
   },
   en: {
     overview:'Overview', notes:'Notes', attachments:'Attachment library', tasks:'Tasks', trash:'Trash', search:'Search',
@@ -210,7 +210,7 @@ const STR = {
     noteToTask:'Note → Task', selectionToTask:'Selection → Task', taskNoTasks:'No tasks yet.', taskTomorrow:'Tomorrow', taskYesterday:'Yesterday', taskOverdue:'Overdue',
     slashH1:'Heading 1', slashH2:'Heading 2', slashH3:'Heading 3', slashList:'Bullet list', slashTask:'Task list', slashQuote:'Quote', slashCalloutNote:'Callout', slashCalloutWarning:'Warning', slashTable:'Table', slashHr:'Divider',
     slashInlineCode:'Inline code', slashCodeBlock:'Code block', slashLink:'Link', slashWikiLink:'Wiki link', slashImage:'Image', slashFootnote:'Footnote', slashCallout:'Callout',
-    editorLoading:'Loading editor…', buildInfo:'Build info',
+    editorLoading:'Loading editor…', buildInfo:'Build info', bold:'Bold', italic:'Italic', strike:'Strikethrough',
   },
 }
 const PKW_BUILD = '1d93f55'
@@ -1135,7 +1135,65 @@ function showMatrixContextMenu(x, y, matrixId){
     { label: '🗑 ' + t('matrixRemove'), action: 'matrix-remove', id: matrixId, danger: true },
   ])
 }
+function editorInsert(md){
+  if (state.editor.mode === 'live' && vditor) { vditor.insertValue(md); return }
+  const el = $('#editor'); if (el) insertAtCursor(el, md)
+}
+function editorWrap(before, after){
+  if (state.editor.mode === 'live' && vditor) {
+    const sel = window.getSelection().toString()
+    if (sel) vditor.insertValue(before + sel + after)
+    return
+  }
+  const el = $('#editor'); if (!el) return
+  const s = el.selectionStart, e2 = el.selectionEnd
+  const sel = el.value.slice(s, e2)
+  el.value = el.value.slice(0, s) + before + sel + after + el.value.slice(e2)
+  el.selectionStart = s + before.length; el.selectionEnd = s + before.length + sel.length
+  el.dispatchEvent(new Event('input'))
+}
+function editorContextMenu(x, y, hasSel){
+  dismissContextMenu()
+  const menu = document.createElement('div')
+  menu.className = 'ctx-menu'; menu.id = 'ctxMenu'
+  menu.style.left = Math.min(x, window.innerWidth - 220) + 'px'
+  menu.style.top = Math.min(y, window.innerHeight - 360) + 'px'
+  const items = hasSel
+    ? [
+        ['B · ' + t('bold'), () => editorWrap('**', '**')],
+        ['I · ' + t('italic'), () => editorWrap('*', '*')],
+        ['S · ' + t('strike'), () => editorWrap('~~', '~~')],
+        ['⟨⟩ · ' + t('slashInlineCode'), () => editorWrap('\\u0060', '\\u0060')],
+        ['🔗 · ' + t('slashLink'), () => editorWrap('[', '](url)')],
+        ['🔗 · ' + t('slashWikiLink'), () => editorWrap('[[', ']]')],
+        ['📝 · ' + t('noteToTask'), () => { const ref = selectionSourceRef(); if (ref) quickTaskDialog(null, [ref]) }],
+      ]
+    : [
+        ['Ｈ · ' + t('slashH1'), () => editorInsert('# ')],
+        ['• · ' + t('slashList'), () => editorInsert('- ')],
+        ['☐ · ' + t('slashTask'), () => editorInsert('- [ ] ')],
+        ['❝ · ' + t('slashQuote'), () => editorInsert('> ')],
+        ['💡 · ' + t('slashCallout'), () => editorInsert('> [!NOTE]\\n> ')],
+        ['⊞ · ' + t('slashTable'), () => editorInsert('|  |  |\\n| --- | --- |\\n|  |  |\\n')],
+        ['⟨⟩⟨⟩ · ' + t('slashCodeBlock'), () => editorInsert('\\u0060\\u0060\\u0060\\n\\u0060\\u0060\\u0060')],
+        ['— · ' + t('slashHr'), () => editorInsert('---\\n')],
+        ['🔗 · ' + t('slashLink'), () => editorInsert('[text](url)')],
+        ['🔗 · ' + t('slashWikiLink'), () => editorInsert('[[note]]')],
+      ]
+  menu.innerHTML = items.map((it, i) => '<div class="ctx-item" data-edit-idx="' + i + '">' + esc(it[0]) + '</div>').join('')
+  menu.addEventListener('click', (e) => { const it = e.target.closest('[data-edit-idx]'); if (it) { const fn = items[Number(it.dataset.editIdx)][1]; dismissContextMenu(); fn() } })
+  document.body.appendChild(menu)
+}
 document.addEventListener('contextmenu', (e) => {
+  const editorPane = e.target.closest('#editorPane')
+  if (editorPane) {
+    if (e.shiftKey) return // Shift + right-click → native browser menu
+    const sel = window.getSelection()
+    const hasSel = !!(sel && sel.toString().trim())
+    e.preventDefault()
+    editorContextMenu(e.clientX, e.clientY, hasSel)
+    return
+  }
   const noteRow = e.target.closest('.tree-row.note[data-action="open-note"]')
   if (noteRow) { e.preventDefault(); showNoteContextMenu(e.clientX, e.clientY, noteRow.dataset.id); return }
   const folderRow = e.target.closest('.tree-row.folder[data-action="select-folder"]')
