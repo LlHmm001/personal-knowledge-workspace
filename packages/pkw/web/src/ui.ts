@@ -443,6 +443,10 @@ function bindEditor(){
   else if (state.editor.mode === 'source') { const el = $('#editor'); if (el) { el.addEventListener('input', onEditorInput); el.addEventListener('keyup', wikiAutocomplete) } }
   else renderPreview()
 }
+// Wiki-link autocomplete (Source mode only). IR/Live mode is NOT covered here:
+// Vditor's hint.extend matches a single trigger key ('['), and reliably
+// detecting '[[' inside IR's contenteditable would need fragile DOM/selection
+// hacks we cannot browser-verify in this session — so it is deferred by design.
 function wikiAutocomplete(e){
   const el = $('#editor'); if (!el) return
   dismissWikiSuggest()
