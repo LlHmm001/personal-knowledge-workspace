@@ -403,7 +403,8 @@ function renderEditorShell(d){
 function bindEditor(){
   const el = $('#editor')
   if (el) el.addEventListener('input', onEditorInput)
-  $('#preview').addEventListener('click', (e) => {
+  const pv = $('#preview')
+  if (pv) pv.addEventListener('click', (e) => {
     const w = e.target.closest('[data-wiki]')
     if (w) openWikiTarget(w.dataset.wiki)
   })
@@ -424,9 +425,11 @@ function updateSaveStatus(){
   else { st.className = 'saved'; st.textContent = '✓ ' + t('saved') }
 }
 function renderPreview(){
-  const el = $('#editor'); if (!el) return
-  const fm = parseFrontmatterClient(el.value)
-  $('#preview').innerHTML = renderMarkdown(fm.body) || '<span class="muted">' + esc(t('emptyPreview')) + '</span>'
+  const el = $('#editor')
+  const md = el ? el.value : (state.editor.persistedMarkdown || '')
+  const fm = parseFrontmatterClient(md)
+  const pv = $('#preview')
+  if (pv) pv.innerHTML = renderMarkdown(fm.body) || '<span class="muted">' + esc(t('emptyPreview')) + '</span>'
 }
 async function openWikiTarget(target){
   // resolve [[Note]] target to a stable NoteId via the tree/title index.
