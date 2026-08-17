@@ -53,4 +53,16 @@ describe('PKW web UI (served page)', () => {
     expect(page).toContain('.vditor-ir blockquote.callout[data-subtype="DANGER"]{--callout-color:#b91c1c')
     expect(page).toContain('.vditor-ir blockquote.callout[data-subtype="SUCCESS"]')
   })
+
+  it('wires table cell editing + footnote product UX entry points', () => {
+    const js = script()
+    expect(js).toContain('resolveCellInEditor')
+    expect(js).toContain("closest('td, th')")
+    expect(js).toContain("api('tableMutation'")
+    expect(js).toContain('function footnoteDialog')
+    expect(js).toContain("api('footnoteEdit'")
+    expect(js).toContain("api('footnoteDelete'")
+    expect(js).toContain('footnoteKeyFromDef')
+    expect(js).toContain('sup[data-type="footnotes-ref"]')
+  })
 })

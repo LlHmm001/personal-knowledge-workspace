@@ -111,6 +111,10 @@ textarea#editor{width:100%;height:56vh;font:13px/1.7 ui-monospace,SFMono-Regular
 .vditor-ir blockquote.callout[data-subtype="DANGER"]{--callout-color:#b91c1c;--callout-background-color:#fdeaea}
 #preview table{border-collapse:collapse;margin:.6em 0;width:100%}#preview table th,#preview table td{border:1px solid var(--border);padding:6px 10px;text-align:left;font-size:13px}#preview table th{background:#eef2f8;font-weight:650}
 #preview pre{background:#0f172a;color:#e2e8f0;border-radius:8px;padding:12px;overflow:auto;font-size:13px;line-height:1.5}#preview pre code{background:none;color:inherit;font-family:ui-monospace,Menlo,Consolas,monospace}
+#preview .footnotes-defs-div{margin-top:1.2em;border-top:1px solid var(--border);padding-top:.5em;font-size:.9em;color:var(--muted)}
+#preview .footnotes-defs-ol{padding-left:1.6em;margin:.4em 0}
+#preview .footnotes-ref a{color:var(--accent);text-decoration:none}
+#preview .vditor-footnotes__goto-ref{margin-left:.4em;text-decoration:none}
 .muted{color:var(--muted)}.mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
 aside.right{border-left:1px solid var(--border);background:var(--panel);padding:14px;overflow:auto}
 aside.right h3{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin:16px 0 6px}
@@ -245,6 +249,10 @@ const STR = {
     editorLoading:'正在加载编辑器…', buildInfo:'构建信息', bold:'加粗', italic:'斜体', strike:'删除线', highlight:'高亮',
     taskDetail:'任务详情', description:'描述', taskStatus:'状态', taskOpen:'进行中', taskScheduled:'计划日期', taskCreated:'创建', subtasks:'子任务', subtaskAdd:'添加子任务…',
     descriptionPlaceholder:'添加描述…', tagsPlaceholder:'输入标签，用逗号分隔', organization:'组织', time:'时间', info:'信息', closeGuardTitle:'有未保存的修改', closeGuardBody:'你对这个任务的修改还没有保存。', saveAndClose:'保存并关闭', discard:'放弃修改',
+    tableRowAbove:'上方插入行', tableRowBelow:'下方插入行', tableColLeft:'左侧插入列', tableColRight:'右侧插入列',
+    tableAlignLeft:'左对齐', tableAlignCenter:'居中对齐', tableAlignRight:'右对齐',
+    tableDeleteRow:'删除当前行', tableDeleteCol:'删除当前列', tableDeleteTable:'删除表格', tableInsertSize:'插入表格',
+    footnote:'脚注', footnoteContent:'脚注内容', footnoteInsert:'插入脚注', footnoteEdit:'编辑脚注', footnoteJump:'跳转到脚注', footnoteDelete:'删除脚注', footnoteBack:'回到引用', footnoteSelectText:'选中文字后插入脚注', footnoteEmpty:'（未选中文字，将在光标处插入引用）',
   },
   en: {
     overview:'Overview', notes:'Notes', attachments:'Attachment library', tasks:'Tasks', trash:'Trash', search:'Search',
@@ -282,6 +290,10 @@ const STR = {
     editorLoading:'Loading editor…', buildInfo:'Build info', bold:'Bold', italic:'Italic', strike:'Strikethrough', highlight:'Highlight',
     taskDetail:'Task detail', description:'Description', taskStatus:'Status', taskOpen:'Open', taskScheduled:'Scheduled', taskCreated:'Created', subtasks:'Subtasks', subtaskAdd:'Add subtask…',
     descriptionPlaceholder:'Add description…', tagsPlaceholder:'Enter tags, comma separated', organization:'Organization', time:'Time', info:'Info', closeGuardTitle:'Unsaved changes', closeGuardBody:'Your changes to this task are not saved yet.', saveAndClose:'Save & close', discard:'Discard changes',
+    tableRowAbove:'Insert row above', tableRowBelow:'Insert row below', tableColLeft:'Insert column left', tableColRight:'Insert column right',
+    tableAlignLeft:'Align left', tableAlignCenter:'Align center', tableAlignRight:'Align right',
+    tableDeleteRow:'Delete row', tableDeleteCol:'Delete column', tableDeleteTable:'Delete table', tableInsertSize:'Insert table',
+    footnote:'Footnote', footnoteContent:'Footnote content', footnoteInsert:'Insert footnote', footnoteEdit:'Edit footnote', footnoteJump:'Jump to footnote', footnoteDelete:'Delete footnote', footnoteBack:'Back to reference', footnoteSelectText:'Select text then insert footnote', footnoteEmpty:'(no selection — reference inserted at cursor)',
   },
 }
 const PKW_BUILD = '1d93f55'
@@ -656,10 +668,11 @@ function vditorToolbar(){
     'upload',
     { name: 'attachment', tip: t('attachmentLabel'), icon: ic('📎'), click: () => pickAttachment() },
     '|',
-    'table', '|',
+    { name: 'table', tip: t('tableInsertSize'), icon: ic('⊞'), click: () => tableToolbarClick() },
+    '|',
     'inline-code', 'code', '|',
     { name: 'divider', tip: t('slashHr'), icon: ic('—'), click: (_e, vd) => vd.insertValue('---\\n') },
-    { name: 'footnote', tip: t('slashFootnote'), icon: ic('①'), click: (_e, vd) => vd.insertValue('[^1]') },
+    { name: 'footnote', tip: t('footnote'), icon: ic('①'), click: () => footnoteDialog() },
     '|',
     'outline',
   ]
@@ -1310,10 +1323,229 @@ function editorContextMenu(x, y, hasSel){
   menu.addEventListener('click', (e) => { const it = e.target.closest('[data-edit-idx]'); if (it) { const fn = items[Number(it.dataset.editIdx)][1]; dismissContextMenu(); fn() } })
   document.body.appendChild(menu)
 }
+// ── Table editing (Live IR) — structural cell↔canonical mapping, no cell-text ─
+function resolveCellInEditor(cell){
+  if (!vditor || !vditor.vditor || !vditor.vditor.ir) return null
+  const table = cell.closest('table'); if (!table) return null
+  const tables = Array.prototype.slice.call(vditor.vditor.ir.element.querySelectorAll('table'))
+  const tableIndex = tables.indexOf(table)
+  if (tableIndex < 0) return null
+  const isHeader = cell.tagName === 'TH'
+  let columnIndex = 0, p = cell.previousElementSibling
+  while (p) { columnIndex++; p = p.previousElementSibling }
+  let rowIndex = 0
+  if (!isHeader) { const tr = cell.parentElement, tbody = tr.parentElement; let r = tbody.firstElementChild; while (r && r !== tr) { rowIndex++; r = r.nextElementSibling } }
+  return { tableIndex, isHeader, rowIndex, columnIndex }
+}
+function restoreCellCaret(tableIndex, isHeader, rowIndex, columnIndex){
+  if (!vditor || !vditor.vditor || !vditor.vditor.ir) return
+  const tables = Array.prototype.slice.call(vditor.vditor.ir.element.querySelectorAll('table'))
+  const table = tables[tableIndex]
+  if (!table) { vditor.focus(); return }
+  let cell = null
+  if (isHeader) { const thead = table.querySelector('thead'); if (thead && thead.rows[0]) cell = thead.rows[0].cells[Math.min(columnIndex, thead.rows[0].cells.length - 1)] }
+  if (!cell) { const tbody = table.querySelector('tbody'); if (tbody) { const tr = tbody.rows[Math.min(rowIndex, tbody.rows.length - 1)]; if (tr) cell = tr.cells[Math.min(columnIndex, tr.cells.length - 1)] } }
+  if (!cell) { vditor.focus(); return }
+  const range = document.createRange(); range.selectNodeContents(cell); range.collapse(true)
+  const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range)
+  vditor.focus()
+}
+function applyTableMutation(cell, op, align){
+  if (!vditor) return
+  const ctx = resolveCellInEditor(cell); if (!ctx) return
+  const markdown = vditor.getValue()
+  const irEl = vditor.vditor.ir.element
+  const scrollTop = irEl ? irEl.scrollTop : 0
+  api('tableMutation', { markdown, op, tableIndex: ctx.tableIndex, isHeader: ctx.isHeader, rowIndex: ctx.rowIndex, columnIndex: ctx.columnIndex, align }).then(r => {
+    if (!vditor || r.unchanged || !r.markdown) return
+    vditor.setValue(r.markdown)
+    const el = vditor.vditor.ir.element; if (el && scrollTop) el.scrollTop = scrollTop
+    restoreCellCaret(ctx.tableIndex, ctx.isHeader, ctx.rowIndex, ctx.columnIndex)
+    onEditorInput()
+  }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
+}
+function showTableContextMenu(x, y, cell){
+  const ctx = resolveCellInEditor(cell); if (!ctx) return
+  dismissContextMenu()
+  const menu = document.createElement('div')
+  menu.className = 'ctx-menu'; menu.id = 'ctxMenu'
+  menu.style.left = Math.min(x, window.innerWidth - 220) + 'px'
+  menu.style.top = Math.min(y, window.innerHeight - 380) + 'px'
+  const items = [
+    ['⬆ ' + t('tableRowAbove'), () => applyTableMutation(cell, 'addRowAbove')],
+    ['⬇ ' + t('tableRowBelow'), () => applyTableMutation(cell, 'addRowBelow')],
+    ['← ' + t('tableColLeft'), () => applyTableMutation(cell, 'addColumnLeft')],
+    ['→ ' + t('tableColRight'), () => applyTableMutation(cell, 'addColumnRight')],
+    ['◧ ' + t('tableAlignLeft'), () => applyTableMutation(cell, 'setColumnAlign', 'left')],
+    ['◧ ' + t('tableAlignCenter'), () => applyTableMutation(cell, 'setColumnAlign', 'center')],
+    ['◧ ' + t('tableAlignRight'), () => applyTableMutation(cell, 'setColumnAlign', 'right')],
+    ['🗑 ' + t('tableDeleteRow'), () => applyTableMutation(cell, 'deleteRow')],
+    ['🗑 ' + t('tableDeleteCol'), () => applyTableMutation(cell, 'deleteColumn')],
+    ['🗑 ' + t('tableDeleteTable'), () => applyTableMutation(cell, 'deleteTable')],
+  ]
+  menu.innerHTML = items.map((it, i) => '<div class="ctx-item' + (i >= 7 ? ' danger' : '') + '" data-edit-idx="' + i + '">' + esc(it[0]) + '</div>').join('')
+  menu.addEventListener('click', (e) => { const it = e.target.closest('[data-edit-idx]'); if (it) { const fn = items[Number(it.dataset.editIdx)][1]; dismissContextMenu(); fn() } })
+  document.body.appendChild(menu)
+}
+function insertTableGrid(n){
+  const empty = (c) => Array.from({ length: c }, () => '  ').join(' | ')
+  const header = '| ' + empty(n) + ' |'
+  const sep = '| ' + Array.from({ length: n }, () => '---').join(' | ') + ' |'
+  const row = '| ' + empty(n) + ' |'
+  editorInsert(header + '\\n' + sep + '\\n' + Array.from({ length: n }, () => row).join('\\n') + '\\n')
+}
+function showTableInsertMenu(x, y){
+  dismissContextMenu()
+  const menu = document.createElement('div')
+  menu.className = 'ctx-menu'; menu.id = 'ctxMenu'
+  menu.style.left = Math.min(x, window.innerWidth - 160) + 'px'
+  menu.style.top = Math.min(y, window.innerHeight - 200) + 'px'
+  menu.innerHTML = [2, 3, 4, 5, 6].map(n => '<div class="ctx-item" data-insert-size="' + n + '">⊞ ' + n + '×' + n + '</div>').join('')
+  menu.addEventListener('click', (e) => { const it = e.target.closest('[data-insert-size]'); if (it) { const n = Number(it.dataset.insertSize); dismissContextMenu(); insertTableGrid(n) } })
+  document.body.appendChild(menu)
+}
+function tableToolbarClick(){
+  const sel = window.getSelection()
+  const node = sel && sel.anchorNode ? sel.anchorNode : null
+  const el = node && node.nodeType === 1 ? node : (node && node.parentElement)
+  const cell = el ? el.closest('td, th') : null
+  if (cell) { const r = cell.getBoundingClientRect(); showTableContextMenu(r.left + 8, r.bottom + 4, cell) }
+  else { showTableInsertMenu(window.innerWidth / 2, 120) }
+}
+// ── Footnote product UX (canonical [^key] + [^key]: definition) ──────────────
+function getEditorSelection(){
+  if (state.editor.mode === 'live') return window.getSelection().toString()
+  const el = $('#editor'); return el ? el.value.slice(el.selectionStart, el.selectionEnd) : ''
+}
+function setEditorValue(md){
+  if (state.editor.mode === 'live' && vditor) { vditor.setValue(md); return }
+  const el = $('#editor'); if (el) { el.value = md; el.dispatchEvent(new Event('input')) }
+}
+function footnoteKeyFromDef(defEl){
+  const t = (defEl.textContent || '')
+  const i = t.indexOf('[^'); if (i !== 0) return null
+  const j = t.indexOf(']:', i); if (j < 0) return null
+  return t.slice(i + 2, j)
+}
+function footnoteDefinitionContent(markdown, key){
+  const prefix = '[^' + key + ']: '
+  const lines = markdown.split('\\n')
+  for (let i = 0; i < lines.length; i++) if (lines[i].indexOf(prefix) === 0) return lines[i].slice(prefix.length)
+  return ''
+}
+function insertFootnoteReference(key){
+  if (state.editor.mode === 'live' && vditor) {
+    const sel = window.getSelection()
+    if (sel && sel.toString().trim()) { const range = sel.getRangeAt(0); range.collapse(false); sel.removeAllRanges(); sel.addRange(range) }
+    vditor.insertValue('[^' + key + ']')
+    return
+  }
+  const el = $('#editor'); if (!el) return
+  const ref = '[^' + key + ']'
+  el.value = el.value.slice(0, el.selectionEnd) + ref + el.value.slice(el.selectionEnd)
+  el.selectionStart = el.selectionEnd = el.selectionEnd + ref.length
+  el.dispatchEvent(new Event('input'))
+}
+function appendFootnoteDefinitionAtEnd(key, content){
+  if (state.editor.mode === 'live' && vditor) {
+    const irEl = vditor.vditor.ir.element
+    const range = document.createRange(); range.selectNodeContents(irEl); range.collapse(false)
+    const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range)
+    vditor.insertValue('\\n\\n[^' + key + ']: ' + content)
+    return
+  }
+  const el = $('#editor'); if (!el) return
+  el.value = el.value.replace(/\\n+$/, '') + '\\n\\n[^' + key + ']: ' + content + '\\n'
+  el.dispatchEvent(new Event('input'))
+}
+function applyFootnoteEdit(key, content){
+  const md = getEditorValue().value
+  api('footnoteEdit', { markdown: md, key, content }).then(r => {
+    if (r.unchanged) { toast(t('genericError'), 'warn'); return }
+    setEditorValue(r.markdown); onEditorInput()
+  }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
+}
+function applyFootnoteDelete(key){
+  const md = getEditorValue().value
+  api('footnoteDelete', { markdown: md, key }).then(r => {
+    setEditorValue(r.markdown); onEditorInput()
+  }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
+}
+function jumpToFootnoteDef(key){
+  const defs = document.querySelectorAll('[data-type="footnotes-def"]')
+  for (let i = 0; i < defs.length; i++) if (footnoteKeyFromDef(defs[i]) === key) { defs[i].scrollIntoView({ block: 'center' }); return }
+}
+function jumpToFootnoteRef(key){
+  const refs = document.querySelectorAll('sup[data-type="footnotes-ref"]')
+  for (let i = 0; i < refs.length; i++) { const label = refs[i].getAttribute('data-footnotes-label') || ''; if (label === '^' + key) { refs[i].scrollIntoView({ block: 'center' }); return } }
+}
+function showFootnoteRefMenu(x, y, key){
+  dismissContextMenu()
+  const menu = document.createElement('div'); menu.className = 'ctx-menu'; menu.id = 'ctxMenu'
+  menu.style.left = Math.min(x, window.innerWidth - 220) + 'px'; menu.style.top = Math.min(y, window.innerHeight - 140) + 'px'
+  const items = [
+    ['✏️ ' + t('footnoteEdit'), () => editFootnoteDialog(key)],
+    ['⤵ ' + t('footnoteJump'), () => jumpToFootnoteDef(key)],
+    ['🗑 ' + t('footnoteDelete'), () => applyFootnoteDelete(key)],
+  ]
+  menu.innerHTML = items.map((it, i) => '<div class="ctx-item' + (i === 2 ? ' danger' : '') + '" data-edit-idx="' + i + '">' + esc(it[0]) + '</div>').join('')
+  menu.addEventListener('click', (e) => { const it = e.target.closest('[data-edit-idx]'); if (it) { const fn = items[Number(it.dataset.editIdx)][1]; dismissContextMenu(); fn() } })
+  document.body.appendChild(menu)
+}
+function showFootnoteDefMenu(x, y, key){
+  dismissContextMenu()
+  const menu = document.createElement('div'); menu.className = 'ctx-menu'; menu.id = 'ctxMenu'
+  menu.style.left = Math.min(x, window.innerWidth - 220) + 'px'; menu.style.top = Math.min(y, window.innerHeight - 140) + 'px'
+  const items = [
+    ['⤴ ' + t('footnoteBack'), () => jumpToFootnoteRef(key)],
+    ['✏️ ' + t('footnoteEdit'), () => editFootnoteDialog(key)],
+    ['🗑 ' + t('footnoteDelete'), () => applyFootnoteDelete(key)],
+  ]
+  menu.innerHTML = items.map((it, i) => '<div class="ctx-item' + (i === 2 ? ' danger' : '') + '" data-edit-idx="' + i + '">' + esc(it[0]) + '</div>').join('')
+  menu.addEventListener('click', (e) => { const it = e.target.closest('[data-edit-idx]'); if (it) { const fn = items[Number(it.dataset.editIdx)][1]; dismissContextMenu(); fn() } })
+  document.body.appendChild(menu)
+}
+function footnoteModal(title, initial, placeholder, onOk){
+  const overlay = document.createElement('div'); overlay.className = 'modal-overlay'
+  overlay.innerHTML = '<div class="modal footnote-modal"><h3>' + esc(title) + '</h3><textarea id="fnContent" rows="4" placeholder="' + esc(placeholder) + '"></textarea><div class="toolbar"><button class="btn" id="fnCancel">' + esc(t('cancel')) + '</button><button class="btn primary" id="fnOk">' + esc(t('footnoteInsert')) + '</button></div></div>'
+  document.body.appendChild(overlay)
+  const q = (s) => overlay.querySelector(s)
+  const ta = q('#fnContent'); ta.value = initial || ''; ta.focus()
+  q('#fnCancel').addEventListener('click', () => overlay.remove())
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove() })
+  q('#fnOk').addEventListener('click', () => {
+    const content = ta.value.trim()
+    if (!content) { ta.focus(); return }
+    overlay.remove(); onOk(content)
+  })
+}
+function footnoteDialog(){
+  if (state.selectedNoteId === null) return
+  const hasSel = !!(getEditorSelection() || '').trim()
+  footnoteModal(t('footnoteInsert'), '', t('footnoteContent'), (content) => {
+    api('nextFootnoteKey', { markdown: getEditorValue().value }).then(r => {
+      insertFootnoteReference(r.key)
+      appendFootnoteDefinitionAtEnd(r.key, content)
+      onEditorInput()
+    }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
+  })
+  const hint = document.querySelector('.footnote-modal')
+  if (hint) hint.insertAdjacentHTML('afterbegin', '<p class="muted">' + esc(hasSel ? t('footnoteSelectText') : t('footnoteEmpty')) + '</p>')
+}
+function editFootnoteDialog(key){
+  const cur = footnoteDefinitionContent(getEditorValue().value, key)
+  footnoteModal(t('footnoteEdit'), cur, t('footnoteContent'), (content) => applyFootnoteEdit(key, content))
+}
 document.addEventListener('contextmenu', (e) => {
   const editorPane = e.target.closest('#editorPane')
   if (editorPane) {
     if (e.shiftKey) return // Shift + right-click → native browser menu
+    const cell = e.target.closest('td, th')
+    if (cell && state.editor.mode === 'live') { e.preventDefault(); showTableContextMenu(e.clientX, e.clientY, cell); return }
+    const fnRef = e.target.closest('sup[data-type="footnotes-ref"]')
+    if (fnRef && state.editor.mode === 'live') { const label = fnRef.getAttribute('data-footnotes-label') || ''; const key = label.slice(1); if (key) { e.preventDefault(); showFootnoteRefMenu(e.clientX, e.clientY, key); return } }
+    const fnDef = e.target.closest('[data-type="footnotes-def"]')
+    if (fnDef && state.editor.mode === 'live') { const key = footnoteKeyFromDef(fnDef); if (key) { e.preventDefault(); showFootnoteDefMenu(e.clientX, e.clientY, key); return } }
     const sel = window.getSelection()
     const hasSel = !!(sel && sel.toString().trim())
     e.preventDefault()
