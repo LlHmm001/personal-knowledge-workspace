@@ -401,8 +401,7 @@ export class WeKnoraSyncService extends Service {
 
     const mapping = this.reqMappings().get(key)
     if (record.deletedAt !== undefined) {
-      await this.convergeDeleted(key, mapping)
-      await this.clearDirty(key)
+      await this.runRemoteDelete(ENTITY_NOTE, String(noteId), key, mapping)
       return undefined
     }
 
@@ -436,10 +435,55 @@ export class WeKnoraSyncService extends Service {
   private async convergeDeleted(key: string, mapping: MappingRecord | undefined): Promise<void> {
     if (mapping === undefined) return
     if (mapping.syncState === M_DELETED || mapping.syncState === M_STALE) return
+    // Immediate local hide: mark deleted and KEEP the reverse entry so retrieval
+    // can filter this KnowledgeId while the async remote delete is still pending.
     await this.reqMappings().put(key, { ...mapping, syncState: M_DELETED, updatedAt: this.now() })
-    await this.reqReverse().delete(mapping.knowledgeId)
-    const rep = mapping.replacementKnowledgeId
-    if (rep !== undefined) await this.reqReverse().delete(rep)
+  }
+
+  /** Durable, outcome-aware remote delete: enqueue intent, DELETE, verify absence. */
+  private async runRemoteDelete(entityType: string, entityId: string, key: string, mapping: MappingRecord | undefined): Promise<void> {
+    if (mapping === undefined) { await this.clearDirty(key); return }
+    await this.convergeDeleted(key, mapping)
+
+    const dirtyRec = this.reqDirty().get(key)
+    let intent = dirtyRec?.pendingOperationId !== undefined ? this.reqIntents().get(dirtyRec.pendingOperationId) : undefined
+    if (intent === undefined || intent.operationKind !== 'delete') {
+      intent = await this.newIntent({ entityType, entityId, remoteFingerprint: mapping.remoteFingerprint, operationKind: 'delete' })
+      await this.armPending(intent)
+      return // armed; the next drain executes the DELETE
+    }
+    if (intent.state === S_COMPLETED || intent.state === S_SUPERSEDED) { await this.clearDirty(key); return }
+    if (intent.state === S_RETRYABLE && intent.nextRetryAt !== undefined && intent.nextRetryAt > this.now()) return
+    if (intent.state === S_PERMANENT) return
+
+    try {
+      await this.ctx.pkwWeKnora.deleteKnowledge(mapping.knowledgeId)
+      if (await this.remoteGone(mapping.knowledgeId)) {
+        // Keep the reverse entry: search filters by the deleted mapping's syncState,
+        // so a deleted KnowledgeId stays hidden even after the remote converges.
+        await this.recordCompletion(intent, mapping.knowledgeId)
+        await this.clearDirty(key)
+      } else {
+        // Async worker still cleaning up: keep dirty so the next drain re-checks.
+        await this.recordIntent(intent, { ...intent, attempt: intent.attempt + 1 })
+      }
+    } catch (error) {
+      if (error instanceof WeKnoraError && error.kind === 'not_found') {
+        await this.recordCompletion(intent, mapping.knowledgeId)
+        await this.clearDirty(key)
+      } else {
+        await this.failIntent(intent, error, { mutation: true }, key)
+      }
+    }
+  }
+
+  private async remoteGone(knowledgeId: string): Promise<boolean> {
+    try {
+      await this.ctx.pkwWeKnora.getKnowledge(knowledgeId)
+      return false
+    } catch (error) {
+      return error instanceof WeKnoraError && error.kind === 'not_found'
+    }
   }
 
   private async newIntent(fields: {
@@ -736,8 +780,7 @@ export class WeKnoraSyncService extends Service {
 
     const mapping = this.reqMappings().get(key)
     if (record.deletedAt !== undefined) {
-      await this.convergeDeleted(key, mapping)
-      await this.clearDirty(key)
+      await this.runRemoteDelete(ENTITY_ATTACHMENT, String(attachmentId), key, mapping)
       return undefined
     }
 
@@ -959,7 +1002,14 @@ export class WeKnoraSyncService extends Service {
       limit: opts.limit ?? 10,
       ...(opts.knowledgeIds !== undefined ? { knowledgeIds: opts.knowledgeIds } : {}),
     })
-    return chunks.map(chunk => this.toRetrievalResult(kbId, chunk))
+    // Immediate hide: a locally-deleted (or stale) projection must not surface in
+    // PKW retrieval even while the async WeKnora delete is still converging.
+    return chunks
+      .filter(chunk => {
+        const mapping = this.getMappingByKnowledgeId(chunk.knowledge_id)
+        return mapping === undefined || (mapping.syncState !== M_DELETED && mapping.syncState !== M_STALE)
+      })
+      .map(chunk => this.toRetrievalResult(kbId, chunk))
   }
 
   private toRetrievalResult(kbId: string, chunk: SearchResultChunk): RetrievalResult {

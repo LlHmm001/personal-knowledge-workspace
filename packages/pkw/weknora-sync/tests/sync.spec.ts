@@ -752,6 +752,20 @@ describe('retrieval + SourceRef', () => {
     expect(hit).toBeDefined()
     expect(hit!.local).toBeUndefined()
   })
+
+  it('hides a locally-deleted note from retrieval before remote delete converges', async () => {
+    const { notes, sync } = await boot()
+    const note = await notes.create({ relativePath: 'del.md', markdown: '# delete me\n' })
+    const kid = await sync.syncNote(note.noteId)
+    await notes.delete(note.noteId)
+    // The worker marks the mapping deleted (immediate hide) while the async
+    // remote delete is still pending; retrieval must filter it out.
+    await vi.waitFor(() => {
+      expect(sync.getMapping(note.noteId)?.syncState).toBe('deleted')
+    }, { timeout: 3000 })
+    const results = await sync.search('delete me')
+    expect(results.find(r => r.remote.knowledgeId === kid)).toBeUndefined()
+  })
 })
 
 // ── security ──────────────────────────────────────────────────────────────────
