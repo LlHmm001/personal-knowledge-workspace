@@ -9,6 +9,8 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { PkwEventCommitted, PkwEventStore } from './types.ts'
 
 export * from './types.ts'
+export { resolveTextQuoteAnchor } from './resolve.ts'
+export type { ResolveTextQuoteResult } from './resolve.ts'
 export { parseNoteId } from './frontmatter.ts'
 export { attachmentDomainSpec, noteDomainSpec, operationCommitRecord, pkwDomainSpec, taskDomainSpec } from './spec.ts'
 export type { OperationCommitRecord } from './spec.ts'

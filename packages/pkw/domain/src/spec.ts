@@ -152,6 +152,8 @@ const taskSourceRefSchema = z.object({
   exact: z.string().optional(),
   prefix: z.string().optional(),
   suffix: z.string().optional(),
+  start: z.number().int().nonnegative().optional(),
+  end: z.number().int().nonnegative().optional(),
   noteRevision: z.number().int().nonnegative().optional(),
   contentHash: z.string().optional(),
 })

@@ -343,6 +343,9 @@ export interface TaskSourceRef {
   exact?: string
   prefix?: string
   suffix?: string
+  /** Offset hints into the note body at capture time (never a source of truth). */
+  start?: number
+  end?: number
   noteRevision?: number
   contentHash?: string
 }

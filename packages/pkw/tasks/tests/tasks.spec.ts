@@ -91,9 +91,9 @@ describe('PKW tasks core', () => {
     expect(fromNote.sourceRefs).toEqual([{ kind: 'note', noteId: 'note_abc' }])
     const fromSelection = await tasks.createTask({
       title: 'selection task',
-      sourceRefs: [{ kind: 'selection', noteId: 'note_abc', exact: '重新整理商业模型', prefix: '创业', suffix: 'DDmind', noteRevision: 3, contentHash: 'h1' }],
+      sourceRefs: [{ kind: 'selection', noteId: 'note_abc', exact: '重新整理商业模型', prefix: '创业', suffix: 'DDmind', start: 12, end: 22, noteRevision: 3, contentHash: 'h1' }],
     })
-    expect(fromSelection.sourceRefs[0]).toMatchObject({ kind: 'selection', noteId: 'note_abc', exact: '重新整理商业模型', prefix: '创业', suffix: 'DDmind' })
+    expect(fromSelection.sourceRefs[0]).toMatchObject({ kind: 'selection', noteId: 'note_abc', exact: '重新整理商业模型', prefix: '创业', suffix: 'DDmind', start: 12, end: 22, noteRevision: 3, contentHash: 'h1' })
   })
 
   it('reorders tasks within a manual order (matrix/quadrant drag support)', async () => {
