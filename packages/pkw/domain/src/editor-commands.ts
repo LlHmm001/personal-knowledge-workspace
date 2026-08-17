@@ -78,3 +78,31 @@ export function selectionTaskTitle(selection: string, max = 60): string {
   const first = selection.replace(/\r\n/g, '\n').split('\n').map(s => s.trim()).find(s => s.length > 0) ?? ''
   return first.length > max ? `${first.slice(0, max)}…` : first
 }
+
+/** Strip a leading YAML frontmatter block (`---\n…\n---`). */
+export function stripFrontmatter(markdown: string): string {
+  const m = /^---\s*\r?\n([\s\S]*?)\r?\n---\s*\r?\n?/.exec(markdown)
+  return m ? markdown.slice(m[0].length) : markdown
+}
+
+/**
+ * Whole-Note→Task initial description preview: skip frontmatter, take the first
+ * meaningful paragraph(s) up to `maxLen`. Never an empty description for a
+ * non-empty note, but never a 20k-word dump either.
+ */
+export function noteTaskDescriptionPreview(markdown: string, maxLen = 500): string {
+  const body = stripFrontmatter(markdown)
+  const paragraphs = body
+    .replace(/\r\n/g, '\n')
+    .split(/\n{2,}/)
+    .map(p => p.trim())
+    .filter(p => p.length > 0 && !/^#{1,6}\s/.test(p))
+  if (paragraphs.length === 0) return ''
+  let out = ''
+  for (const p of paragraphs) {
+    const candidate = out === '' ? p : `${out}\n\n${p}`
+    if (candidate.length > maxLen) break
+    out = candidate
+  }
+  return out || paragraphs[0]!.slice(0, maxLen)
+}

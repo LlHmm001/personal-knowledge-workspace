@@ -991,16 +991,22 @@ function renderMatrixGrid(matrices, all, matrixId){
   const m = matrices.find(x => x.matrixId === matrixId)
   const name = m ? m.name : matrixId
   const open = all.filter(x => x.status === 'open' && x.matrixId === matrixId)
+  const done = all.filter(x => x.status === 'completed' && x.matrixId === matrixId)
   const cells = [[1, 'Q1', t('q1')], [2, 'Q2', t('q2')], [3, 'Q3', t('q3')], [4, 'Q4', t('q4')]]
   const grid = cells.map(([q, label, title]) => {
     const items = open.filter(x => quadrantOf(x) === q)
     return '<div class="quad"><div class="quad-head"><b>' + label + '</b> <span class="muted">' + esc(title) + '</span><span class="count">' + items.length + '</span></div>' +
       (items.length ? items.map(x => taskRow(x, matrices)).join('') : '<div class="empty small">—</div>') + '</div>'
   }).join('')
+  // Completed section keeps the matrix/quadrant context (group by quadrant).
+  const doneRows = done.map(x => '<div class="tree-row task-card" data-action="open-task-detail" data-id="' + esc(x.taskId) + '"><span class="ic" data-action="toggle-task" data-completed="1" data-id="' + esc(x.taskId) + '">☑</span><span class="nm">' + esc(x.title) + '</span><span class="badge">Q' + quadrantOf(x) + '</span></div>').join('')
+  const doneHtml = done.length
+    ? '<div class="list-section">' + esc(t('taskCompleted')) + ' (' + done.length + ')</div>' + doneRows
+    : ''
   $('#main').innerHTML =
     '<h2>' + esc(name) + '<span class="sub">' + esc(t('taskMatrix')) + '</span></h2>' +
     '<div class="toolbar"><button class="btn primary" data-action="new-task-matrix" data-id="' + esc(matrixId) + '">+ ' + esc(t('taskQuickAdd')) + '</button><button class="btn" data-action="new-matrix">+ ' + esc(t('newMatrix')) + '</button></div>' +
-    '<div class="quad-grid">' + grid + '</div>'
+    '<div class="quad-grid">' + grid + '</div>' + doneHtml
 }
 
 async function renderTrash(){
@@ -1173,7 +1179,7 @@ function editorContextMenu(x, y, hasSel){
         ['⟨⟩ · ' + t('slashInlineCode'), () => editorWrap('\\u0060', '\\u0060')],
         ['🔗 · ' + t('slashLink'), () => editorWrap('[', '](url)')],
         ['🔗 · ' + t('slashWikiLink'), () => editorWrap('[[', ']]')],
-        ['📝 · ' + t('noteToTask'), () => { const ref = selectionSourceRef(); if (ref) quickTaskDialog(null, [ref]) }],
+        ['📝 · ' + t('noteToTask'), () => { const ref = selectionSourceRef(); if (ref) quickTaskDialog(null, [ref], { title: ref.exact.replace(/\\n/g, ' ').trim().slice(0, 60), description: ref.exact }) }],
       ]
     : [
         ['Ｈ · ' + t('slashH1'), () => editorInsert('# ')],
@@ -1233,7 +1239,7 @@ document.addEventListener('mouseup', (e) => {
   btn.style.left = Math.max(8, rect.left + rect.width / 2 - 40) + 'px'
   btn.style.top = Math.max(8, rect.top - 36) + 'px'
   btn.addEventListener('mousedown', (ev) => ev.preventDefault())
-  btn.addEventListener('click', () => { dismissSelButton(); quickTaskDialog(null, pendingSelectionRef ? [pendingSelectionRef] : null) })
+  btn.addEventListener('click', () => { dismissSelButton(); const r = pendingSelectionRef; if (r) quickTaskDialog(null, [r], { title: r.exact.replace(/\\n/g, " ").trim().slice(0, 60), description: r.exact }) })
   document.body.appendChild(btn)
 })
 
@@ -1271,8 +1277,14 @@ document.addEventListener('click', (e) => {
   else if (act === 'new-task-matrix') quickTaskDialog(id || null, null)
   else if (act === 'new-matrix') { const name = prompt(t('createFolderPrompt'), ''); if (name && name.trim()) api('createMatrix', { name: name.trim() }).then(() => renderTasks()) }
   else if (act === 'task-view') setTaskView(el.dataset.view)
-  else if (act === 'note-to-task') quickTaskDialog(null, [{ kind: 'note', noteId: id }])
-  else if (act === 'selection-to-task') { const ref = selectionSourceRef(); if (ref) quickTaskDialog(null, [ref]); else toast(t('taskNoTasks'), 'warn') }
+  else if (act === 'note-to-task') {
+    api('getNote', { noteId: id }).then(d => {
+      const paras = (d.body || '').split(/\\n{2,}/).map(p => p.trim()).filter(p => p && !/^#{1,6}\\s/.test(p))
+      const desc = paras.slice(0, 3).join('\\n\\n').slice(0, 500)
+      quickTaskDialog(null, [{ kind: 'note', noteId: id }], { title: d.note.title, description: desc })
+    }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
+  }
+  else if (act === 'selection-to-task') { const ref = selectionSourceRef(); if (ref) quickTaskDialog(null, [ref], { title: ref.exact.replace(/\\n/g, ' ').trim().slice(0, 60), description: ref.exact }); else toast(t('taskNoTasks'), 'warn') }
   else if (act === 'open-task-source') { state.highlightText = el.dataset.exact || ''; setView('notes'); openNote(id) }
   else if (act === 'toggle-task') { const t = el.dataset.completed === '1' ? api('reopenTask', { taskId: id }) : api('completeTask', { taskId: id }); t.then(() => renderTasks()) }
   else if (act === 'open-task-detail') taskDetailDialog(id)
@@ -1369,14 +1381,16 @@ function taskDetailDialog(taskId){
     modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove() })
   }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
 }
-function quickTaskDialog(matrixId, sourceRefs){
+function quickTaskDialog(matrixId, sourceRefs, prefill){
   const lastMatrix = localStorage.getItem('pkw-task-last-matrix') || ''
+  const pre = prefill || {}
   api('listMatrices').then(matrices => {
     const opts = '<option value="">' + esc(t('taskInbox')) + '</option>' + matrices.map(m => '<option value="' + esc(m.matrixId) + '"' + (m.matrixId === (matrixId || lastMatrix) ? ' selected' : '') + '>' + esc(m.name) + '</option>').join('')
     const srcNote = sourceRefs && sourceRefs[0] ? '<div class="form"><label>' + esc(t('noteLabel')) + '</label><span class="v mono">' + esc(sourceRefs[0].noteId) + '</span></div>' : ''
     document.body.insertAdjacentHTML('beforeend',
       '<div class="modal-overlay" id="taskModal"><div class="modal"><h3>' + esc(t('taskQuickAdd')) + '</h3>' +
-      '<div class="form"><label>' + esc(t('taskTitle')) + '</label><input id="tkTitle" /></div>' +
+      '<div class="form"><label>' + esc(t('taskTitle')) + '</label><input id="tkTitle" value="' + esc(pre.title || '') + '" /></div>' +
+      '<div class="form"><label>' + esc(t('description')) + '</label><textarea id="tkDesc" rows="3">' + esc(pre.description || '') + '</textarea></div>' +
       '<div class="form"><label>' + esc(t('matrices')) + '</label><select id="tkMatrix">' + opts + '</select></div>' +
       '<div class="form"><label>' + esc(t('taskQuadrant')) + '</label><select id="tkQuad">' +
         '<option value="1">Q1 · ' + esc(t('q1')) + '</option><option value="2">Q2 · ' + esc(t('q2')) + '</option><option value="3">Q3 · ' + esc(t('q3')) + '</option><option value="4">Q4 · ' + esc(t('q4')) + '</option></select></div>' +
@@ -1394,9 +1408,11 @@ function quickTaskDialog(matrixId, sourceRefs){
       const quad = Number($('#tkQuad').value)
       const due = $('#tkDue').value
       const tags = ($('#tkTags').value || '').split(',').map(s => s.trim()).filter(Boolean)
+      const description = $('#tkDesc').value
       if (m) localStorage.setItem('pkw-task-last-matrix', m)
       api('createTask', {
         title,
+        ...(description ? { description } : {}),
         ...(m ? { matrixId: m } : {}),
         important: quad === 1 || quad === 2,
         urgent: quad === 1 || quad === 3,
