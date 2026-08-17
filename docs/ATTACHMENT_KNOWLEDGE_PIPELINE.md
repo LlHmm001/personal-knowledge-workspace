@@ -126,3 +126,17 @@ Attachment Library → api('uploadAttachment') → attachments.importFile()
 ## 8. Search 结果回 PKW
 
 - WeKnora hybrid search 返回 chunk，PKW 用 `knowledgeId → 反向映射`（`getMappingByKnowledgeId`）找回 `NoteId`/`AttachmentId`，再展示本地实体。命中 Attachment Knowledge 时能显示 `attachmentId` +（若被引用）相关笔记。
+
+---
+
+## 9. Knowledge identity model (PART F) + Wiki/Graph chain
+
+```
+File → Attachment (AttachmentId)  ↕ Attachment KnowledgeId  → parser → summary → Wiki/Graph
+Note → Markdown (NoteId)          ↕ Note KnowledgeId        → Wiki/Graph
+Wiki pages / Graph nodes          = WeKnora-derived knowledge (NOT Proposition / Memory Relation)
+```
+
+- Note Knowledge 与 Attachment Knowledge 是两条**独立 projection**（Note=manual Markdown 文本；Attachment=file binary+parser）。
+- Wiki/Graph 由 WeKnora 从 KB 聚合生成，是 **derived knowledge**，不映射回单一 NoteId/AttachmentId（WikiPage/GraphNode 无 knowledge_id 字段）——PKW 只做 title 匹配启发式 deep-link（否则显示「WeKnora 生成内容」），不伪造 NoteId。
+- 未来 PLL 是另一层，Wiki node ≠ Proposition、Graph edge ≠ Memory Relation。
