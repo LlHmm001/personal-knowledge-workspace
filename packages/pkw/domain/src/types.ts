@@ -264,6 +264,7 @@ export interface PkwNotesService {
   deleteFolder(relativePath: string): Promise<void>
   trashFolder(relativePath: string): Promise<void>
   restoreFolder(relativePath: string): Promise<void>
+  purgeFolder(relativePath: string): Promise<void>
   getOrder(parentPath: string): NoteOrderChild[]
   setOrder(parentPath: string, children: NoteOrderChild[]): Promise<void>
 }

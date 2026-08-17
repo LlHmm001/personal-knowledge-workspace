@@ -316,6 +316,13 @@ describe('pkw notes + attachments core', () => {
     expect(notes.get(a.noteId)!.deletedAt).toBeUndefined()
     expect(notes.get(b.noteId)!.deletedAt).toBeUndefined()
     expect(notes.list().some(n => n.noteId === a.noteId)).toBe(true)
+    // trash again + purge permanently
+    await notes.trashFolder('项目')
+    await notes.purgeFolder('项目')
+    expect((await notes.listFolders()).includes('项目')).toBe(false)
+    expect(notes.get(a.noteId)).toBeUndefined()
+    expect(notes.get(b.noteId)).toBeUndefined()
+    expect(notes.list({ includeDeleted: true }).some(n => n.noteId === a.noteId || n.noteId === b.noteId)).toBe(false)
   })
 
   it('deletes an empty folder but rejects a non-empty one', async () => {
