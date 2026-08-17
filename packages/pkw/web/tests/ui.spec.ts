@@ -89,4 +89,12 @@ describe('PKW web UI (served page)', () => {
     expect(js).toContain("'note:'")
     expect(js).toContain('trash-check')
   })
+
+  it('wires matrix-delete long-operation feedback (busy state + duplicate guard)', () => {
+    const js = script()
+    expect(js).toContain('matrixDeleteDialog')
+    expect(js).toContain('matrixDeleting')
+    expect(js).toContain('matrixMovingTasks')
+    expect(js).toContain('matrixDeleteFailed')
+  })
 })
