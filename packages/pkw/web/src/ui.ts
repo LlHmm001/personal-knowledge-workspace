@@ -106,7 +106,9 @@ aside.right h3:first-child{margin-top:0}
 .toast.ok{background:var(--ok)}.toast.err{background:var(--err)}.toast.warn{background:var(--warn)}
 .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:70;display:flex;align-items:center;justify-content:center}
 .modal{background:var(--panel);border-radius:12px;padding:18px;min-width:320px;max-width:520px;box-shadow:0 8px 30px rgba(0,0,0,.25)}
-.modal h3{margin:0 0 12px;font-size:15px}.modal input,.modal select{width:100%;padding:8px;border:1px solid var(--border);border-radius:8px;font-size:13px;margin-bottom:10px}
+.modal h3{margin:0 0 12px;font-size:15px}.modal input,.modal select,.modal textarea{width:100%;padding:8px;border:1px solid var(--border);border-radius:8px;font-size:13px;margin-bottom:10px;background:var(--panel);color:var(--ink);font-family:inherit;box-sizing:border-box}
+.modal input:focus,.modal select:focus,.modal textarea:focus{outline:2px solid var(--accent);outline-offset:0;border-color:var(--accent)}
+.modal textarea{min-height:96px;resize:vertical;line-height:1.6}
 .modal .modal-actions{display:flex;gap:8px;justify-content:flex-end}
 .modal .form{margin-bottom:10px}.modal .form label{display:block;font-size:12px;color:var(--muted);margin-bottom:3px}
 .quad-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.quad{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:10px;min-height:140px}
@@ -118,6 +120,8 @@ aside.right h3:first-child{margin-top:0}
 .sel-task-btn{position:fixed;z-index:89;background:var(--accent);color:#fff;padding:4px 10px;border-radius:6px;font-size:12px;cursor:pointer;box-shadow:0 3px 10px rgba(0,0,0,.2)}.sel-task-btn:hover{filter:brightness(1.08)}
 .sel-toolbar{position:fixed;z-index:89;background:var(--panel);border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 14px rgba(0,0,0,.18);padding:3px;display:flex;gap:2px}
 .sel-btn{padding:4px 7px;font-size:12px;cursor:pointer;border-radius:5px;color:var(--ink);min-width:20px;text-align:center}.sel-btn:hover{background:#eef2f8}
+.task-card.dragging{opacity:.45}
+.drop-over{outline:2px dashed var(--accent);outline-offset:-2px;background:#eef4ff}
 .task-src{margin-left:6px;cursor:pointer;opacity:.65}.task-src:hover{opacity:1}
 .task-mv{margin-left:auto;display:inline-flex;gap:2px;opacity:.55}.task-mv span{cursor:pointer;padding:0 5px;border-radius:4px}.task-mv span:hover{background:#eef2f8;opacity:1}
 mark{background:#ffe9a8;border-radius:2px;padding:0 2px}
@@ -971,7 +975,7 @@ function taskRow(x, matrices, inMatrix){
     ? '<span class="task-src" data-action="open-task-source" data-id="' + esc(x.sourceRefs[0].noteId) + '" data-exact="' + esc(x.sourceRefs[0].exact || '') + '" title="' + esc(t('openNote')) + '">📄</span>' : ''
   const mv = '<span class="task-mv"><span data-action="task-up" data-id="' + esc(x.taskId) + '" title="' + esc(t('moveUp')) + '">↑</span><span data-action="task-down" data-id="' + esc(x.taskId) + '" title="' + esc(t('moveDown')) + '">↓</span></span>'
   // Card click → detail; checkbox click → complete/reopen.
-  return '<div class="tree-row task-card" data-action="open-task-detail" data-id="' + esc(x.taskId) + '">' +
+  return '<div class="tree-row task-card" draggable="true" data-action="open-task-detail" data-completed="' + (x.status === 'completed' ? '1' : '0') + '" data-id="' + esc(x.taskId) + '">' +
     '<span class="ic" data-action="toggle-task" data-completed="' + (x.status === 'completed' ? '1' : '0') + '" data-id="' + esc(x.taskId) + '">' + (x.status === 'completed' ? '☑' : '☐') + '</span>' +
     '<span class="nm">' + esc(x.title) + '</span>' + badge + due + src + mv + '</div>'
 }
@@ -1002,8 +1006,8 @@ async function renderTasks(){
     const counts = {}
     for (const x of all) if (x.status === 'open') { const k = x.matrixId ?? 'inbox'; counts[k] = (counts[k] || 0) + 1 }
     const views = [['inbox', 'Inbox'], ['today', t('taskToday')], ['upcoming', t('taskUpcoming')], ['all', t('taskAll')], ['completed', t('taskCompleted')]]
-    const viewRows = views.map(v => '<div class="tree-row' + (state.taskView === v[0] ? ' active' : '') + '" data-action="task-view" data-view="' + v[0] + '"><span class="ic">' + (v[0] === 'inbox' ? '📥' : '▤') + '</span><span class="nm">' + esc(v[1]) + (v[0] === 'inbox' ? ' (' + (counts.inbox || 0) + ')' : '') + '</span></div>').join('')
-    const matrixRows = matrices.map(m => '<div class="tree-row' + (state.taskView === m.matrixId ? ' active' : '') + '" data-action="task-view" data-view="' + esc(m.matrixId) + '"><span class="ic">▦</span><span class="nm">' + esc(m.name) + ' (' + (counts[m.matrixId] || 0) + ')</span></div>').join('')
+    const viewRows = views.map(v => '<div class="tree-row' + (state.taskView === v[0] ? ' active' : '') + '" data-action="task-view" data-view="' + v[0] + '"' + (v[0] === 'inbox' || v[0] === 'today' ? ' data-drop="' + v[0] + '"' : '') + '><span class="ic">' + (v[0] === 'inbox' ? '📥' : '▤') + '</span><span class="nm">' + esc(v[1]) + (v[0] === 'inbox' ? ' (' + (counts.inbox || 0) + ')' : '') + '</span></div>').join('')
+    const matrixRows = matrices.map(m => '<div class="tree-row' + (state.taskView === m.matrixId ? ' active' : '') + '" data-action="task-view" data-view="' + esc(m.matrixId) + '" data-drop="matrix" data-matrixid="' + esc(m.matrixId) + '"><span class="ic">▦</span><span class="nm">' + esc(m.name) + ' (' + (counts[m.matrixId] || 0) + ')</span></div>').join('')
     $('#list').innerHTML =
       '<div class="list-head">' + esc(t('tasks')) + '</div>' +
       '<div class="list-section">' + esc(t('smartViews')) + '</div>' +
@@ -1039,11 +1043,11 @@ function renderMatrixGrid(matrices, all, matrixId){
   const cells = [[1, 'Q1', t('q1')], [2, 'Q2', t('q2')], [3, 'Q3', t('q3')], [4, 'Q4', t('q4')]]
   const grid = cells.map(([q, label, title]) => {
     const items = open.filter(x => quadrantOf(x) === q)
-    return '<div class="quad"><div class="quad-head"><b>' + label + '</b> <span class="muted">' + esc(title) + '</span><span class="count">' + items.length + '</span></div>' +
+    return '<div class="quad" data-drop="matrix-quadrant" data-matrixid="' + esc(matrixId) + '" data-quadrant="' + q + '"><div class="quad-head"><b>' + label + '</b> <span class="muted">' + esc(title) + '</span><span class="count">' + items.length + '</span></div>' +
       (items.length ? items.map(x => taskRow(x, matrices, true)).join('') : '<div class="empty small">—</div>') + '</div>'
   }).join('')
   // Completed section keeps the matrix/quadrant context (group by quadrant).
-  const doneRows = done.map(x => '<div class="tree-row task-card" data-action="open-task-detail" data-id="' + esc(x.taskId) + '"><span class="ic" data-action="toggle-task" data-completed="1" data-id="' + esc(x.taskId) + '">☑</span><span class="nm">' + esc(x.title) + '</span><span class="badge">Q' + quadrantOf(x) + '</span></div>').join('')
+  const doneRows = done.map(x => '<div class="tree-row task-card" data-action="open-task-detail" data-completed="1" data-id="' + esc(x.taskId) + '"><span class="ic" data-action="toggle-task" data-completed="1" data-id="' + esc(x.taskId) + '">☑</span><span class="nm">' + esc(x.title) + '</span><span class="badge">Q' + quadrantOf(x) + '</span></div>').join('')
   const doneHtml = done.length
     ? '<div class="list-section">' + esc(t('taskCompleted')) + ' (' + done.length + ')</div>' + doneRows
     : ''
@@ -1255,7 +1259,7 @@ document.addEventListener('contextmenu', (e) => {
   if (noteRow) { e.preventDefault(); showNoteContextMenu(e.clientX, e.clientY, noteRow.dataset.id); return }
   const folderRow = e.target.closest('.tree-row.folder[data-action="select-folder"]')
   if (folderRow) { e.preventDefault(); showFolderContextMenu(e.clientX, e.clientY, folderRow.dataset.path); return }
-  const taskRow = e.target.closest('[data-action="toggle-task"]')
+  const taskRow = e.target.closest('[data-action="toggle-task"]') || e.target.closest('.task-card[data-action="open-task-detail"]')
   if (taskRow) { e.preventDefault(); showTaskContextMenu(e.clientX, e.clientY, taskRow.dataset.id, taskRow.dataset.completed === '1'); return }
   const matrixRow = e.target.closest('[data-action="task-view"][data-view]')
   if (matrixRow && !['all', 'today', 'upcoming', 'completed', 'inbox'].includes(matrixRow.dataset.view)) {
@@ -1297,6 +1301,54 @@ document.addEventListener('mouseup', (e) => {
     el2.addEventListener('click', () => { dismissSelButton(); btns[i][2]() })
   })
   document.body.appendChild(bar)
+})
+
+// ── Task drag/drop (HTML5 DnD; mirrors resolveTaskDrop domain semantics) ────
+document.addEventListener('dragstart', (e) => {
+  const card = e.target.closest('.task-card[draggable="true"]')
+  if (!card) return
+  e.dataTransfer.setData('text/plain', card.dataset.id)
+  e.dataTransfer.effectAllowed = 'move'
+  card.classList.add('dragging')
+})
+document.addEventListener('dragend', () => {
+  document.querySelectorAll('.dragging').forEach(el => el.classList.remove('dragging'))
+  document.querySelectorAll('.drop-over').forEach(el => el.classList.remove('drop-over'))
+})
+document.addEventListener('dragover', (e) => {
+  const t = e.target.closest('[data-drop]')
+  if (!t) return
+  e.preventDefault()
+  e.dataTransfer.dropEffect = 'move'
+  t.classList.add('drop-over')
+})
+document.addEventListener('dragleave', (e) => {
+  const t = e.target.closest('[data-drop]')
+  if (t) t.classList.remove('drop-over')
+})
+document.addEventListener('drop', (e) => {
+  const t = e.target.closest('[data-drop]')
+  if (!t) return
+  e.preventDefault()
+  t.classList.remove('drop-over')
+  const taskId = e.dataTransfer.getData('text/plain')
+  if (!taskId) return
+  const task = (state.tasksCache || []).find(x => x.taskId === taskId)
+  if (!task) return
+  let patch = null
+  const kind = t.dataset.drop
+  if (kind === 'matrix-quadrant') {
+    const q = Number(t.dataset.quadrant)
+    patch = { matrixId: t.dataset.matrixid, important: q === 1 || q === 2, urgent: q === 1 || q === 3 }
+  } else if (kind === 'matrix') {
+    patch = { matrixId: t.dataset.matrixid }
+  } else if (kind === 'inbox') {
+    patch = { matrixId: null }
+  } else if (kind === 'today') {
+    patch = { scheduledAt: new Date().toISOString().slice(0, 10) }
+  }
+  if (!patch) return
+  api('updateTask', { taskId, patch }).then(() => renderTasks()).catch(e => { toast(t('genericError') + ': ' + e.message, 'err'); renderTasks() })
 })
 
 // ── Delegated events ────────────────────────────────────────────────────────
@@ -1406,8 +1458,8 @@ function taskDetailDialog(taskId){
     const mOpts = '<option value="">' + esc(t('taskInbox')) + '</option>' + matrices.map(m => '<option value="' + esc(m.matrixId) + '"' + (m.matrixId === task.matrixId ? ' selected' : '') + '>' + esc(m.name) + '</option>').join('')
     const quad = quadrantOf(task)
     const srcNote = task.sourceRefs && task.sourceRefs[0] ? '<div class="form"><label>' + esc(t('noteLabel')) + '</label><span class="v mono" data-action="open-task-source" data-id="' + esc(task.sourceRefs[0].noteId) + '" data-exact="' + esc(task.sourceRefs[0].exact || '') + '" style="cursor:pointer">📄 ' + esc(task.sourceRefs[0].noteId) + '</span></div>' : ''
-    const subRows = subtasks.map(s => '<div class="tree-row task-card" data-action="open-task-detail" data-id="' + esc(s.taskId) + '"><span class="ic" data-action="toggle-task" data-completed="' + (s.status === 'completed' ? '1' : '0') + '" data-id="' + esc(s.taskId) + '">' + (s.status === 'completed' ? '☑' : '☐') + '</span><span class="nm">' + esc(s.title) + '</span></div>').join('')
-    const subSection = '<div class="form"><label>' + esc(t('subtasks')) + '</label>' + (subRows || '<span class="muted">' + esc(t('taskNoTasks')) + '</span>') + '<div class="toolbar" style="margin-top:4px"><input id="tdNewSub" placeholder="' + esc(t('subtaskAdd')) + '" style="flex:1" /><button class="btn small" id="tdAddSub">+</button></div></div>'
+    const renderSubRows = (list) => list.map(s => '<div class="tree-row task-card" data-action="open-task-detail" data-id="' + esc(s.taskId) + '"><span class="ic" data-action="toggle-task" data-completed="' + (s.status === 'completed' ? '1' : '0') + '" data-id="' + esc(s.taskId) + '">' + (s.status === 'completed' ? '☑' : '☐') + '</span><span class="nm">' + esc(s.title) + '</span></div>').join('')
+    const subSection = '<div class="form"><label>' + esc(t('subtasks')) + '</label><div id="tdSubtasks">' + (renderSubRows(subtasks) || '<span class="muted">' + esc(t('taskNoTasks')) + '</span>') + '</div><div class="toolbar" style="margin-top:4px"><input id="tdNewSub" placeholder="' + esc(t('subtaskAdd')) + '" style="flex:1" /><button class="btn small" id="tdAddSub">+</button></div></div>'
     document.body.insertAdjacentHTML('beforeend',
       '<div class="modal-overlay" id="taskDetailModal"><div class="modal"><h3>' + esc(t('taskDetail')) + '</h3>' +
       '<div class="form"><label>' + esc(t('taskTitle')) + '</label><input id="tdTitle" value="' + esc(task.title) + '" /></div>' +
@@ -1425,11 +1477,22 @@ function taskDetailDialog(taskId){
       '<div class="toolbar"><button class="btn primary" id="tdSave">' + esc(t('taskSaveEdit')) + '</button><button class="btn" id="tdCancel">' + esc(t('taskClose')) + '</button></div></div></div>'
     )
     const modal = $('#taskDetailModal')
+    // Subtask create is an INDEPENDENT Task Store mutation: it must never
+    // recreate/close the parent modal (which would drop the parent draft).
     const submitSubtask = () => {
-      const title = $('#tdNewSub').value.trim()
+      const input = $('#tdNewSub')
+      const title = input.value.trim()
       if (!title) return
       const pq = quadrantOf(task)
-      api('createTask', { title, parentTaskId: taskId, ...(task.matrixId ? { matrixId: task.matrixId } : {}), important: pq === 1 || pq === 2, urgent: pq === 1 || pq === 3 }).then(() => { $('#tdNewSub').value = ''; modal.remove(); taskDetailDialog(taskId) }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
+      api('createTask', { title, parentTaskId: taskId, ...(task.matrixId ? { matrixId: task.matrixId } : {}), important: pq === 1 || pq === 2, urgent: pq === 1 || pq === 3 })
+        .then(() => api('listSubtasks', { parentTaskId: taskId }))
+        .then(list => {
+          const box = $('#tdSubtasks')
+          if (box) box.innerHTML = renderSubRows(list) || '<span class="muted">' + esc(t('taskNoTasks')) + '</span>'
+          input.value = ''
+          input.focus()
+        })
+        .catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
     }
     $('#tdAddSub').addEventListener('click', submitSubtask)
     $('#tdNewSub').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submitSubtask() } })
