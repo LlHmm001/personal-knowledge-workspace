@@ -85,6 +85,17 @@ describe('PKW tasks core', () => {
     expect(reopened.completedAt).toBeUndefined()
   })
 
+  it('stores Note sourceRef (Note→Task) and TextQuoteAnchor (Selection→Task) with stable NoteId', async () => {
+    const { tasks } = await boot()
+    const fromNote = await tasks.createTask({ title: 'note task', sourceRefs: [{ kind: 'note', noteId: 'note_abc' }] })
+    expect(fromNote.sourceRefs).toEqual([{ kind: 'note', noteId: 'note_abc' }])
+    const fromSelection = await tasks.createTask({
+      title: 'selection task',
+      sourceRefs: [{ kind: 'selection', noteId: 'note_abc', exact: '重新整理商业模型', prefix: '创业', suffix: 'DDmind', noteRevision: 3, contentHash: 'h1' }],
+    })
+    expect(fromSelection.sourceRefs[0]).toMatchObject({ kind: 'selection', noteId: 'note_abc', exact: '重新整理商业模型', prefix: '创业', suffix: 'DDmind' })
+  })
+
   it('delete (trash) then restore a task', async () => {
     const { tasks } = await boot()
     const t = await tasks.createTask({ title: 'trash me' })
