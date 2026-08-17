@@ -478,6 +478,7 @@ export class PkwWebService extends Service {
         ...(args.status !== undefined ? { status: String(args.status) as never } : {}),
         includeDeleted: args.includeDeleted === true,
       })
+      case 'listSubtasks': return this.tasks.listSubtasks(TaskId(String(args.parentTaskId)))
       case 'createTask': return this.tasks.createTask({
         title: String(args.title),
         ...(args.matrixId !== undefined && args.matrixId !== null ? { matrixId: TaskMatrixId(String(args.matrixId)) } : {}),
@@ -486,6 +487,7 @@ export class PkwWebService extends Service {
         ...(args.urgent !== undefined ? { urgent: args.urgent === true } : {}),
         ...(args.priority !== undefined ? { priority: Number(args.priority) } : {}),
         ...(args.dueAt !== undefined ? { dueAt: String(args.dueAt) } : {}),
+        ...(args.parentTaskId !== undefined && args.parentTaskId !== null ? { parentTaskId: TaskId(String(args.parentTaskId)) } : {}),
         ...(args.tags !== undefined ? { tags: Array.isArray(args.tags) ? args.tags.map(String) : [] } : {}),
         ...(args.sourceRefs !== undefined ? { sourceRefs: Array.isArray(args.sourceRefs) ? args.sourceRefs : [] } : {}),
       })

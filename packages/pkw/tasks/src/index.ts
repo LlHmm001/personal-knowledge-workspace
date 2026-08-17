@@ -175,6 +175,32 @@ export class TasksService extends Service {
     return out.sort((a, b) => a.manualOrder - b.manualOrder)
   }
 
+  listSubtasks(parentTaskId: TaskId): Task[] {
+    const out: Task[] = []
+    for (const [, t] of this.reqTasks().entries()) {
+      if (t.deletedAt !== undefined) continue
+      if (t.parentTaskId !== null && String(t.parentTaskId) === String(parentTaskId)) out.push(t)
+    }
+    return out.sort((a, b) => a.manualOrder - b.manualOrder)
+  }
+
+  /** True if reparenting `taskId` under `newParentId` would create a cycle (incl. self-parent). */
+  private wouldCreateCycle(taskId: TaskId, newParentId: TaskId | null): boolean {
+    if (newParentId === null) return false
+    let cur: TaskId | null = newParentId
+    const seen = new Set<string>()
+    while (cur !== null) {
+      const id = String(cur)
+      if (id === String(taskId)) return true
+      if (seen.has(id)) return true // defensive against a pre-existing broken cycle
+      seen.add(id)
+      const parent = this.reqTasks().get(cur)
+      if (parent === undefined || parent.parentTaskId === null) return false
+      cur = parent.parentTaskId
+    }
+    return false
+  }
+
   async createTask(input: CreateTaskInput): Promise<Task> {
     const now = this.now()
     const task: Task = {
@@ -204,6 +230,9 @@ export class TasksService extends Service {
   async updateTask(taskId: TaskId, patch: Partial<Omit<Task, 'taskId' | 'workspaceId' | 'createdAt'>>): Promise<Task> {
     const t = this.reqTasks().get(taskId)
     if (t === undefined) throw new Error(`pkwTasks: unknown task '${taskId}'`)
+    if (patch.parentTaskId !== undefined && this.wouldCreateCycle(taskId, patch.parentTaskId)) {
+      throw new Error(`pkwTasks: cannot set parentTaskId — cycle detected`)
+    }
     const next: Task = { ...t, ...patch, taskId: t.taskId, workspaceId: t.workspaceId, createdAt: t.createdAt, updatedAt: this.now() }
     await this.reqTasks().put(taskId, next)
     await this.emit('task.updated', TASK_AGG, String(taskId), { taskId: String(taskId) })
@@ -268,6 +297,12 @@ export class TasksService extends Service {
     const t = this.reqTasks().get(taskId)
     if (t === undefined || t.deletedAt !== undefined) return
     await this.reqTasks().put(taskId, { ...t, deletedAt: this.now(), updatedAt: this.now() })
+    // Promote children to top-level tasks (never cascade-delete, never leave dangling refs).
+    for (const [id, child] of [...this.reqTasks().entries()]) {
+      if (child.deletedAt === undefined && child.parentTaskId !== null && String(child.parentTaskId) === String(taskId)) {
+        await this.reqTasks().put(id, { ...child, parentTaskId: null, updatedAt: this.now() })
+      }
+    }
     await this.emit('task.deleted', TASK_AGG, String(taskId), { taskId: String(taskId) })
   }
 

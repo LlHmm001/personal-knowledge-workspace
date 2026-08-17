@@ -170,4 +170,38 @@ describe('PKW tasks core', () => {
     expect(restored.deletedAt).toBeUndefined()
     expect(tasks.listTasks().some(x => x.taskId === t.taskId)).toBe(true)
   })
+
+  it('subtasks: create child, query children, complete/reopen, independent matrix', async () => {
+    const { tasks } = await boot()
+    const work = await tasks.createMatrix({ name: '工作' })
+    const parent = await tasks.createTask({ title: '父任务', matrixId: work.matrixId, important: true, urgent: false })
+    const child = await tasks.createTask({ title: '子任务', matrixId: work.matrixId, parentTaskId: parent.taskId })
+    expect(tasks.listSubtasks(parent.taskId).map(t => t.title)).toEqual(['子任务'])
+    expect(tasks.listSubtasks(parent.taskId)[0]!.parentTaskId).toBe(parent.taskId)
+    await tasks.completeTask(child.taskId)
+    expect(tasks.listSubtasks(parent.taskId)[0]!.status).toBe('completed')
+    await tasks.reopenTask(child.taskId)
+    expect(tasks.listSubtasks(parent.taskId)[0]!.status).toBe('open')
+    // child matrix is independent: move it elsewhere
+    const life = await tasks.createMatrix({ name: '生活' })
+    await tasks.moveTaskToMatrix(child.taskId, life.matrixId)
+    expect(tasks.listSubtasks(parent.taskId)[0]!.matrixId).toBe(life.matrixId)
+  })
+
+  it('subtasks: parent delete promotes children (no dangling refs)', async () => {
+    const { tasks } = await boot()
+    const parent = await tasks.createTask({ title: '父' })
+    const child = await tasks.createTask({ title: '子', parentTaskId: parent.taskId })
+    await tasks.deleteTask(parent.taskId)
+    const promoted = tasks.listTasks().find(t => t.title === '子')!
+    expect(promoted.parentTaskId).toBeNull()
+  })
+
+  it('subtasks: rejects self-parent and A→B→A cycle', async () => {
+    const { tasks } = await boot()
+    const a = await tasks.createTask({ title: 'A' })
+    const b = await tasks.createTask({ title: 'B', parentTaskId: a.taskId })
+    await expect(tasks.updateTask(a.taskId, { parentTaskId: a.taskId })).rejects.toThrow('cycle')
+    await expect(tasks.updateTask(a.taskId, { parentTaskId: b.taskId })).rejects.toThrow('cycle')
+  })
 })

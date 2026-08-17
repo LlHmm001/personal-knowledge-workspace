@@ -190,7 +190,7 @@ const STR = {
     slashH1:'一级标题', slashH2:'二级标题', slashH3:'三级标题', slashList:'无序列表', slashTask:'任务列表', slashQuote:'引用', slashCalloutNote:'提示框', slashCalloutWarning:'警告框', slashTable:'表格', slashHr:'分割线',
     slashInlineCode:'行内代码', slashCodeBlock:'代码块', slashLink:'链接', slashWikiLink:'Wiki 链接', slashImage:'图片', slashFootnote:'脚注', slashCallout:'提示框',
     editorLoading:'正在加载编辑器…', buildInfo:'构建信息', bold:'加粗', italic:'斜体', strike:'删除线', highlight:'高亮',
-    taskDetail:'任务详情', description:'描述', taskStatus:'状态', taskOpen:'进行中', taskScheduled:'计划日期', taskCreated:'创建',
+    taskDetail:'任务详情', description:'描述', taskStatus:'状态', taskOpen:'进行中', taskScheduled:'计划日期', taskCreated:'创建', subtasks:'子任务', subtaskAdd:'添加子任务…',
   },
   en: {
     overview:'Overview', notes:'Notes', attachments:'Attachment library', tasks:'Tasks', trash:'Trash', search:'Search',
@@ -226,7 +226,7 @@ const STR = {
     slashH1:'Heading 1', slashH2:'Heading 2', slashH3:'Heading 3', slashList:'Bullet list', slashTask:'Task list', slashQuote:'Quote', slashCalloutNote:'Callout', slashCalloutWarning:'Warning', slashTable:'Table', slashHr:'Divider',
     slashInlineCode:'Inline code', slashCodeBlock:'Code block', slashLink:'Link', slashWikiLink:'Wiki link', slashImage:'Image', slashFootnote:'Footnote', slashCallout:'Callout',
     editorLoading:'Loading editor…', buildInfo:'Build info', bold:'Bold', italic:'Italic', strike:'Strikethrough', highlight:'Highlight',
-    taskDetail:'Task detail', description:'Description', taskStatus:'Status', taskOpen:'Open', taskScheduled:'Scheduled', taskCreated:'Created',
+    taskDetail:'Task detail', description:'Description', taskStatus:'Status', taskOpen:'Open', taskScheduled:'Scheduled', taskCreated:'Created', subtasks:'Subtasks', subtaskAdd:'Add subtask…',
   },
 }
 const PKW_BUILD = '1d93f55'
@@ -1402,10 +1402,12 @@ function selectionSourceRef(){
 function taskDetailDialog(taskId){
   const task = (state.tasksCache || []).find(t => t.taskId === taskId)
   if (!task) return
-  api('listMatrices').then(matrices => {
+  Promise.all([api('listMatrices'), api('listSubtasks', { parentTaskId: taskId })]).then(([matrices, subtasks]) => {
     const mOpts = '<option value="">' + esc(t('taskInbox')) + '</option>' + matrices.map(m => '<option value="' + esc(m.matrixId) + '"' + (m.matrixId === task.matrixId ? ' selected' : '') + '>' + esc(m.name) + '</option>').join('')
     const quad = quadrantOf(task)
     const srcNote = task.sourceRefs && task.sourceRefs[0] ? '<div class="form"><label>' + esc(t('noteLabel')) + '</label><span class="v mono" data-action="open-task-source" data-id="' + esc(task.sourceRefs[0].noteId) + '" data-exact="' + esc(task.sourceRefs[0].exact || '') + '" style="cursor:pointer">📄 ' + esc(task.sourceRefs[0].noteId) + '</span></div>' : ''
+    const subRows = subtasks.map(s => '<div class="tree-row task-card" data-action="open-task-detail" data-id="' + esc(s.taskId) + '"><span class="ic" data-action="toggle-task" data-completed="' + (s.status === 'completed' ? '1' : '0') + '" data-id="' + esc(s.taskId) + '">' + (s.status === 'completed' ? '☑' : '☐') + '</span><span class="nm">' + esc(s.title) + '</span></div>').join('')
+    const subSection = '<div class="form"><label>' + esc(t('subtasks')) + '</label>' + (subRows || '<span class="muted">' + esc(t('taskNoTasks')) + '</span>') + '<div class="toolbar" style="margin-top:4px"><input id="tdNewSub" placeholder="' + esc(t('subtaskAdd')) + '" style="flex:1" /><button class="btn small" id="tdAddSub">+</button></div></div>'
     document.body.insertAdjacentHTML('beforeend',
       '<div class="modal-overlay" id="taskDetailModal"><div class="modal"><h3>' + esc(t('taskDetail')) + '</h3>' +
       '<div class="form"><label>' + esc(t('taskTitle')) + '</label><input id="tdTitle" value="' + esc(task.title) + '" /></div>' +
@@ -1417,11 +1419,18 @@ function taskDetailDialog(taskId){
       '<div class="form"><label>' + esc(t('taskScheduled')) + '</label><input type="date" id="tdSched" value="' + esc((task.scheduledAt || '').slice(0, 10)) + '" /></div>' +
       '<div class="form"><label>' + esc(t('taskDue')) + '</label><input type="date" id="tdDue" value="' + esc((task.dueAt || '').slice(0, 10)) + '" /></div>' +
       '<div class="form"><label>' + esc(t('tags')) + '</label><input id="tdTags" value="' + esc((task.tags || []).join(', ')) + '" /></div>' +
+      subSection +
       srcNote +
       '<div class="muted mono" style="font-size:11px">' + esc(t('taskCreated')) + ': ' + esc((task.createdAt || '').slice(0, 16)) + ' · ' + esc(t('updated')) + ': ' + esc((task.updatedAt || '').slice(0, 16)) + (task.completedAt ? ' · ' + esc(t('taskCompleted')) + ': ' + esc(task.completedAt.slice(0, 16)) : '') + '</div>' +
       '<div class="toolbar"><button class="btn primary" id="tdSave">' + esc(t('taskSave')) + '</button><button class="btn" id="tdCancel">' + esc(t('taskCancel')) + '</button></div></div></div>'
     )
     const modal = $('#taskDetailModal')
+    $('#tdAddSub').addEventListener('click', () => {
+      const title = $('#tdNewSub').value.trim()
+      if (!title) return
+      const pq = quadrantOf(task)
+      api('createTask', { title, parentTaskId: taskId, ...(task.matrixId ? { matrixId: task.matrixId } : {}), important: pq === 1 || pq === 2, urgent: pq === 1 || pq === 3 }).then(() => { modal.remove(); taskDetailDialog(taskId) }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
+    })
     $('#tdCancel').addEventListener('click', () => modal.remove())
     $('#tdSave').addEventListener('click', () => {
       const q = Number($('#tdQuad').value)
