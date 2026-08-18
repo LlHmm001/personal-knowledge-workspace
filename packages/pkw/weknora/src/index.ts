@@ -388,13 +388,15 @@ export class WeKnoraClient extends Service {
     return r.data ?? []
   }
 
-  async createKnowledgeBase(name: string, opts: { is_temporary?: boolean; type?: string; chunking_config?: unknown; vlm_config?: unknown } = {}): Promise<{ id: string; name: string }> {
+  async createKnowledgeBase(name: string, opts: { is_temporary?: boolean; type?: string; chunking_config?: unknown; vlm_config?: unknown; embedding_model_id?: string; summary_model_id?: string } = {}): Promise<{ id: string; name: string }> {
     const r = await this.request<{ data: { id: string; name: string } }>('POST', '/knowledge-bases', {
       name,
       type: opts.type ?? 'document',
       ...(opts.is_temporary !== undefined ? { is_temporary: opts.is_temporary } : {}),
       ...(opts.chunking_config !== undefined ? { chunking_config: opts.chunking_config } : {}),
       ...(opts.vlm_config !== undefined ? { vlm_config: opts.vlm_config } : {}),
+      ...(opts.embedding_model_id !== undefined ? { embedding_model_id: opts.embedding_model_id } : {}),
+      ...(opts.summary_model_id !== undefined ? { summary_model_id: opts.summary_model_id } : {}),
     })
     return r.data
   }

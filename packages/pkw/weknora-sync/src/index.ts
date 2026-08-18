@@ -475,15 +475,21 @@ export class WeKnoraSyncService extends Service {
         try { await this.ctx.pkwWeKnora.getKnowledgeBase(kbId) } catch { kbId = undefined }
       }
       const name = `PKW Processing — ${this.config.workspaceId.slice(0, 8)}`
+      const emb = typeof mainKb.embedding_model_id === 'string' ? mainKb.embedding_model_id : ''
+      const sum = typeof mainKb.summary_model_id === 'string' ? mainKb.summary_model_id : ''
       if (kbId === undefined) {
         // is_temporary: true → hidden from the WeKnora Documents UI (an internal
         // parser execution projection, NOT a user knowledge base). The create body
-        // already carries the mirrored parser config, so no post-create update.
+        // mirrors parser config AND the embedding/summary models (required for the
+        // parse pipeline to reach 'completed' — an empty embedding_model_id leaves
+        // knowledge stuck in 'processing').
         const cc = (mainKb.chunking_config as Record<string, unknown> | undefined) ?? {}
         const created = await this.ctx.pkwWeKnora.createKnowledgeBase(name, {
           is_temporary: true,
           chunking_config: cc,
           ...(mainKb.vlm_config !== undefined ? { vlm_config: mainKb.vlm_config } : {}),
+          ...(emb !== '' ? { embedding_model_id: emb } : {}),
+          ...(sum !== '' ? { summary_model_id: sum } : {}),
         })
         kbId = created.id
       } else if (existing !== undefined && existing.configFingerprint !== fp) {
@@ -494,6 +500,8 @@ export class WeKnoraSyncService extends Service {
           name,
           chunking_config: cc,
           ...(mainKb.vlm_config !== undefined ? { vlm_config: mainKb.vlm_config } : {}),
+          ...(emb !== '' ? { embedding_model_id: emb } : {}),
+          ...(sum !== '' ? { summary_model_id: sum } : {}),
         })
       }
       await this.reqProcessingKb().put(this.config.workspaceId, { workspaceId: this.config.workspaceId, processingKbId: kbId, configFingerprint: fp, updatedAt: this.now() })
