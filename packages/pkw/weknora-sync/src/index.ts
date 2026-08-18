@@ -474,10 +474,11 @@ export class WeKnoraSyncService extends Service {
         // Verify it still exists; re-discover/create when it vanished.
         try { await this.ctx.pkwWeKnora.getKnowledgeBase(kbId) } catch { kbId = undefined }
       }
+      const name = `PKW Processing — ${this.config.workspaceId.slice(0, 8)}`
       if (kbId === undefined) {
-        const name = `PKW Processing — ${this.config.workspaceId.slice(0, 8)}`
         // is_temporary: true → hidden from the WeKnora Documents UI (an internal
-        // parser execution projection, NOT a user knowledge base).
+        // parser execution projection, NOT a user knowledge base). The create body
+        // already carries the mirrored parser config, so no post-create update.
         const cc = (mainKb.chunking_config as Record<string, unknown> | undefined) ?? {}
         const created = await this.ctx.pkwWeKnora.createKnowledgeBase(name, {
           is_temporary: true,
@@ -485,11 +486,12 @@ export class WeKnoraSyncService extends Service {
           ...(mainKb.vlm_config !== undefined ? { vlm_config: mainKb.vlm_config } : {}),
         })
         kbId = created.id
-      }
-      // Mirror parser config when it changed (not only on create).
-      if (existing === undefined || existing.configFingerprint !== fp || existing.processingKbId !== kbId) {
+      } else if (existing !== undefined && existing.configFingerprint !== fp) {
+        // Parser config changed on the main KB → mirror to the existing Processing KB.
+        // WeKnora's UpdateKnowledgeBaseRequest requires `name`.
         const cc = (mainKb.chunking_config as Record<string, unknown> | undefined) ?? {}
         await this.ctx.pkwWeKnora.updateKnowledgeBase(kbId, {
+          name,
           chunking_config: cc,
           ...(mainKb.vlm_config !== undefined ? { vlm_config: mainKb.vlm_config } : {}),
         })
