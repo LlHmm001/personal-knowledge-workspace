@@ -41,4 +41,16 @@ describe('note-scoped attachment remote projection', () => {
     expect(out).toContain('ZXQ-7291-blue-orbit') // full text injected, not just summary
     expect(out).toContain('附件解析摘要（report.pdf）')
   })
+
+  it('A1 truncation: a marker beyond the default 12k budget is dropped (motivates A2 federation)', () => {
+    // Simulate a 60k-char extracted text where the LATE marker sits at ~53k chars,
+    // mirroring the real experiment. Under the default 12k budget it is lost.
+    const late = 'PKW-LATE-9637'
+    const full = 'x'.repeat(53000) + ' ' + late + ' ' + 'y'.repeat(6000)
+    const out = enrichNoteForKnowledge('# 项目复盘', [
+      { attachmentId: 'a', filename: 'report.pdf', chunks: [full] },
+    ])
+    expect(out).not.toContain(late) // A1 drops the late marker
+    expect(out.length).toBeLessThan(20000)
+  })
 })

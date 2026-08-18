@@ -214,6 +214,10 @@ export interface RetrievalResult {
     entityId: string
     /** For an attachment hit, the Companion Note to open (if one exists) so a single uploaded file surfaces as one knowledge object. */
     companionNoteId?: string
+    /** A2 federation: when a Processing-KB hit remaps to an owner Note, the matched Source Asset (AttachmentId). */
+    matchedAttachmentId?: string
+    /** Why this Business Knowledge matched: 'note' (Main KB) or 'attachment' (Processing KB, remapped). */
+    matchReason?: 'note' | 'attachment'
   }
 }
 
@@ -1355,19 +1359,96 @@ export class WeKnoraSyncService extends Service {
 
   async search(query: string, opts: { kbId?: string; limit?: number; knowledgeIds?: string[] } = {}): Promise<RetrievalResult[]> {
     const kbId = opts.kbId ?? this.config.kbId
-    const chunks: SearchResultChunk[] = await this.ctx.pkwWeKnora.hybridSearch(kbId, {
+    const limit = opts.limit ?? 10
+    const mainChunks: SearchResultChunk[] = await this.ctx.pkwWeKnora.hybridSearch(kbId, {
       query,
-      limit: opts.limit ?? 10,
+      limit,
       ...(opts.knowledgeIds !== undefined ? { knowledgeIds: opts.knowledgeIds } : {}),
     })
     // Immediate hide: a locally-deleted (or stale) projection must not surface in
     // PKW retrieval even while the async WeKnora delete is still converging.
-    return chunks
+    const main = mainChunks
       .filter(chunk => {
         const mapping = this.getMappingByKnowledgeId(chunk.knowledge_id)
         return mapping === undefined || (mapping.syncState !== M_DELETED && mapping.syncState !== M_STALE)
       })
       .map(chunk => this.toRetrievalResult(kbId, chunk))
+
+    // A2 federation: also search the Processing KB and remap hits to Business
+    // Knowledge (owner Notes), then merge into the Main results (dedupe by NoteId).
+    const processing = await this.searchProcessingForBusiness(query, limit)
+
+    const merged = new Map<string, RetrievalResult>()
+    for (const r of [...main, ...processing]) {
+      const noteId = r.local?.entityType === ENTITY_NOTE ? r.local.entityId : undefined
+      if (noteId === undefined) { merged.set(`raw:${r.remote.knowledgeId}:${r.remote.chunkId}`, r); continue }
+      const existing = merged.get(noteId)
+      if (existing === undefined) { merged.set(noteId, r); continue }
+      // Same Business Knowledge hit from both Main (body) and Processing (attachment):
+      // keep one result but record both match reasons.
+      if (r.local?.matchedAttachmentId !== undefined) {
+        existing.local!.matchedAttachmentId = r.local.matchedAttachmentId
+        existing.local!.matchReason = 'attachment'
+        if (existing.remote.score < r.remote.score) existing.remote.score = r.remote.score
+      }
+    }
+    return [...merged.values()]
+  }
+
+  /** A2: search the Processing KB and remap hits → owner Note (Business Knowledge). */
+  private async searchProcessingForBusiness(query: string, limit: number): Promise<RetrievalResult[]> {
+    const kbRec = this.reqProcessingKb().get(this.config.workspaceId)
+    if (kbRec?.processingKbId === undefined) return []
+    let chunks: SearchResultChunk[]
+    try {
+      chunks = await this.ctx.pkwWeKnora.hybridSearch(kbRec.processingKbId, { query, limit })
+    } catch { return [] }
+
+    const out: RetrievalResult[] = []
+    for (const chunk of chunks) {
+      // The processing table is keyed by attachmentId; resolve by processingKnowledgeId.
+      const rec = this.findProcessingByKnowledgeId(chunk.knowledge_id)
+      if (rec === undefined) continue
+      const attachmentId = rec.attachmentId
+      const owners = await this.referencingNotes(attachmentId)
+      if (owners.length === 0) continue // isolated attachment: not a Business Knowledge
+      for (const noteId of owners) {
+        out.push({
+          remote: {
+            kbId: kbRec.processingKbId,
+            knowledgeId: chunk.knowledge_id,
+            chunkId: chunk.id,
+            chunkIndex: chunk.chunk_index,
+            score: chunk.score,
+            content: chunk.content,
+            title: chunk.knowledge_title,
+            filename: chunk.knowledge_filename,
+            source: chunk.knowledge_source,
+            channel: chunk.knowledge_channel,
+          },
+          local: { workspaceId: this.config.workspaceId, entityType: ENTITY_NOTE, entityId: noteId, matchedAttachmentId: attachmentId, matchReason: 'attachment' },
+        })
+      }
+    }
+    return out
+  }
+
+  private findProcessingByKnowledgeId(knowledgeId: string): ProcessingRecord | undefined {
+    for (const [, rec] of this.reqProcessing().entries()) {
+      if (rec.processingKnowledgeId === knowledgeId) return rec
+    }
+    return undefined
+  }
+
+  /** NoteIds whose canonical Markdown references the given attachment (durable managed refs). */
+  private async referencingNotes(attachmentId: string): Promise<string[]> {
+    const out: string[] = []
+    for (const n of this.ctx.pkwNotes.list({})) {
+      if (n.deletedAt !== undefined) continue
+      const doc = await this.ctx.pkwNotes.getDocument(n.noteId).catch(() => undefined)
+      if (doc !== undefined && doc.attachments.some(a => String(a.attachmentId) === attachmentId)) out.push(String(n.noteId))
+    }
+    return out
   }
 
   private toRetrievalResult(kbId: string, chunk: SearchResultChunk): RetrievalResult {
