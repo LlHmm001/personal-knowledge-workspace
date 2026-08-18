@@ -15,10 +15,16 @@
  */
 
 import JSZip from 'jszip'
-import { Document, Packer, Paragraph, TextRun } from 'docx'
+import { Document, ImageRun, Packer, Paragraph, TextRun } from 'docx'
 
 const CUSTOM_PROPS_PATH = 'docProps/custom.xml'
 const DOCUMENT_XML_PATH = 'word/document.xml'
+
+export interface EmbeddedImage {
+  filename: string
+  bytes: Uint8Array
+  mimeType: string
+}
 
 function propXml(noteId: string): string {
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -47,6 +53,65 @@ export async function createDocxNote(input: { noteId: string; title: string; bod
   const doc = new Document({ sections: [{ children: paragraphs }] })
   const buf = await Packer.toBuffer(doc)
   return writeDocxNoteId(new Uint8Array(buf), input.noteId)
+}
+
+/**
+ * Compile the canonical Note (Markdown body + managed image attachments) into a
+ * single `.processing.docx` — a PROCESSING ARTIFACT, not a new canonical. The
+ * note text becomes paragraphs; each managed image ref `![alt](attachments/<id>/<file>)`
+ * becomes an embedded image (ImageRun) plus a searchable text caption
+ * `[图片附件：<file>]`, so WeKnora parses body + image together as ONE document.
+ */
+export async function compileProcessingDocx(input: { noteId: string; title: string; markdown: string; images: EmbeddedImage[] }): Promise<Uint8Array> {
+  const byFilename = new Map(input.images.map(im => [im.filename, im]))
+  const paragraphs: Paragraph[] = []
+  if (input.title.trim() !== '') paragraphs.push(new Paragraph({ children: [new TextRun({ text: input.title, bold: true, size: 32 })] }))
+
+  // Walk body lines; replace image refs with embedded image + caption.
+  const imgRef = /!\[[^\]]*\]\([^)]*attachments\/[^/]+\/([^)]+)\)/g
+  for (const rawLine of input.markdown.split(/\n/)) {
+    const line = rawLine.trim()
+    if (line === '') continue
+    // Collect text and image refs in order.
+    let lastIndex = 0
+    const runs: (string | EmbeddedImage)[] = []
+    let m: RegExpExecArray | null
+    imgRef.lastIndex = 0
+    while ((m = imgRef.exec(line)) !== null) {
+      const before = line.slice(lastIndex, m.index)
+      if (before.trim() !== '') runs.push(before)
+      const filename = m[1]!
+      const img = byFilename.get(filename)
+      if (img !== undefined) runs.push(img)
+      else runs.push(`[图片附件：${filename}]`)
+      lastIndex = m.index + m[0].length
+    }
+    const tail = line.slice(lastIndex)
+    if (tail.trim() !== '') runs.push(tail)
+
+    if (runs.length === 0) continue
+    const children: (TextRun | ImageRun)[] = []
+    for (const r of runs) {
+      if (typeof r === 'string') {
+        children.push(new TextRun({ text: r }))
+      } else {
+        children.push(new TextRun({ text: `\n[图片附件：${r.filename}]\n` }))
+        children.push(new ImageRun({ data: Buffer.from(r.bytes), type: imageRunType(r.mimeType), transformation: { width: 480, height: 360 } }))
+      }
+    }
+    paragraphs.push(new Paragraph({ children }))
+  }
+
+  const doc = new Document({ sections: [{ children: paragraphs }] })
+  const buf = await Packer.toBuffer(doc)
+  return writeDocxNoteId(new Uint8Array(buf), input.noteId)
+}
+
+function imageRunType(mimeType: string): 'png' | 'jpg' | 'gif' | 'bmp' {
+  if (mimeType.includes('png')) return 'png'
+  if (mimeType.includes('gif')) return 'gif'
+  if (mimeType.includes('bmp')) return 'bmp'
+  return 'jpg'
 }
 
 /** Extract the plain text of a DOCX (concatenated `<w:t>` runs, newline per paragraph). */

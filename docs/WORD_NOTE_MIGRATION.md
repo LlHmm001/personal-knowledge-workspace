@@ -70,3 +70,22 @@ Markdown migration: body + managed images → DOCX (embedded), PDF/XLSX links �
 - Chokidar watcher wiring + version snapshot store.
 - WeKnora DOCX revision sync + atomic switch + cleanup.
 - Markdown→DOCX migration.
+
+## Knowledge ingestion: compile → single `.processing.docx` (refinement)
+
+The canonical stays **Markdown Note + separate attachment binaries**. For WeKnora ingestion, PKW compiles the note + its managed images into **one `.processing.docx`** (a processing artifact, never canonical):
+
+```
+PKW源数据 (canonical)
+  客户项目资料.md  +  海报2.png
+        ↓ 编译 (处理产物)
+  客户项目资料.processing.docx
+  ├─ 正文 (note text)
+  └─ embedded 海报2.png  (ImageRun + [图片附件：海报2.png] caption)
+        ↓
+WeKnora (ONE file Knowledge → body + image OCR parsed together → ONE Business Knowledge)
+```
+
+This replaces the earlier "federate Main KB + Processing KB" A2 complexity with a single-document projection: one Note = one compiled DOCX = one WeKnora Knowledge. Image OCR text and body text live in the same document, so search hits one object and no federation remap is needed.
+
+`domain/docx-note.ts: compileProcessingDocx({noteId, title, markdown, images})` implements the compile step (text paragraphs + embedded `ImageRun` + searchable `[图片附件：<file>]` caption + `PKW.NoteId` custom property). The compiled DOCX is what the sync uploads (as a revisioned Processing Artifact); the canonical `.md` + attachment binaries are untouched.
