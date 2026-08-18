@@ -80,3 +80,20 @@ An attachment with no referencing Note is **not** a Business Knowledge; Processi
 ## Parser lifecycle
 
 `processing` records now store `configFingerprint`; `listNeedsReparse()` returns derived-ready attachments whose captured fingerprint differs from the current Processing KB fingerprint. No automatic bulk reparse (K).
+
+## A2 Live Acceptance — evidence gathered (HEAD 9d781ab, pre-deploy)
+
+### Attachment route security audit (PART C) — real probes
+
+- Local loopback `http://127.0.0.1:3080/pkw/attachment/<id>`: **200**, serves bytes with NO route-level auth (loopback only).
+- Public reverse proxy `https://ddmind.duckdns.org/pkw/attachment/<id>` (no session/cookie): **401 Authorization Required** (OpenResty).
+
+Decision: the PKW attachment route itself has no auth; the public URL is protected **only** by the reverse proxy. Therefore the attachment URL is **not** a stable, security-authorizable image source for WeKnora's frontend. Keep WeKnora showing `图片附件：<filename>`; PKW Business Knowledge Viewer renders the image (security-first). The route should gain its own auth as a hardening follow-up.
+
+### "Processing图片测试" identity (PART B)
+
+It is a **real Normal Note** (`note_edd0bbed1586`, path `创业/Proce-ing图片测试.md`, `attachmentBacked` unset, not deleted) — not a Processing Artifact. It appears in search as a legitimate Business Knowledge. (Its mangled path `Proce-ing` is a pre-CJK-sanitize filename artifact, cosmetic only.)
+
+### Main Knowledge summary lifecycle (PART E) — source audit
+
+WeKnora `updateManualKnowledge` (PUT) updates content/chunks but does NOT re-run the summary stage → stale `description` ("No textual content…"). `POST /knowledge/:id/reparse` (`knowledge_process.go:1970`) routes manual knowledge through "async manual processing (cleanup + re-indexing in worker)", re-running parse/chunk/embed/**summary**/wiki. Fix (follow-up, throttled): call `reparseKnowledge` after a material content update; do NOT auto-reparse on every save (re-embedding cost).
