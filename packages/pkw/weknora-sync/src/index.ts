@@ -495,13 +495,29 @@ export class WeKnoraSyncService extends Service {
     }
   }
 
-  /** Capture the bounded derived content of a finished Processing Knowledge. */
+  /** Capture the bounded derived content of a finished Processing Knowledge.
+   *
+   * Verified against WeKnora: `GET /chunks/:knowledge_id` returns the FULL
+   * extracted text (not just the summary), so injecting chunks preserves
+   * full-text search (e.g. a specific PDF sentence absent from the summary).
+   * We capture the full chunk text (soft storage cap) — `enrichNoteForKnowledge`
+   * applies the actual remote-projection budget later.
+   */
   private async captureDerived(processingKnowledgeId: string, filename: string): Promise<{ summary?: string; chunks?: string[] }> {
     const k = await this.ctx.pkwWeKnora.getKnowledge(processingKnowledgeId)
     let chunks: string[] | undefined
     try {
       const list = await this.ctx.pkwWeKnora.listKnowledgeChunks(processingKnowledgeId)
-      chunks = list.map(c => c.content).filter(c => c !== undefined && c !== '').slice(0, 8)
+      let total = 0
+      const captured: string[] = []
+      for (const c of list) {
+        const content = c.content ?? ''
+        if (content === '') continue
+        if (total + content.length > 30000) { captured.push(content.slice(0, 30000 - total)); total = 30000; break }
+        captured.push(content)
+        total += content.length
+      }
+      chunks = captured
     } catch { chunks = undefined }
     return { summary: k.description, chunks }
   }

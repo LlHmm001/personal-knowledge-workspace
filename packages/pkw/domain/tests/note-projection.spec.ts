@@ -31,4 +31,14 @@ describe('note-scoped attachment remote projection', () => {
     const out = enrichNoteForKnowledge('# T', [{ attachmentId: 'a', filename: 'f.pdf', summary: '' }])
     expect(out).not.toContain('附件解析摘要')
   })
+
+  it('preserves full extracted text (chunks) so a marker sentence absent from summary stays searchable', () => {
+    // A sentence only present in the chunk text, NOT in the summary — this is the
+    // full-text retrieval guarantee (verified against real WeKnora chunks).
+    const out = enrichNoteForKnowledge('# 项目复盘\n\n客户资料', [
+      { attachmentId: 'a', filename: 'report.pdf', summary: '这是一个简短摘要', chunks: ['…季度回顾… ZXQ-7291-blue-orbit …'] },
+    ])
+    expect(out).toContain('ZXQ-7291-blue-orbit') // full text injected, not just summary
+    expect(out).toContain('附件解析摘要（report.pdf）')
+  })
 })

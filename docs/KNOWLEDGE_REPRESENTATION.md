@@ -88,6 +88,14 @@ Legend: count = Persistent main-KB Knowledge count. Preview = where the binary i
 7. Search on image OCR → opens **Note A**.
 8. Wiki/Graph: **1** knowledge (Note A); Processing Artifacts isolated.
 
+## Full-text retrieval (verified, not summary-only)
+
+Real experiment against WeKnora (`GET /chunks/:knowledge_id` on a file knowledge): the chunk list returns the **full extracted text** (a 419-char TXT returned 1 chunk = full body, containing a marker sentence absent from the 143-char `description` summary). Therefore:
+
+- The Business Knowledge remote projection injects **summary + full extracted text (chunks)**, bounded by `maxTotalChars` (default 12000, configurable) — NOT summary-only.
+- The canonical Note Markdown NEVER contains the full text (only the managed Companion-Note summary block); full text lives only in the remote projection + the Processing Artifact.
+- `captureDerived` captures the full chunk text (soft 30k storage cap); `enrichNoteForKnowledge` applies the remote budget.
+
 ## Regression guard (PART K)
 
 `note-scoped` / `standalone` / `local-only` modes, Processing KB, derived enrichment, and "same Note KnowledgeId" are unchanged. WeKnora is NOT forked to show images (D1/D2: no re-creation of a second Attachment Knowledge).
