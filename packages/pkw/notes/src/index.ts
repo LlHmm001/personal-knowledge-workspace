@@ -98,6 +98,7 @@ export class NotesService extends Service {
   private paths?: KvTable<string, NoteId>
   private order?: KvTable<string, OrderRecord>
   private folderTrash?: KvTable<string, FolderTrashEntry>
+  private foldersCache?: string[]
 
   constructor(ctx: Context, private readonly config: Config) {
     super(ctx, 'pkwNotes')
@@ -382,6 +383,7 @@ export class NotesService extends Service {
   }
 
   async reconcile(): Promise<ReconcileReport> {
+    this.invalidateFoldersCache()
     const { parseFrontmatter, injectNoteId, deriveTitle } = await import('./frontmatter.ts')
     const report: ReconcileReport = { decisions: [], repairedProjections: 0 }
     const observed = new Map<string, { target: import('@deepseek-ai/dsh-fs').FsTarget; relativePath: string; markdown: string; hash: string }>()
@@ -538,12 +540,16 @@ export class NotesService extends Service {
 
   // ── folders + manual ordering ──────────────────────────────────────────────
 
-  /** Recursively list every folder relative path under `notes/` (sorted). */
+  /** Recursively list every folder relative path under `notes/` (sorted). Cached: the tree hot path must not walk the filesystem per render. */
   async listFolders(): Promise<string[]> {
+    if (this.foldersCache !== undefined) return this.foldersCache
     const out: string[] = []
     await this.collectFolders(await this.ctx.fs.resolve(this.handle.notePath('')), '', out)
-    return out.sort()
+    this.foldersCache = out.sort()
+    return this.foldersCache
   }
+
+  private invalidateFoldersCache(): void { this.foldersCache = undefined }
 
   /** List trashed folder entries (stable identity, independent of original path). */
   async listTrashFolders(): Promise<FolderTrashEntry[]> {
@@ -567,6 +573,7 @@ export class NotesService extends Service {
   /** Create an empty folder by writing a hidden marker (parent dirs are auto-created). */
   async createFolder(relativePath: string): Promise<void> {
     this.assertFolderPath(relativePath)
+    this.invalidateFoldersCache()
     const marker = await this.ctx.fs.resolve(this.handle.notePath(posix.join(relativePath, FOLDER_MARKER)))
     await this.ctx.fs.writeText(marker, '', { kind: 'createIfAbsent' })
   }
@@ -575,6 +582,7 @@ export class NotesService extends Service {
   async renameFolder(oldPath: string, newPath: string): Promise<void> {
     this.assertFolderPath(oldPath)
     this.assertFolderPath(newPath)
+    this.invalidateFoldersCache()
     if (oldPath === newPath) return
     await this.ctx.fs.rename(
       await this.ctx.fs.resolve(this.handle.notePath(oldPath)),
@@ -591,6 +599,7 @@ export class NotesService extends Service {
 
   /** Restore a trashed folder to its original path and un-delete descendant notes. */
   async restoreFolder(trashEntryId: FolderTrashEntryId): Promise<void> {
+    this.invalidateFoldersCache()
     const entry = this.requireFolderTrash().get(String(trashEntryId))
     if (entry === undefined) throw new Error(`pkwNotes: unknown folder trash entry '${trashEntryId}'`)
     const target = await this.ctx.fs.resolve(this.handle.notePath(entry.originalPath))
@@ -620,6 +629,7 @@ export class NotesService extends Service {
 
   /** Permanently purge a trashed folder by its stable trash entry id. */
   async purgeFolder(trashEntryId: FolderTrashEntryId): Promise<void> {
+    this.invalidateFoldersCache()
     const entry = this.requireFolderTrash().get(String(trashEntryId))
     if (entry === undefined) return
     await this.ctx.fs.removeDir(await this.ctx.fs.resolve(this.handle.archivePath(entry.archivedPath)), { recursive: true })
@@ -646,6 +656,7 @@ export class NotesService extends Service {
   /** Trash a whole folder (even non-empty) into a stable-identity archive entry. */
   async trashFolder(relativePath: string): Promise<FolderTrashEntry> {
     this.assertFolderPath(relativePath)
+    this.invalidateFoldersCache()
     const trashEntryId = FolderTrashEntryId(`ftrash_${randomUUID().replaceAll('-', '').slice(0, 12)}`)
     const archivedRel = `folders/${trashEntryId}`
     const now = new Date().toISOString()

@@ -388,6 +388,26 @@ export class WeKnoraClient extends Service {
     return r.data ?? []
   }
 
+  async createKnowledgeBase(name: string): Promise<{ id: string; name: string }> {
+    const r = await this.request<{ data: { id: string; name: string } }>('POST', '/knowledge-bases', { name })
+    return r.data
+  }
+
+  async getKnowledgeBase(id: string): Promise<Record<string, unknown>> {
+    const r = await this.request<{ data: Record<string, unknown> }>('GET', `/knowledge-bases/${id}`)
+    return r.data ?? {}
+  }
+
+  async updateKnowledgeBase(id: string, patch: Record<string, unknown>): Promise<void> {
+    await this.request('PUT', `/knowledge-bases/${id}`, patch)
+  }
+
+  /** List the parsed chunks of a Knowledge (top text segments for enrichment). */
+  async listKnowledgeChunks(knowledgeId: string): Promise<Array<{ id: string; content: string; chunk_index?: number }>> {
+    const r = await this.request<{ data?: Array<{ id: string; content: string; chunk_index?: number }> }>('GET', `/chunks/${knowledgeId}`)
+    return r.data ?? []
+  }
+
   // ── Wiki (read-only parity; same generated result as WeKnora) ──────────────
 
   async listWikiPages(kbId: string, opts: { query?: string; pageType?: string; folderId?: string; page?: number; pageSize?: number } = {}): Promise<WikiPageList> {

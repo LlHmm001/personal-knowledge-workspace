@@ -31,6 +31,8 @@ export { deriveSelectAll, parseTrashItemKey, reconcileSelection, summarizeBatch,
 export type { BatchResult, SelectAllState, TrashItemKind } from './trash.ts'
 export { companionUserContent, extractAttachmentSummary, hasCompanionUserContent, insertAttachmentSummary } from './companion-summary.ts'
 export { companionNoteMarkdown, filenameStem, sanitizeNoteBase, uniqueNotePath } from './direct-upload.ts'
+export { enrichNoteForKnowledge } from './note-projection.ts'
+export type { NoteProjectionBudget, NoteScopedDerived } from './note-projection.ts'
 export { parseNoteId } from './frontmatter.ts'
 export { attachmentDomainSpec, noteDomainSpec, operationCommitRecord, pkwDomainSpec, taskDomainSpec } from './spec.ts'
 export type { OperationCommitRecord } from './spec.ts'
