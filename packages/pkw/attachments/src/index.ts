@@ -131,6 +131,8 @@ export class AttachmentsService extends Service {
       indexedAt: now,
       createdAt: now,
       indexable: input.indexable !== false,
+      ...(input.knowledgeMode !== undefined && input.knowledgeMode !== 'standalone' ? { knowledgeMode: input.knowledgeMode } : {}),
+      ...(input.ownerNoteId !== undefined ? { ownerNoteId: input.ownerNoteId } : {}),
     }
     const payload: AttachmentEventPayload = {
       attachmentId: String(attachmentId),

@@ -856,6 +856,7 @@ export class WeKnoraSyncService extends Service {
     const key = this.entityKey(ENTITY_ATTACHMENT, String(attachmentId))
     const record = this.ctx.pkwAttachments.get(attachmentId)
     if (record === undefined) return undefined
+    const mapping = this.reqMappings().get(key)
 
     // Non-indexable attachments stay local and are never projected to WeKnora.
     if (record.indexable === false) {
@@ -863,7 +864,16 @@ export class WeKnoraSyncService extends Service {
       return undefined
     }
 
-    const mapping = this.reqMappings().get(key)
+    // Knowledge Ownership: note-scoped / local-only attachments never become an
+    // independent Persistent Attachment Knowledge. A note-scoped attachment is a
+    // supporting source of its owner Note Knowledge; its derived content enriches
+    // the owner Note's remote projection (see KNOWLEDGE_INGESTION_POLICY.md).
+    if (record.knowledgeMode === 'note-scoped' || record.knowledgeMode === 'local-only') {
+      if (mapping === undefined) await this.clearDirty(key)
+      else await this.runRemoteDelete(ENTITY_ATTACHMENT, String(attachmentId), key, mapping) // legacy duplicate cleanup
+      return undefined
+    }
+
     if (record.deletedAt !== undefined) {
       await this.runRemoteDelete(ENTITY_ATTACHMENT, String(attachmentId), key, mapping)
       return undefined

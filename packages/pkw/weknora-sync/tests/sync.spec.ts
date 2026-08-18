@@ -14,6 +14,7 @@ import { SqliteStorageBackend } from '@deepseek-ai/dsh-storage-sqlite'
 import WorkspaceRegistry from '@deepseek-ai/dsh-workspace'
 import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
 import { WeKnoraError, canonicalizeRemoteManualContent, redactSecrets } from '@deepseek-ai/dsh-pkw-weknora'
+import { NoteId } from '@deepseek-ai/dsh-pkw-domain'
 import PkwEventStoreService from '../../events/src/index.ts'
 import PkwWorkspaceService from '../../workspace/src/index.ts'
 import NotesService from '../../notes/src/index.ts'
@@ -429,6 +430,21 @@ describe('pkw weknora sync (vertical slice)', () => {
     expect(kid).toBeDefined()
     expect(fake.manuals.size).toBe(1)
     expect(sync.getMapping(note.noteId)!.knowledgeId).toBe(kid)
+  })
+
+  it('note-scoped / local-only attachments never become independent Knowledge', async () => {
+    const { attachments, sync, fake } = await boot()
+    const scoped = await attachments.importFile({ content: new Uint8Array([1, 2, 3]), filename: 'a.jpg', mimeType: 'image/jpeg', knowledgeMode: 'note-scoped', ownerNoteId: NoteId('note_x') })
+    await expect(sync.syncAttachment(scoped.id)).rejects.toThrow(/did not converge/)
+    expect(fake.files.size).toBe(0)
+    const local = await attachments.importFile({ content: new Uint8Array([4, 5, 6]), filename: 'b.pdf', mimeType: 'application/pdf', knowledgeMode: 'local-only' })
+    await expect(sync.syncAttachment(local.id)).rejects.toThrow(/did not converge/)
+    expect(fake.files.size).toBe(0)
+    // standalone still syncs
+    const standalone = await attachments.importFile({ content: new Uint8Array([7, 8, 9]), filename: 'c.txt', mimeType: 'text/plain' })
+    const kid = await sync.syncAttachment(standalone.id)
+    expect(kid).toBeDefined()
+    expect(fake.files.size).toBe(1)
   })
 
   it('recovers a lost mapping via remote identity lookup (unknown-outcome)', async () => {

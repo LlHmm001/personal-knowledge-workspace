@@ -836,12 +836,19 @@ function rewriteLiveAttachmentImgs(root){
   const imgs = root.querySelectorAll('img')
   for (let i = 0; i < imgs.length; i++) {
     const img = imgs[i]
-    const src = img.getAttribute('src') || ''
-    if (src.indexOf('/pkw/attachment/') === 0) continue
-    const resolved = managedAttachmentUrl(src)
-    if (resolved) {
-      console.debug('[pkw.live-img] src=' + src + ' currentSrc=' + (img.currentSrc || '') + ' resolved=' + resolved)
-      img.setAttribute('src', resolved)
+    // Vditor IR (and its preview path) may hold the canonical reference in either
+    // 'src' or 'data-src'. Resolve whichever carries attachments/<id>/….
+    const attrs = ['src', 'data-src']
+    for (let a = 0; a < attrs.length; a++) {
+      const attr = attrs[a]
+      const src = img.getAttribute(attr) || ''
+      if (src.indexOf('/pkw/attachment/') === 0) continue
+      const resolved = managedAttachmentUrl(src)
+      if (resolved) {
+        console.debug('[pkw.live-img] ' + attr + '=' + src + ' currentSrc=' + (img.currentSrc || '') + ' resolved=' + resolved)
+        img.setAttribute(attr, resolved)
+        if (attr === 'data-src') img.setAttribute('src', resolved)
+      }
     }
   }
 }
@@ -853,7 +860,7 @@ function setupLiveAttachmentRewrite(v){
   rewriteLiveAttachmentImgs(el)
   if (setupLiveAttachmentRewrite._obs) setupLiveAttachmentRewrite._obs.disconnect()
   setupLiveAttachmentRewrite._obs = new MutationObserver(() => rewriteLiveAttachmentImgs(el))
-  setupLiveAttachmentRewrite._obs.observe(el, { childList: true, subtree: true, attributes: true, attributeFilter: ['src'] })
+  setupLiveAttachmentRewrite._obs.observe(el, { childList: true, subtree: true, attributes: true, attributeFilter: ['src', 'data-src'] })
 }
 async function initVditor(){
   const el = $('#vditor')
@@ -876,8 +883,13 @@ async function initVditor(){
       },
       upload: { handler: (files) => { uploadVditorFiles(files, true) } },
       input: () => { onEditorInput() },
+      // Vditor's 'after' option fires ONLY after async init (i18n + Lute load +
+      // initial value render) completes. Installing the MutationObserver
+      // synchronously after new Vditor() was a no-op — v.vditor.ir did not exist
+      // yet — which is why Live images stayed broken while the Manager thumbnail
+      // (a plain <img src="/pkw/attachment/<id>">) worked.
+      after: () => { setupLiveAttachmentRewrite(vditor) },
     })
-    setupLiveAttachmentRewrite(vditor)
   } catch (e) {
     el.innerHTML = '<div class="empty">' + esc(t('genericError')) + ': ' + esc(e.message) + '</div>'
   }
@@ -947,7 +959,9 @@ function uploadVditorFiles(files, asImage){
     const reader = new FileReader()
     reader.onload = () => {
       const base64 = String(reader.result).split(',')[1]
-      api('uploadAttachment', { filename: file.name, mimeType: file.type || 'application/octet-stream', contentBase64: base64 }).then(up => {
+      // Note-editor upload → NOTE-SCOPED: this file belongs to the note being
+      // edited, so it does NOT become an independent WeKnora Knowledge.
+      api('uploadAttachment', { filename: file.name, mimeType: file.type || 'application/octet-stream', contentBase64: base64, knowledgeMode: 'note-scoped', ownerNoteId: state.selectedNoteId }).then(up => {
         // Reference the STORED filename (up.filename), never the raw File.name, so the
         // managed link always resolves to the persisted binary.
         const ref = 'attachments/' + up.attachmentId + '/' + up.filename
@@ -1932,7 +1946,7 @@ document.addEventListener('paste', async (e) => {
       if (!file) continue
       const buf = new Uint8Array(await file.arrayBuffer()); let bin = ''
       for (let i = 0; i < buf.length; i++) bin += String.fromCharCode(buf[i])
-      const up = await api('uploadAttachment', { filename: 'paste-' + Date.now() + '.png', mimeType: file.type || 'image/png', contentBase64: btoa(bin) })
+      const up = await api('uploadAttachment', { filename: 'paste-' + Date.now() + '.png', mimeType: file.type || 'image/png', contentBase64: btoa(bin), knowledgeMode: 'note-scoped', ownerNoteId: state.selectedNoteId })
       const el = $('#editor')
       if (el) {
         // Reference the STORED filename so the managed link resolves to the binary.

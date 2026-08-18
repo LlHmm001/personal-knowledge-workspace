@@ -215,6 +215,18 @@ export interface AttachmentRecord {
   indexable?: boolean
   /** The Companion Note (Direct Upload) that owns this attachment's summary block. */
   companionNoteId?: NoteId
+  /**
+   * Remote Knowledge Ownership: whether this attachment becomes an independent
+   * Persistent WeKnora Knowledge, is a supporting source of an owner Note
+   * Knowledge, or stays local-only.
+   *   - 'standalone'   → its own Attachment Knowledge (default for direct upload).
+   *   - 'note-scoped'  → supporting source of `ownerNoteId`'s Note Knowledge; no
+   *                      independent Attachment Knowledge.
+   *   - 'local-only'   → never projected (equivalent to indexable:false).
+   */
+  knowledgeMode?: 'standalone' | 'note-scoped' | 'local-only'
+  /** Owner NoteId when `knowledgeMode === 'note-scoped'`. */
+  ownerNoteId?: NoteId
 }
 
 export interface AttachmentRef {
@@ -304,6 +316,10 @@ export interface ImportAttachmentInput {
   mimeType: string
   /** Default true; false keeps the attachment local (no WeKnora projection). */
   indexable?: boolean
+  /** Remote Knowledge Ownership (see AttachmentRecord.knowledgeMode). */
+  knowledgeMode?: 'standalone' | 'note-scoped' | 'local-only'
+  /** Owner NoteId when knowledgeMode === 'note-scoped'. */
+  ownerNoteId?: NoteId
 }
 
 export interface AttachmentListFilter {

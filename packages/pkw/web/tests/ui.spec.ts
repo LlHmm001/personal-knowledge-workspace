@@ -151,6 +151,10 @@ describe('PKW web UI (served page)', () => {
     expect(js).toContain('setupLiveAttachmentRewrite')
     expect(js).toContain('managedAttachmentUrl')
     expect(js).toContain("'/pkw/attachment/'")
+    expect(js).toContain("'data-src'")
+    // Live media rewriter must be installed via Vditor's `after` hook (async init),
+    // not synchronously after `new Vditor()` when v.vditor.ir does not exist yet.
+    expect(js).toContain('after: () => { setupLiveAttachmentRewrite(vditor) }')
   })
 
   it('wires task marquee multi-selection + batch context menu', () => {

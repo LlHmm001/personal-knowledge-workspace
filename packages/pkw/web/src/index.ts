@@ -574,7 +574,14 @@ export class PkwWebService extends Service {
       }
       case 'uploadAttachment': {
         const content = Buffer.from(String(args.contentBase64), 'base64')
-        const rec = await this.attachments.importFile({ content, filename: String(args.filename), mimeType: String(args.mimeType), ...(args.indexable !== undefined ? { indexable: args.indexable === true } : {}) })
+        const rec = await this.attachments.importFile({
+          content,
+          filename: String(args.filename),
+          mimeType: String(args.mimeType),
+          ...(args.indexable !== undefined ? { indexable: args.indexable === true } : {}),
+          ...(args.knowledgeMode === 'note-scoped' || args.knowledgeMode === 'local-only' ? { knowledgeMode: args.knowledgeMode as 'note-scoped' | 'local-only' } : {}),
+          ...(args.ownerNoteId !== undefined && args.ownerNoteId !== null && args.ownerNoteId !== '' ? { ownerNoteId: NoteId(String(args.ownerNoteId)) } : {}),
+        })
         return { attachmentId: String(rec.id), filename: rec.filename, sizeBytes: rec.sizeBytes }
       }
       case 'setCompanionNote': {
