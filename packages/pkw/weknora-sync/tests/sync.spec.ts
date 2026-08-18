@@ -402,6 +402,17 @@ describe('pkw weknora sync (vertical slice)', () => {
     expect(fake.manuals.size).toBe(1)
   })
 
+  it('Move keeps the SAME KnowledgeId (update, never delete+recreate)', async () => {
+    const { notes, sync, fake } = await boot()
+    const note = await notes.create({ relativePath: 'a.md', markdown: '# v1\n' })
+    const knowledgeId = await sync.syncNote(note.noteId)
+    await notes.move(note.noteId, 'sub/a.md')
+    const after = await sync.syncNote(note.noteId)
+    expect(after).toBe(knowledgeId) // KnowledgeId stable across Move
+    expect(sync.getMapping(note.noteId)!.knowledgeId).toBe(knowledgeId)
+    expect(fake.manuals.size).toBe(1) // no second remote object created
+  })
+
   it('recovers a lost mapping via remote identity lookup (unknown-outcome)', async () => {
     const { notes, adapter, sync } = await boot()
     const note = await notes.create({ relativePath: 'a.md', markdown: '# v1\n\nlost mapping\n' })

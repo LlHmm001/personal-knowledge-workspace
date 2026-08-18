@@ -209,6 +209,24 @@ mark{background:var(--mark-bg);border-radius:2px;padding:0 2px}
 [data-theme="dark"] .vditor-ir__marker{color:var(--text-muted)}
 [data-theme="dark"] .vditor-ir pre.vditor-reset,[data-theme="dark"] .vditor-reset pre{background:var(--code-bg);color:var(--code-fg)}
 [data-theme="dark"] .vditor-ir blockquote.callout{background:var(--callout-background-color,var(--bg-elevated))}
+/* Attachment Manager */
+.att-row{display:flex;align-items:center;gap:8px;padding:6px 8px}
+.att-row .att-check{flex:0 0 auto}
+.att-row .att-thumb{width:32px;height:32px;object-fit:cover;border-radius:4px;flex:0 0 auto;border:1px solid var(--border)}
+.att-row .att-ic{flex:0 0 auto;font-size:18px;width:32px;text-align:center}
+.att-row .nm{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.att-row.selected{background:var(--bg-hover)}
+.att-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;padding:8px 0}
+.att-card{position:relative;border:1px solid var(--border);border-radius:8px;padding:10px;cursor:pointer;background:var(--panel)}
+.att-card:hover{border-color:var(--accent)}
+.att-card.selected{outline:2px solid var(--accent)}
+.att-card .att-check{position:absolute;top:8px;left:8px;z-index:2}
+.att-thumbwrap{height:110px;display:flex;align-items:center;justify-content:center;overflow:hidden;border-radius:6px;background:var(--bg-elevated);margin-bottom:8px}
+.att-thumbwrap .att-thumb{width:100%;height:100%;object-fit:cover}
+.att-ic.big{font-size:40px}
+.att-card-name{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:4px}
+.check-row.inline{display:inline-flex;align-items:center;gap:5px;margin:0 4px;font-size:13px}
+#attSearch{width:170px;padding:5px 8px;border:1px solid var(--border);border-radius:6px;background:var(--panel);color:var(--text-primary)}
 </style>
 </head>
 <body>
@@ -267,6 +285,9 @@ const STR = {
     missingSource:'源文件已不存在',
     knowledgeWiki:'Wiki', knowledgeGraph:'图谱', knowledgeSearchTab:'搜索', wikiGenerated:'WeKnora 生成内容', wikiOpenNote:'打开笔记', wikiEmpty:'该知识库尚未生成 Wiki 页面。', wikiSearchPlaceholder:'搜索 Wiki 页面…', graphEmpty:'图谱暂无节点。', graphFit:'适应屏幕', graphHideRelations:'隐藏关系', graphShowRelations:'显示关系', graphFull:'全库概览', knowledgeUnavailable:'WeKnora 暂不可用',
     companionNote:'建立伴随笔记', noteLocation:'笔记位置', kbIndex:'知识库索引', kbIndexHint:'索引可解析附件', uploadedNoNote:'文件已上传，但伴随笔记创建失败', uploadedCompanion:'已生成 {n} 篇伴随笔记',
+    attGridView:'网格视图', attListView:'列表视图', attSearchPlaceholder:'搜索文件名…', attTypeAll:'全部', attTypeImage:'图片', attTypeDocument:'文档', attTypeOther:'其它', attSort:'排序', attSortRecent:'最近', attSortName:'名称', attSortSize:'大小',
+    attSelectAll:'全选', attSelected:'已选择 {n} 项', attBatchTrash:'移入回收站', attBatchReparse:'重新解析', attBatchIndex:'重新索引', attClearSelection:'取消选择',
+    attCompanion:'伴随笔记', attCreateCompanion:'创建伴随笔记', attOpenCompanion:'打开伴随笔记', attPreview:'预览', attCopyRef:'复制引用', attNoCompanion:'未建伴随笔记', attCopied:'已复制引用', attUploadResult:'上传完成：附件 {a} · 伴随笔记 {n} · 失败 {f}', attUploadResultNoNote:'上传完成：附件 {a} 成功，伴随笔记失败 {f}', attUploadPartial:'部分上传失败：{a}/{t} 成功', attCreatedNote:'已创建伴随笔记', attOpenedExisting:'该附件已有伴随笔记，已打开', attBatchNoSelection:'请先选择附件',
     uploadProgress:'上传中…', uploadSuccess:'已上传', uploadFailed:'上传失败', searching:'搜索中…', noHits:'没有命中「{q}」。', searchHint:'输入关键词搜索本地笔记与附件（经 WeKnora hybrid search）。',
     score:'得分', openNote:'打开笔记', openAttachment:'打开附件', externalWeKnora:'WeKnora 外部', noteLabel:'笔记', attachmentLabel:'附件',
     details:'详情', noteId:'NoteId', attachmentId:'AttachmentId', path:'路径', revision:'版本', updated:'更新时间', lastError:'最近错误', maintenance:'维护', advanced:'高级',
@@ -325,6 +346,9 @@ const STR = {
     missingSource:'Source file missing',
     knowledgeWiki:'Wiki', knowledgeGraph:'Graph', knowledgeSearchTab:'Search', wikiGenerated:'WeKnora generated', wikiOpenNote:'Open note', wikiEmpty:'This knowledge base has no generated Wiki pages yet.', wikiSearchPlaceholder:'Search Wiki pages…', graphEmpty:'No graph nodes.', graphFit:'Fit screen', graphHideRelations:'Hide relations', graphShowRelations:'Show relations', graphFull:'Full library', knowledgeUnavailable:'WeKnora unavailable',
     companionNote:'Create companion note', noteLocation:'Note location', kbIndex:'Knowledge indexing', kbIndexHint:'Index parseable attachments', uploadedNoNote:'File uploaded, but companion note creation failed', uploadedCompanion:'Created {n} companion notes',
+    attGridView:'Grid view', attListView:'List view', attSearchPlaceholder:'Search filename…', attTypeAll:'All', attTypeImage:'Images', attTypeDocument:'Documents', attTypeOther:'Other', attSort:'Sort', attSortRecent:'Recent', attSortName:'Name', attSortSize:'Size',
+    attSelectAll:'Select all', attSelected:'{n} selected', attBatchTrash:'Trash', attBatchReparse:'Reparse', attBatchIndex:'Re-index', attClearSelection:'Clear selection',
+    attCompanion:'Companion note', attCreateCompanion:'Create companion note', attOpenCompanion:'Open companion note', attPreview:'Preview', attCopyRef:'Copy reference', attNoCompanion:'No companion note', attCopied:'Reference copied', attUploadResult:'Upload done: {a} attachments · {n} companion notes · {f} failed', attUploadResultNoNote:'Upload done: {a} attachments, {f} companion notes failed', attUploadPartial:'Partial upload: {a}/{t} succeeded', attCreatedNote:'Companion note created', attOpenedExisting:'Companion note already exists — opened', attBatchNoSelection:'Select attachments first',
     uploadProgress:'Uploading…', uploadSuccess:'Uploaded', uploadFailed:'Upload failed', searching:'Searching…', noHits:'No hits for 「{q}」.', searchHint:'Type a query to search notes & attachments (via WeKnora hybrid search).',
     score:'score', openNote:'Open note', openAttachment:'Open attachment', externalWeKnora:'external WeKnora', noteLabel:'Note', attachmentLabel:'Attachment',
     details:'Details', noteId:'NoteId', attachmentId:'AttachmentId', path:'Path', revision:'Revision', updated:'Updated', lastError:'Last error', maintenance:'Maintenance', advanced:'Advanced',
@@ -387,6 +411,11 @@ const state = {
   tasksCache: [],
   matricesCache: [],
   attachmentsCache: [],
+  attMode: localStorage.getItem('pkw-att-mode') || 'list',
+  attQuery: localStorage.getItem('pkw-att-query') || '',
+  attType: localStorage.getItem('pkw-att-type') || 'all',
+  attSort: localStorage.getItem('pkw-att-sort') || 'recent',
+  attSelection: new Set(),
   trashCache: null,
   summaryCache: null,
   scroll: { main: {}, list: {} },
@@ -919,8 +948,10 @@ function uploadVditorFiles(files, asImage){
     reader.onload = () => {
       const base64 = String(reader.result).split(',')[1]
       api('uploadAttachment', { filename: file.name, mimeType: file.type || 'application/octet-stream', contentBase64: base64 }).then(up => {
-        const ref = 'attachments/' + up.attachmentId + '/' + file.name
-        const md = asImage === false ? '[' + file.name + '](' + ref + ')' : '![](' + ref + ')'
+        // Reference the STORED filename (up.filename), never the raw File.name, so the
+        // managed link always resolves to the persisted binary.
+        const ref = 'attachments/' + up.attachmentId + '/' + up.filename
+        const md = asImage === false ? '[' + up.filename + '](' + ref + ')' : '![](' + ref + ')'
         if (vditor) vditor.insertValue(md)
         refreshHeader()
       }).catch(e => toast(t('uploadFailed') + ': ' + e.message, 'err'))
@@ -1205,18 +1236,110 @@ function showFolderPicker(currentPath, cb){
   })
 }
 
-// ── Attachments / Search / Maintenance ──────────────────────────────────────
+// ── Attachments: Manager (list/grid, search, filter, sort, multi-select) ────
+function attTypeOf(mimeType){
+  const m = String(mimeType || '')
+  if (m.indexOf('image/') === 0) return 'image'
+  if (m.indexOf('text/') === 0) return 'document'
+  if (m.indexOf('application/pdf') === 0) return 'document'
+  if (m.indexOf('word') >= 0 || m.indexOf('excel') >= 0 || m.indexOf('powerpoint') >= 0 || m.indexOf('officedocument') >= 0 || m.indexOf('json') >= 0 || m.indexOf('xml') >= 0 || m.indexOf('csv') >= 0) return 'document'
+  return 'other'
+}
+function attFilteredList(){
+  let list = state.attachmentsCache || []
+  const q = String(state.attQuery || '').trim().toLowerCase()
+  if (q) list = list.filter(a => (a.filename || '').toLowerCase().indexOf(q) >= 0)
+  if (state.attType !== 'all') list = list.filter(a => attTypeOf(a.mimeType) === state.attType)
+  const s = state.attSort
+  if (s === 'name') list = list.slice().sort((a, b) => (a.filename || '') < (b.filename || '') ? -1 : (a.filename || '') > (b.filename || '') ? 1 : 0)
+  else if (s === 'size') list = list.slice().sort((a, b) => (b.sizeBytes || 0) - (a.sizeBytes || 0))
+  else list = list.slice().sort((a, b) => (a.createdAt || '') < (b.createdAt || '') ? 1 : -1)
+  return list
+}
+function fmtStamp(iso){ return String(iso || '').slice(0, 16).replace('T', ' ') }
+function attIcon(a){
+  if (attTypeOf(a.mimeType) === 'image') return '<img class="att-thumb" src="/pkw/attachment/' + esc(a.attachmentId) + '" alt="" loading="lazy">'
+  if (attTypeOf(a.mimeType) === 'document') return '<span class="att-ic">📄</span>'
+  return '<span class="att-ic">📦</span>'
+}
+function attCompanionHtml(a){
+  if (a.companionNoteId) return '<button class="btn small" data-action="att-open-companion" data-id="' + esc(a.attachmentId) + '">📄 ' + esc(a.companionNoteTitle || t('attCompanion')) + '</button>'
+  return '<button class="btn small" data-action="att-create-companion" data-id="' + esc(a.attachmentId) + '">+ ' + esc(t('attCreateCompanion')) + '</button>'
+}
+function attRowHtml(a){
+  const sel = state.attSelection.has(a.attachmentId)
+  return '<div class="tree-row att-row ' + (sel ? 'selected' : '') + '" data-action="open-attachment" data-id="' + esc(a.attachmentId) + '">' +
+    '<input type="checkbox" class="att-check" data-action="att-toggle" data-id="' + esc(a.attachmentId) + '"' + (sel ? ' checked' : '') + '>' +
+    attIcon(a) +
+    '<span class="nm">' + esc(a.filename) + '</span>' +
+    '<span class="muted small">' + esc(attTypeOf(a.mimeType)) + '</span>' +
+    '<span class="muted small">' + fmtSize(a.sizeBytes) + '</span>' +
+    '<span class="muted small">' + esc(fmtStamp(a.createdAt)) + '</span>' +
+    knowledgeBadge(a.sync) +
+    attCompanionHtml(a) +
+    '</div>'
+}
+function attCardHtml(a){
+  const sel = state.attSelection.has(a.attachmentId)
+  return '<div class="att-card ' + (sel ? 'selected' : '') + '" data-action="open-attachment" data-id="' + esc(a.attachmentId) + '">' +
+    '<input type="checkbox" class="att-check" data-action="att-toggle" data-id="' + esc(a.attachmentId) + '"' + (sel ? ' checked' : '') + '>' +
+    '<div class="att-thumbwrap">' + (attTypeOf(a.mimeType) === 'image' ? '<img class="att-thumb" src="/pkw/attachment/' + esc(a.attachmentId) + '" alt="" loading="lazy">' : '<span class="att-ic big">📄</span>') + '</div>' +
+    '<div class="att-card-name">' + esc(a.filename) + '</div>' +
+    '<div class="muted small">' + fmtSize(a.sizeBytes) + ' · ' + esc(fmtStamp(a.createdAt)) + '</div>' +
+    '<div>' + knowledgeBadge(a.sync) + '</div>' +
+    '</div>'
+}
+function attToolbarHtml(){
+  const typeBtn = (v, label) => '<button class="btn small' + (state.attType === v ? ' primary' : '') + '" data-action="att-type" data-type="' + v + '">' + esc(label) + '</button>'
+  const sortBtn = (v, label) => '<button class="btn small' + (state.attSort === v ? ' primary' : '') + '" data-action="att-sort" data-sort="' + v + '">' + esc(label) + '</button>'
+  return '<div class="toolbar">' +
+    '<button class="btn small" data-action="att-mode" data-mode="' + (state.attMode === 'list' ? 'grid' : 'list') + '">' + esc(state.attMode === 'list' ? t('attGridView') : t('attListView')) + '</button>' +
+    '<input id="attSearch" type="search" placeholder="' + esc(t('attSearchPlaceholder')) + '" value="' + esc(state.attQuery) + '">' +
+    typeBtn('all', t('attTypeAll')) + typeBtn('image', t('attTypeImage')) + typeBtn('document', t('attTypeDocument')) + typeBtn('other', t('attTypeOther')) +
+    '<span class="muted small">' + esc(t('attSort')) + '</span>' + sortBtn('recent', t('attSortRecent')) + sortBtn('name', t('attSortName')) + sortBtn('size', t('attSortSize')) +
+    '</div>'
+}
+function attBatchBarHtml(){
+  const visible = attFilteredList()
+  const sel = state.attSelection.size
+  const allChecked = visible.length > 0 && visible.every(a => state.attSelection.has(a.attachmentId))
+  let html = '<div class="toolbar">' +
+    '<button class="btn primary" data-action="upload-attachment">+ ' + esc(t('upload')) + '</button>' +
+    '<label class="check-row inline"><input type="checkbox" id="attSelectAll"' + (allChecked ? ' checked' : '') + '> ' + esc(t('attSelectAll')) + '</label>'
+  if (sel > 0) {
+    html += '<span class="badge">' + esc(t('attSelected', { n: sel })) + '</span>' +
+      '<button class="btn small" data-action="att-batch-trash">' + esc(t('attBatchTrash')) + '</button>' +
+      '<button class="btn small" data-action="att-batch-reparse">' + esc(t('attBatchReparse')) + '</button>' +
+      '<button class="btn small" data-action="att-batch-index">' + esc(t('attBatchIndex')) + '</button>' +
+      '<button class="btn small" data-action="att-clear-selection">' + esc(t('attClearSelection')) + '</button>'
+  }
+  html += '</div>'
+  return html
+}
+function attListHtml(list){
+  if (!list.length) return '<div class="empty"><h3>' + esc(t('emptyAttachments')) + '</h3><p class="muted">' + esc(t('attachmentsDesc')) + '</p><div class="cta"><button class="btn primary" data-action="upload-attachment">+ ' + esc(t('upload')) + '</button></div></div>'
+  if (state.attMode === 'grid') return '<div class="att-grid">' + list.map(attCardHtml).join('') + '</div>'
+  return list.map(attRowHtml).join('')
+}
 function renderAttachmentsFrom(list){
+  state.attachmentsCache = list || []
   $('#treeToolbar').innerHTML = ''
-  $('#list').innerHTML = list.length ? list.map(a => '<div class="tree-row ' + (a.attachmentId === state.selectedAttachmentId ? 'active' : '') + '" data-action="open-attachment" data-id="' + esc(a.attachmentId) + '"><span class="tw"></span><span class="ic">📎</span><span class="nm">' + esc(a.filename) + '</span> ' + syncBadgeHtml(a.sync) + '</div>').join('') : '<div class="empty"><h3>' + esc(t('emptyAttachments')) + '</h3><p class="muted">' + esc(t('attachmentsDesc')) + '</p><div class="cta"><button class="btn primary" data-action="upload-attachment">+ ' + esc(t('upload')) + '</button></div></div>'
-  $('#main').innerHTML = '<h2>' + esc(t('attachments')) + '</h2><p class="muted">' + esc(t('attachmentsDesc')) + '</p><div class="toolbar"><button class="btn primary" data-action="upload-attachment">+ ' + esc(t('upload')) + '</button></div>'
+  $('#list').innerHTML = ''
+  $('#main').innerHTML = '<h2>' + esc(t('attachments')) + '</h2><p class="muted">' + esc(t('attachmentsDesc')) + '</p>' +
+    '<div id="attToolbar">' + attToolbarHtml() + '</div>' +
+    '<div id="attBatchBar">' + attBatchBarHtml() + '</div>' +
+    '<div id="attList">' + attListHtml(attFilteredList()) + '</div>'
   restoreScroll()
+}
+function attRerenderList(){
+  const el = $('#attList'); if (el) el.innerHTML = attListHtml(attFilteredList())
+  const bb = $('#attBatchBar'); if (bb) bb.innerHTML = attBatchBarHtml()
 }
 async function renderAttachments(){
   const seq = viewSeq
   $('#detail').innerHTML = '<h3>' + esc(t('attachments')) + '</h3><div class="kv muted">' + esc(t('attachmentDetailHint')) + '</div>'
   if (state.attachmentsCache.length) { renderAttachmentsFrom(state.attachmentsCache); viewMark('warm-paint', 'cache=hit') }
-  else { $('#list').innerHTML = '<div class="empty">' + esc(t('loading')) + '</div>'; viewMark('shell', 'cache=miss') }
+  else { $('#list').innerHTML = ''; $('#main').innerHTML = '<div class="empty">' + esc(t('loading')) + '</div>'; viewMark('shell', 'cache=miss') }
   try {
     const list = await loadOnce('listAttachments', {})
     if (seq !== viewSeq) return
@@ -1224,25 +1347,33 @@ async function renderAttachments(){
     renderAttachmentsFrom(list)
     viewMark('data-ready')
     if (state.selectedAttachmentId !== null) await openAttachment(state.selectedAttachmentId)
-  } catch (e) { if (seq === viewSeq) $('#list').innerHTML = '<div class="empty">' + esc(t('genericError')) + '</div>' }
+  } catch (e) { if (seq === viewSeq) $('#main').innerHTML = '<div class="empty">' + esc(t('genericError')) + '</div>' }
 }
 async function openAttachment(id){
   state.selectedAttachmentId = id
   try {
     const d = await api('getAttachment', { attachmentId: id })
-    const a = d.attachment, s = d.sync
+    const a = d.attachment, s = d.sync, c = d.companionNote
     const rel = await api('attachmentRelatedNotes', { attachmentId: id }).catch(() => [])
     const kn = await api('getAttachmentKnowledge', { attachmentId: id }).catch(() => ({}))
     const summaryHtml = (kn && (kn.summaryStatus || kn.description))
       ? '<div class="kv"><b>' + esc(t('parseStatus')) + '</b> <span class="v">' + esc(kn.summaryStatus === 'completed' ? t('knowledgeIndexed') : (kn.summaryStatus || kn.parseStatus || '—')) + '</span></div>' +
         (kn.description ? '<div class="kv"><b>' + esc(t('summary')) + '</b> <span class="v">' + esc(kn.description) + '</span></div>' : '')
       : ''
+    const companionHtml = c
+      ? '<div class="kv"><b>' + esc(t('attCompanion')) + '</b> <span class="v"><a href="#" data-action="open-note" data-id="' + esc(c.noteId) + '">' + esc(c.title) + '</a></span></div>'
+      : '<div class="kv"><b>' + esc(t('attCompanion')) + '</b> <span class="v muted">' + esc(t('attNoCompanion')) + '</span></div>'
     $('#detail').innerHTML = '<h3>' + esc(t('knowledge')) + '</h3>' + knowledgeBadge(s) +
       '<div class="kv"><b>' + esc(t('mime')) + '</b> <span class="v mono">' + esc(a.mimeType) + '</span></div>' +
       summaryHtml +
+      companionHtml +
       (s && s.knowledgeId ? '<div class="kv"><b>' + esc(t('knowledgeId')) + '</b> <span class="v mono">' + esc(s.knowledgeId) + '</span></div>' + '<button class="btn small" data-action="reparse-attachment" data-id="' + esc(id) + '">' + esc(t('reparse')) + '</button>' : '') +
       (rel && rel.length ? '<h3>' + esc(t('relatedNotes')) + '</h3>' + rel.map(r => '<div class="tree-row" data-action="open-note" data-id="' + esc(r.noteId) + '"><span class="ic">📄</span><span class="nm">' + esc(r.title) + '</span></div>').join('') : '') +
-      '<h3>' + esc(t('details')) + '</h3><div class="kv"><b>' + esc(t('attachmentId')) + '</b> <span class="v mono">' + esc(a.attachmentId) + '</span></div><div class="kv"><b>' + esc(t('size')) + '</b> ' + fmtSize(a.sizeBytes) + '</div><h3>' + esc(t('syncSection')) + '</h3>' + syncBadgeHtml(s) + '<h3>' + esc(t('maintenance')) + '</h3><button class="btn small" data-action="download-attachment" data-id="' + esc(id) + '">' + esc(t('download')) + '</button> <button class="btn small danger" data-action="delete-attachment" data-id="' + esc(id) + '">' + esc(t('del')) + '</button>'
+      '<h3>' + esc(t('details')) + '</h3><div class="kv"><b>' + esc(t('attachmentId')) + '</b> <span class="v mono">' + esc(a.attachmentId) + '</span></div><div class="kv"><b>' + esc(t('size')) + '</b> ' + fmtSize(a.sizeBytes) + '</div><h3>' + esc(t('syncSection')) + '</h3>' + syncBadgeHtml(s) + '<h3>' + esc(t('maintenance')) + '</h3>' +
+      (c ? '<button class="btn small" data-action="att-open-companion" data-id="' + esc(id) + '">' + esc(t('attOpenCompanion')) + '</button>' : '<button class="btn small" data-action="att-create-companion" data-id="' + esc(id) + '">' + esc(t('attCreateCompanion')) + '</button>') +
+      ' <button class="btn small" data-action="att-copy-ref" data-id="' + esc(id) + '">' + esc(t('attCopyRef')) + '</button>' +
+      ' <button class="btn small" data-action="download-attachment" data-id="' + esc(id) + '">' + esc(t('download')) + '</button>' +
+      ' <button class="btn small danger" data-action="delete-attachment" data-id="' + esc(id) + '">' + esc(t('del')) + '</button>'
     await refreshAttachments()
   } catch (e) { toast(t('genericError') + ': ' + e.message, 'err') }
 }
@@ -1252,51 +1383,73 @@ async function uploadFileBinary(file, indexable){
   for (let i = 0; i < buf.length; i++) bin += String.fromCharCode(buf[i])
   return api('uploadAttachment', { filename: file.name, mimeType: file.type || 'application/octet-stream', contentBase64: btoa(bin), ...(indexable === false ? { indexable: false } : {}) })
 }
-function sanitizeNoteBase(base){
-  const ok = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .-_()[]#@'
-  let out = ''
-  for (const ch of String(base)) out += ok.indexOf(ch) >= 0 ? ch : '_'
-  return out.trim() || 'untitled'
+// ── Companion Note (idempotent Host orchestration; local-first, never waits on WeKnora) ──
+async function ensureCompanionForAttachment(id, folder){
+  const r = await api('createCompanionNote', { attachmentId: id, folder: folder || '' })
+  if (r.created === false) { toast(t('attOpenedExisting'), 'ok'); setView('notes'); openNote(r.noteId); return r }
+  toast(t('attCreatedNote'), 'ok')
+  await refreshAttachments(); refreshHeader()
+  if (state.view === 'notes') renderTree()
+  return r
 }
-async function uniqueNotePath(folder, base){
-  const safe = sanitizeNoteBase(base)
-  const notes = await api('listNotes')
-  const existing = new Set((notes || []).map(n => n.relativePath))
-  const prefix = folder ? folder + '/' : ''
-  let cand = prefix + safe + '.md'
-  let n = 2
-  while (existing.has(cand)) { cand = prefix + safe + ' ' + n + '.md'; n++ }
-  return cand
+async function openCompanionForAttachment(id){
+  const c = await api('getCompanionNote', { attachmentId: id }).catch(() => null)
+  if (c && c.noteId) { setView('notes'); openNote(c.noteId) }
+  else toast(t('attNoCompanion'), 'warn')
 }
-async function createCompanionNote(up, file, folder){
-  const dot = file.name.lastIndexOf('.')
-  const base = dot > 0 ? file.name.slice(0, dot) : file.name
-  const isImage = String(file.type || '').indexOf('image/') === 0
-  const ref = 'attachments/' + up.attachmentId + '/' + file.name
-  const refMd = isImage ? '![](' + ref + ')' : '[' + file.name + '](' + ref + ')'
-  const notePath = await uniqueNotePath(folder, base)
-  const created = await api('createNote', { relativePath: notePath, markdown: '# ' + base + '\\n\\n' + refMd + '\\n' })
-  // Persist the durable Companion relation: AttachmentId → NoteId (not title/path).
-  await api('setCompanionNote', { attachmentId: up.attachmentId, noteId: created.noteId }).catch(() => {})
-  return notePath
+async function previewAttachment(id){ window.open('/pkw/attachment/' + id, '_blank') }
+async function copyAttachmentRef(id){
+  const ref = 'attachments/' + id
+  try { await navigator.clipboard.writeText(ref); toast(t('attCopied'), 'ok') }
+  catch (e) { toast(t('genericError') + ': ' + e.message, 'err') }
 }
+// ── Multi-select + batch ──────────────────────────────────────────────────────
+function attToggleSelection(id){
+  if (state.attSelection.has(id)) state.attSelection.delete(id); else state.attSelection.add(id)
+  attRerenderList()
+}
+function attSelectAllVisible(checked){
+  const ids = attFilteredList().map(a => a.attachmentId)
+  if (checked) ids.forEach(id => state.attSelection.add(id))
+  else ids.forEach(id => state.attSelection.delete(id))
+  attRerenderList()
+}
+function attClearSelection(){ state.attSelection.clear(); attRerenderList() }
+async function attBatchOp(op){
+  const ids = Array.from(state.attSelection)
+  if (!ids.length) { toast(t('attBatchNoSelection'), 'warn'); return }
+  let done = 0, failed = 0
+  for (const id of ids) {
+    try {
+      if (op === 'trash') await api('deleteAttachment', { attachmentId: id })
+      else if (op === 'reparse') await api('reparseAttachmentKnowledge', { attachmentId: id })
+      else if (op === 'index') await api('syncEntity', { entityType: 'attachment', entityId: id })
+      done++
+    } catch (e) { failed++; console.error('[pkw.attBatch]', op, id, e) }
+  }
+  state.attSelection.clear()
+  if (failed === 0) toast(t('batchDone', { n: done }), 'ok')
+  else toast(t('batchPartial', { n: done, m: failed }), 'warn')
+  await refreshAttachments(); refreshHeader()
+}
+// ── Direct Upload: explicit per-file result, no swallowed failures ────────────
 async function uploadFilesWithCompanion(files, withNote, folder, index){
-  let ok = 0, noteOk = 0, noteFail = 0
+  let attOk = 0, attFail = 0, noteOk = 0, noteFail = 0
   for (const file of files) {
     try {
       const up = await uploadFileBinary(file, index)
-      ok++
+      attOk++
       if (withNote) {
-        try { await createCompanionNote(up, file, folder); noteOk++ } catch (e) { noteFail++ }
+        try { await api('createCompanionNote', { attachmentId: up.attachmentId, folder: folder || '' }); noteOk++ }
+        catch (e) { noteFail++; console.error('[pkw.upload] companion note failed', file.name, e) }
       }
-    } catch (e) { /* attachment upload failed */ }
+    } catch (e) { attFail++; console.error('[pkw.upload] attachment failed', file.name, e) }
   }
-  if (ok === 0) { toast(t('uploadFailed'), 'err'); return }
-  if (ok < files.length) { toast(t('uploadedCompanion', { n: ok }) + ' / ' + files.length, 'warn') }
-  else if (withNote) {
-    if (noteFail === 0) toast(t('uploadSuccess') + (ok > 1 ? ' · ' + t('uploadedCompanion', { n: noteOk }) : ''), 'ok')
-    else toast(t('uploadedNoNote'), 'warn')
-  } else toast(t('uploadSuccess'), 'ok')
+  if (attOk === 0) { toast(t('uploadFailed'), 'err'); return }
+  if (attFail > 0) toast(t('attUploadPartial', { a: attOk, t: files.length }), 'warn')
+  else if (withNote && noteFail > 0) toast(t('attUploadResultNoNote', { a: attOk, f: noteFail }), 'warn')
+  else if (withNote) toast(t('attUploadResult', { a: attOk, n: noteOk, f: 0 }), 'ok')
+  else toast(t('uploadSuccess'), 'ok')
   await refreshAttachments(); refreshHeader()
   if (withNote && noteOk > 0) { if (state.view === 'notes') renderTree() }
 }
@@ -1778,7 +1931,8 @@ document.addEventListener('paste', async (e) => {
       const up = await api('uploadAttachment', { filename: 'paste-' + Date.now() + '.png', mimeType: file.type || 'image/png', contentBase64: btoa(bin) })
       const el = $('#editor')
       if (el) {
-        const ref = '![](attachments/' + up.attachmentId + '/paste-' + Date.now() + '.png)'
+        // Reference the STORED filename so the managed link resolves to the binary.
+        const ref = '![](attachments/' + up.attachmentId + '/' + up.filename + ')'
         insertAtCursor(el, '\\n' + ref + '\\n')
       }
       toast(t('uploadSuccess'), 'ok'); refreshHeader()
@@ -2405,6 +2559,18 @@ document.addEventListener('click', (e) => {
   else if (act === 'download-attachment') downloadAttachment(id)
   else if (act === 'reparse-attachment') { api('reparseAttachmentKnowledge', { attachmentId: id }).then(() => { toast(t('reparseStarted'), 'ok'); openAttachment(id) }).catch(e => toast(t('genericError') + ': ' + e.message, 'err')) }
   else if (act === 'delete-attachment') delAttachment(id)
+  else if (act === 'att-mode') { state.attMode = mode === 'grid' ? 'grid' : 'list'; localStorage.setItem('pkw-att-mode', state.attMode); renderAttachmentsFrom(state.attachmentsCache) }
+  else if (act === 'att-type') { state.attType = el.dataset.type || 'all'; localStorage.setItem('pkw-att-type', state.attType); renderAttachmentsFrom(state.attachmentsCache) }
+  else if (act === 'att-sort') { state.attSort = el.dataset.sort || 'recent'; localStorage.setItem('pkw-att-sort', state.attSort); renderAttachmentsFrom(state.attachmentsCache) }
+  else if (act === 'att-toggle') attToggleSelection(id)
+  else if (act === 'att-clear-selection') attClearSelection()
+  else if (act === 'att-batch-trash') attBatchOp('trash')
+  else if (act === 'att-batch-reparse') attBatchOp('reparse')
+  else if (act === 'att-batch-index') attBatchOp('index')
+  else if (act === 'att-create-companion') ensureCompanionForAttachment(id, '')
+  else if (act === 'att-open-companion') openCompanionForAttachment(id)
+  else if (act === 'att-copy-ref') copyAttachmentRef(id)
+  else if (act === 'att-preview') previewAttachment(id)
   else if (act === 'go-attachments') setView('attachments')
   else if (act === 'new-task') quickTaskDialog(null, null)
   else if (act === 'new-task-matrix') quickTaskDialog(id || null, null)
@@ -2461,6 +2627,16 @@ document.addEventListener('change', (e) => {
   if (check) { toggleTrashKey(check.dataset.key, check.checked); return }
   const sa = e.target.closest('#trashSelectAll')
   if (sa) { selectAllVisible(sa.checked); return }
+  const attAll = e.target.closest('#attSelectAll')
+  if (attAll) { attSelectAllVisible(attAll.checked); return }
+})
+// Attachment manager live search: re-render only the list so the input keeps focus.
+document.addEventListener('input', (e) => {
+  if (e.target && e.target.id === 'attSearch') {
+    state.attQuery = e.target.value || ''
+    localStorage.setItem('pkw-att-query', state.attQuery)
+    attRerenderList()
+  }
 })
 function selectionSourceRef(){
   if (state.selectedNoteId === null) return null

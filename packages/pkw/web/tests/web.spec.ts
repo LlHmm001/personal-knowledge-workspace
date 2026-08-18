@@ -359,4 +359,38 @@ describe('PKW Web Host Bridge (real Core integration)', () => {
     const list = await web.call('listNotes', {}) as Array<{ noteId: string }>
     expect(list.some(x => x.noteId === n.noteId)).toBe(false) // gone from tree
   })
+
+  it('createCompanionNote is local-first + idempotent and references the STORED (CJK) filename', async () => {
+    const { web } = await boot()
+    const up = await web.call('uploadAttachment', { filename: '海报3.jpg', mimeType: 'image/jpeg', contentBase64: Buffer.from([1, 2, 3]).toString('base64') }) as { attachmentId: string; filename: string }
+    expect(up.filename).toBe('海报3.jpg') // Unicode preserved by safeFilename
+    const first = await web.call('createCompanionNote', { attachmentId: up.attachmentId, folder: '工作' }) as { noteId: string; relativePath: string; title: string; created: boolean }
+    expect(first.created).toBe(true)
+    expect(first.relativePath).toBe('工作/海报3.md') // CJK base preserved (not __3.md)
+    expect(first.title).toBe('海报3')
+    const doc = await web.call('getNote', { noteId: first.noteId }) as { markdown: string }
+    expect(doc.markdown).toContain('attachments/' + up.attachmentId + '/海报3.jpg') // ref matches stored binary
+    // Idempotent: a second call returns the SAME note (created:false), no 海报(2).md.
+    const second = await web.call('createCompanionNote', { attachmentId: up.attachmentId, folder: '工作' }) as { noteId: string; created: boolean }
+    expect(second.created).toBe(false)
+    expect(second.noteId).toBe(first.noteId)
+    const list = await web.call('listAttachments', {}) as Array<{ companionNoteId?: string; companionNoteTitle?: string }>
+    expect(list[0]!.companionNoteId).toBe(first.noteId)
+    expect(list[0]!.companionNoteTitle).toBe('海报3')
+    const c = await web.call('getCompanionNote', { attachmentId: up.attachmentId }) as { noteId: string } | null
+    expect(c).not.toBeNull()
+    expect(c!.noteId).toBe(first.noteId)
+  })
+
+  it('move preserves NoteId and the Companion relation (no delete+recreate)', async () => {
+    const { web } = await boot()
+    const up = await web.call('uploadAttachment', { filename: '海报3.jpg', mimeType: 'image/jpeg', contentBase64: Buffer.from([1, 2, 3]).toString('base64') }) as { attachmentId: string }
+    const note = await web.call('createCompanionNote', { attachmentId: up.attachmentId, folder: '工作' }) as { noteId: string }
+    const moved = await web.call('moveNote', { noteId: note.noteId, relativePath: '工作/归档/海报3.md' }) as { noteId: string; relativePath: string }
+    expect(moved.noteId).toBe(note.noteId) // NoteId stable across Move
+    expect(moved.relativePath).toBe('工作/归档/海报3.md')
+    const c = await web.call('getCompanionNote', { attachmentId: up.attachmentId }) as { noteId: string } | null
+    expect(c).not.toBeNull()
+    expect(c!.noteId).toBe(note.noteId) // Companion relation still resolves to the SAME NoteId
+  })
 })

@@ -40,15 +40,37 @@ Live Editor (Vditor IR) upload / insert
 ## 3. 附件库直接上传 — 真实路径 (C4)
 
 ```
-Attachment Library → api('uploadAttachment') → attachments.importFile()
-  → 本地 binary 保存（同 §1）
+Attachment Library → uploadDialog → api('uploadAttachment') → attachments.importFile()
+  → 本地 binary 保存到 attachments/<AttachmentId>/<storedFilename>   ← 本地 canonical
+  → 若勾选「建立伴随笔记」→ api('createCompanionNote')（Host 编排，local-first）
+       → 派生 Note 相对路径（CJK 安全、唯一）
+       → notes.create(# <base> + 附件 managed reference)
+       → attachments.setCompanionNote(AttachmentId → NoteId)  ← durable 关系
   → 这是 local canonical save，NOT WeKnora upload
 ```
 
 - WeKnora 上传是**异步**的：sync worker 把 dirty 的 attachment 通过 `runAttachmentSync` → `uploadFile(kbId, {content: bytes, filename, mimeType, channel:'pkw'})` 上传。
 - **`AttachmentId ↔ KnowledgeId` 映射已存在**（`getAttachmentMapping` / `mappings` 表，durable，含 MD5 去重 + sha256 指纹 + replacement/recovery）。
+- Companion Note 的摘要（`materializeCompanionSummary`）由后台 `drainCompanionSummaries` 在附件 Knowledge 解析完成后回写到同一 NoteId 的 Markdown（复用同一 Note KnowledgeId），**不在**直接上传时等待。
 
 所以 **Attachment 已经独立进入 WeKnora**（作为 file ingestion，而非只存本地 binary）。
+
+### 3.1 直接上传「伴随笔记未创建」根因（已修复）
+
+磁盘取证确认（`att_f0aa64082d9d/_2.png` vs `创业/__2.md` 内容 `![](attachments/att_f0aa64082d9d/海报2.png)`）：
+
+- `importFile` 用 `safeFilename()` 把二进制存为 `_2.png`（旧实现 `[^\w.\-]` 白名单把 CJK 折叠成 `_`），
+- 而旧 UI `createCompanionNote` 用**原始 `file.name`**（`海报2.png`）拼 managed reference → 指向不存在的文件。
+
+两个后果：伴随笔记里的图片/链接指向错误文件名（broken reference），且 `safeFilename` 的 ASCII 白名单把 `海报3` 变成 `__3`（文件名被破坏）。
+
+修复（本次）：
+1. `safeFilename` 改为**仅剥离路径分隔符 / Windows 保留字符 / 控制字节**，保留 Unicode（CJK/空格），存储名 = 用户文件名。
+2. 伴随笔记 reference 一律用 **`AttachmentRecord.filename`（存储名）**，永不用原始 `File.name`。
+3. 编排下沉到 Host `createCompanionNote`（幂等、local-first、CJK 安全路径派生），UI 不再自拼路径/引用。
+4. UI 不再吞错：上传结果显式上报「附件成功/伴随笔记成功/失败」；新增「[创建伴随笔记]」重试（幂等：已存在则打开，否则创建，不产生 `海报(2).md`）。
+
+同样的 `file.name` vs 存储名错位也存在于 Vditor 插入与 Source 模式粘贴，已一并改为引用存储名。
 
 ---
 

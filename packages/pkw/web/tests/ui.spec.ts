@@ -98,15 +98,35 @@ describe('PKW web UI (served page)', () => {
     expect(js).toContain('matrixDeleteFailed')
   })
 
-  it('wires direct upload → companion note workflow', () => {
+  it('wires direct upload → companion note workflow (Host-orchestrated, explicit result)', () => {
     const js = script()
     expect(js).toContain('uploadDialog')
-    expect(js).toContain('createCompanionNote')
-    expect(js).toContain('uniqueNotePath')
-    expect(js).toContain('sanitizeNoteBase')
     expect(js).toContain('uploadFilesWithCompanion')
-    expect(js).toContain("'![]('")
-    expect(js).toContain('lastIndexOf')
+    expect(js).toContain('ensureCompanionForAttachment')
+    expect(js).toContain('openCompanionForAttachment')
+    expect(js).toContain("api('createCompanionNote'")
+    expect(js).toContain('attUploadResult')
+    expect(js).not.toContain('catch (e) { noteFail++ }') // no swallowed failures
+  })
+
+  it('wires the Attachment Manager (list/grid, search, filter, sort, multi-select, batch)', () => {
+    const js = script()
+    expect(js).toContain('attTypeOf')
+    expect(js).toContain('attFilteredList')
+    expect(js).toContain('attToolbarHtml')
+    expect(js).toContain('attBatchBarHtml')
+    expect(js).toContain('attToggleSelection')
+    expect(js).toContain('attSelectAllVisible')
+    expect(js).toContain('attBatchOp')
+    expect(js).toContain('att-create-companion')
+    expect(js).toContain('att-open-companion')
+    expect(js).toContain('att-batch-trash')
+    expect(js).toContain('att-batch-reparse')
+    expect(js).toContain('att-batch-index')
+    expect(js).toContain('att-copy-ref')
+    expect(renderPage()).toContain('att-grid')
+    expect(renderPage()).toContain('att-card')
+    expect(renderPage()).toContain('att-thumb')
   })
 
   it('wires theme (system/light/dark tokens) + contextual inspector', () => {

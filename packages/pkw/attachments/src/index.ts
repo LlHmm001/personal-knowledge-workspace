@@ -45,7 +45,13 @@ function sha256(data: Uint8Array): string {
 }
 
 function safeFilename(name: string): string {
-  return posix.basename(name).replace(/[^\w.\-]+/g, '_') || 'file'
+  // Strip path traversal (basename) and Windows-reserved characters, but preserve
+  // Unicode (CJK, accents) and spaces so the stored name matches the user's file.
+  // The previous `[^\w.\-]` whitelist collapsed `海报3.jpg` → `_3.jpg`, which is
+  // what made the Companion Note reference diverge from the stored binary.
+  const cleaned = posix.basename(String(name)).replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').trim()
+  if (cleaned === '' || cleaned === '.' || cleaned === '..') return 'file'
+  return cleaned
 }
 
 interface AttachmentEventPayload {

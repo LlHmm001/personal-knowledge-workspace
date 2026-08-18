@@ -21,7 +21,7 @@ import { posix, extname, resolve as pathResolve, sep } from 'node:path'
 import { readFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import z from '@deepseek-ai/schemastery'
-import { AttachmentId, FolderTrashEntryId, NoteId, TaskId, TaskMatrixId, addColumnLeft, addColumnRight, addRowAbove, addRowBelow, deleteColumn, deleteRow, deleteFootnote, deleteTable, editFootnoteDefinition, nextFootnoteKey, parseTrashItemKey, resolveTableCell, setColumnAlign, summarizeBatch } from '@deepseek-ai/dsh-pkw-domain'
+import { AttachmentId, FolderTrashEntryId, NoteId, TaskId, TaskMatrixId, addColumnLeft, addColumnRight, addRowAbove, addRowBelow, companionNoteMarkdown, deleteColumn, deleteRow, deleteFootnote, deleteTable, editFootnoteDefinition, filenameStem, nextFootnoteKey, parseTrashItemKey, resolveTableCell, sanitizeNoteBase, setColumnAlign, summarizeBatch, uniqueNotePath } from '@deepseek-ai/dsh-pkw-domain'
 import type { ColumnAlign } from '@deepseek-ai/dsh-pkw-domain'
 import type { OrderChild } from '@deepseek-ai/dsh-pkw-notes'
 import PkwEventStoreService from '@deepseek-ai/dsh-pkw-events'
@@ -466,16 +466,22 @@ export class PkwWebService extends Service {
       case 'listTrashFolders': return (await this.notes.listTrashFolders()).map(e => ({ trashEntryId: String(e.trashEntryId), originalPath: e.originalPath, deletedAt: e.deletedAt }))
       case 'listAttachments': {
         const snap = this.syncSnapshot()
-        return this.attachments.list().map(a => ({
-          attachmentId: String(a.id),
-          filename: a.filename,
-          mimeType: a.mimeType,
-          sizeBytes: a.sizeBytes,
-          observedRevision: a.observedRevision,
-          createdAt: a.createdAt,
-          deleted: a.deletedAt !== undefined,
-          sync: this.syncView('attachment', String(a.id), snap),
-        }))
+        return this.attachments.list().map(a => {
+          const companion = a.companionNoteId !== undefined ? this.notes.get(a.companionNoteId) : undefined
+          return {
+            attachmentId: String(a.id),
+            filename: a.filename,
+            mimeType: a.mimeType,
+            sizeBytes: a.sizeBytes,
+            observedRevision: a.observedRevision,
+            createdAt: a.createdAt,
+            deleted: a.deletedAt !== undefined,
+            indexable: a.indexable !== false,
+            companionNoteId: a.companionNoteId !== undefined ? String(a.companionNoteId) : undefined,
+            companionNoteTitle: companion !== undefined && companion.deletedAt === undefined ? companion.title : undefined,
+            sync: this.syncView('attachment', String(a.id), snap),
+          }
+        })
       }
       case 'attachmentRelatedNotes': {
         // Note↔Attachment relation is derived from Markdown (no structural table).
@@ -531,11 +537,17 @@ export class PkwWebService extends Service {
         const id = AttachmentId(String(args.attachmentId))
         const rec = this.attachments.get(id)
         if (rec === undefined) throw new Error(`pkwWeb: unknown attachment '${args.attachmentId}'`)
+        const companion = rec.companionNoteId !== undefined ? this.notes.get(rec.companionNoteId) : undefined
         return {
           attachment: {
             attachmentId: String(rec.id), filename: rec.filename, mimeType: rec.mimeType,
             sizeBytes: rec.sizeBytes, observedRevision: rec.observedRevision, createdAt: rec.createdAt,
+            indexable: rec.indexable !== false,
+            companionNoteId: rec.companionNoteId !== undefined ? String(rec.companionNoteId) : undefined,
           },
+          companionNote: companion !== undefined && companion.deletedAt === undefined
+            ? { noteId: String(companion.noteId), relativePath: companion.relativePath, title: companion.title }
+            : null,
           sync: this.syncView('attachment', String(rec.id), this.syncSnapshot()),
         }
       }
@@ -558,6 +570,21 @@ export class PkwWebService extends Service {
       case 'setCompanionNote': {
         await this.attachments.setCompanionNote(AttachmentId(String(args.attachmentId)), args.noteId !== undefined && args.noteId !== null ? NoteId(String(args.noteId)) : null)
         return { ok: true }
+      }
+      case 'getCompanionNote': {
+        const rec = this.attachments.get(AttachmentId(String(args.attachmentId)))
+        if (rec === undefined || rec.companionNoteId === undefined) return null
+        const note = this.notes.get(rec.companionNoteId)
+        if (note === undefined || note.deletedAt !== undefined) return null
+        return { noteId: String(note.noteId), relativePath: note.relativePath, title: note.title }
+      }
+      case 'createCompanionNote': {
+        // Idempotent, local-first orchestration. If a durable Companion relation
+        // already exists it is returned as-is; otherwise the note is created and
+        // the AttachmentRecord.companionNoteId is persisted. Never waits on WeKnora.
+        const id = AttachmentId(String(args.attachmentId))
+        const folder = args.folder !== undefined ? String(args.folder) : ''
+        return this.ensureCompanionNote(id, folder)
       }
       case 'deleteAttachment': {
         await this.attachments.remove(AttachmentId(String(args.attachmentId)))
@@ -792,6 +819,31 @@ export class PkwWebService extends Service {
       syncErrors,
       recent,
     }
+  }
+
+  /**
+   * Idempotent Companion Note orchestration (local-first). Returns the existing
+   * note when a durable relation already exists; otherwise derives a collision-free
+   * path from the STORED filename (never the raw upload name), creates the note,
+   * persists `companionNoteId`, and returns the new note. No WeKnora dependency.
+   */
+  private async ensureCompanionNote(id: AttachmentId, folder: string): Promise<{ noteId: string; relativePath: string; title: string; created: boolean }> {
+    const rec = this.attachments.get(id)
+    if (rec === undefined) throw new Error(`pkwWeb: unknown attachment '${id}'`)
+    if (rec.companionNoteId !== undefined) {
+      const existing = this.notes.get(rec.companionNoteId)
+      if (existing !== undefined && existing.deletedAt === undefined) {
+        return { noteId: String(existing.noteId), relativePath: existing.relativePath, title: existing.title, created: false }
+      }
+    }
+    const base = sanitizeNoteBase(filenameStem(rec.filename))
+    const existingPaths = new Set<string>()
+    for (const n of this.notes.list({ includeDeleted: true })) existingPaths.add(n.relativePath)
+    const notePath = uniqueNotePath(folder, base, existingPaths)
+    const markdown = companionNoteMarkdown(base, String(rec.id), rec.filename, rec.mimeType)
+    const created = await this.notes.create({ relativePath: notePath, markdown })
+    await this.attachments.setCompanionNote(rec.id, created.noteId)
+    return { noteId: String(created.noteId), relativePath: created.relativePath, title: created.title, created: true }
   }
 }
 
