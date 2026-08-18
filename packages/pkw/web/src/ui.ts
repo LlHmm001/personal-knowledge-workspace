@@ -154,11 +154,14 @@ aside.right h3:first-child{margin-top:0}
 .modal .modal-actions{display:flex;gap:8px;justify-content:flex-end}
 .modal .form{margin-bottom:10px}.modal .form label{display:block;font-size:12px;color:var(--muted);margin-bottom:3px}
 #taskDetailModal .modal{width:880px;max-width:calc(100vw - 64px);max-height:88vh;overflow:hidden;display:flex;flex-direction:column}
-@media (max-width:800px){#taskDetailModal .modal{width:calc(100vw - 24px)}}
-.task-detail-header{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--border)}
-.td-title-input{flex:1;font-size:20px;font-weight:650;padding:8px 10px;border:1px solid transparent;border-radius:8px;background:transparent}
-.td-title-input:focus{border-color:var(--accent);background:var(--panel)}
-.td-status{width:auto}
+@media (max-width:800px){#taskDetailModal .modal{width:100vw;max-width:100vw;height:100dvh;max-height:100dvh;border-radius:0}}
+.task-detail-header{padding:16px 20px 12px;border-bottom:1px solid var(--border)}
+.task-detail-title-row{width:100%}
+.td-title-input{width:100%;display:block;font-size:26px;line-height:1.3;font-weight:700;padding:10px 14px;border:1px solid var(--border);border-radius:12px;background:var(--panel);color:var(--text-primary);box-sizing:border-box}
+.td-title-input:hover{border-color:var(--border-strong)}
+.td-title-input:focus{border-color:var(--accent);background:var(--bg-elevated);outline:none}
+.task-detail-controls{display:flex;align-items:center;gap:10px;margin-top:10px}
+.td-status{width:auto;min-width:110px}
 .task-detail-body{flex:1;overflow:auto;display:grid;grid-template-columns:minmax(0,1.7fr) minmax(240px,1fr);gap:20px;padding:16px}
 @media (max-width:800px){.task-detail-body{grid-template-columns:1fr}}
 .task-detail-main{min-width:0}
@@ -2760,9 +2763,12 @@ function taskDetailDialog(taskId){
     wrapper.innerHTML =
       '<div class="modal-overlay" id="taskDetailModal"><div class="modal task-detail-modal">' +
         '<div class="task-detail-header">' +
-          '<input id="tdTitle" class="td-title-input" value="' + esc(task.title) + '" placeholder="' + esc(t('taskTitle')) + '" />' +
-          '<select id="tdStatus" class="td-status"><option value="open"' + (task.status === 'open' ? ' selected' : '') + '>' + esc(t('taskOpen')) + '</option><option value="completed"' + (task.status === 'completed' ? ' selected' : '') + '>' + esc(t('taskCompleted')) + '</option></select>' +
-          '<button class="btn small" id="tdCloseX" title="' + esc(t('taskClose')) + '">×</button>' +
+          '<div class="task-detail-title-row"><input id="tdTitle" class="td-title-input" value="' + esc(task.title) + '" placeholder="' + esc(t('taskTitle')) + '" /></div>' +
+          '<div class="task-detail-controls">' +
+            '<select id="tdStatus" class="td-status"><option value="open"' + (task.status === 'open' ? ' selected' : '') + '>' + esc(t('taskOpen')) + '</option><option value="completed"' + (task.status === 'completed' ? ' selected' : '') + '>' + esc(t('taskCompleted')) + '</option></select>' +
+            '<span class="spacer"></span>' +
+            '<button class="btn small" id="tdCloseX" title="' + esc(t('taskClose')) + '">×</button>' +
+          '</div>' +
         '</div>' +
         '<div class="task-detail-body">' +
           '<div class="task-detail-main">' +

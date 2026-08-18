@@ -197,4 +197,12 @@ describe('PKW web UI (served page)', () => {
     expect(js).toContain('graphUnavailable')
     expect(js).toContain('companionUpgrade')
   })
+
+  it('renders Task Detail with a primary, full-width editable title (not a cramped inline input)', () => {
+    const js = script()
+    expect(js).toContain('task-detail-title-row')
+    expect(js).toContain('task-detail-controls')
+    expect(js).toContain("id=\"tdTitle\"")
+    expect(renderPage()).toContain('.td-title-input{width:100%')
+  })
 })
