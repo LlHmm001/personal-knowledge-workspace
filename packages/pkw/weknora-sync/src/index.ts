@@ -25,7 +25,7 @@ import { z } from 'zod'
 import { randomUUID } from 'node:crypto'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import type { Domain, KvTable } from '@deepseek-ai/dsh-storage-domain'
-import { AttachmentId, NoteId, extractAttachmentSummary, hasCompanionUserContent, insertAttachmentSummary } from '@deepseek-ai/dsh-pkw-domain'
+import { AttachmentId, NoteId, enrichNoteForKnowledge, extractAttachmentSummary, hasCompanionUserContent, insertAttachmentSummary } from '@deepseek-ai/dsh-pkw-domain'
 import type { NoteId as NoteIdT, AttachmentId as AttachmentIdT } from '@deepseek-ai/dsh-pkw-domain'
 import {
   WeKnoraError,
@@ -34,6 +34,7 @@ import {
   redactSecrets,
   remoteManualFingerprint,
   sha256Bytes,
+  sha256Text,
 } from '@deepseek-ai/dsh-pkw-weknora'
 import type {
   SearchResultChunk,
@@ -114,20 +115,54 @@ const reverseSchema = z.object({
   entityId: z.string(),
 })
 
+/** Note-scoped attachment processing projection (NOT a persistent Knowledge mapping). */
+const processingRecordSchema = z.object({
+  attachmentId: z.string(),
+  workspaceId: z.string(),
+  processingKbId: z.string().optional(),
+  processingKnowledgeId: z.string().optional(),
+  state: z.string(), // queued | uploading | parsing | derived-ready | failed
+  parseStatus: z.string().optional(),
+  summaryStatus: z.string().optional(),
+  summary: z.string().optional(),
+  chunks: z.array(z.string()).optional(),
+  derivedHash: z.string().optional(),
+  lastError: z.string().optional(),
+  updatedAt: z.string(),
+})
+
+/** One durable Processing KB identity + parser config fingerprint per workspace. */
+const processingKbSchema = z.object({
+  workspaceId: z.string(),
+  processingKbId: z.string(),
+  configFingerprint: z.string(),
+  updatedAt: z.string(),
+})
+
 export const weknoraSyncDomainSpec = defineDomain({
   name: 'pkw_weknora_sync',
-  version: 2,
+  version: 3,
+  migrations: {
+    // v2 → v3: add the (empty) note-scoped processing projection + Processing KB
+    // identity tables. Existing mappings/dirty/intents/reverse are untouched.
+    2: {
+      upgrade: (previous) => ({ tables: { ...previous.tables, processing: {}, processing_kb: {} } }),
+    },
+  },
   tables: {
     intents: domainTable<string, z.infer<typeof syncIntentSchema>>(syncIntentSchema),
     mappings: domainTable<string, z.infer<typeof entityMappingSchema>>(entityMappingSchema),
     dirty: domainTable<string, z.infer<typeof dirtySchema>>(dirtySchema),
     reverse: domainTable<string, z.infer<typeof reverseSchema>>(reverseSchema),
+    processing: domainTable<string, z.infer<typeof processingRecordSchema>>(processingRecordSchema),
+    processing_kb: domainTable<string, z.infer<typeof processingKbSchema>>(processingKbSchema),
   },
 })
 
 type IntentRecord = z.infer<typeof syncIntentSchema>
 type MappingRecord = z.infer<typeof entityMappingSchema>
 type DirtyRecord = z.infer<typeof dirtySchema>
+type ProcessingRecord = z.infer<typeof processingRecordSchema>
 
 const ENTITY_NOTE = 'note'
 const ENTITY_ATTACHMENT = 'attachment'
@@ -208,6 +243,8 @@ export class WeKnoraSyncService extends Service {
   private mappings?: KvTable<string, MappingRecord>
   private dirty?: KvTable<string, DirtyRecord>
   private reverse?: KvTable<string, z.infer<typeof reverseSchema>>
+  private processing?: KvTable<string, ProcessingRecord>
+  private processingKb?: KvTable<string, z.infer<typeof processingKbSchema>>
 
   /** Per-entity in-process serialization: one remote mutation per entity at a time. */
   private readonly locks = new Map<string, Promise<void>>()
@@ -223,6 +260,8 @@ export class WeKnoraSyncService extends Service {
     this.mappings = domain.table('mappings')
     this.dirty = domain.table('dirty')
     this.reverse = domain.table('reverse')
+    this.processing = domain.table('processing')
+    this.processingKb = domain.table('processing_kb')
 
     // Live dirty hint (never the audit log). Durable dirty write happens inside
     // markDirty; this listener is loss-tolerant because full reconcile re-derives.
@@ -242,6 +281,10 @@ export class WeKnoraSyncService extends Service {
       })
       void this.drainCompanionSummaries().catch((error: unknown) => {
         this.ctx.logger.warn('pkw companion summary sweep failed')
+        this.ctx.logger.warn(error)
+      })
+      void this.drainNoteScopedProcessing().catch((error: unknown) => {
+        this.ctx.logger.warn('pkw note-scoped processing sweep failed')
         this.ctx.logger.warn(error)
       })
     }, this.config.pollMs)
@@ -269,6 +312,16 @@ export class WeKnoraSyncService extends Service {
   private reqReverse(): KvTable<string, z.infer<typeof reverseSchema>> {
     if (this.reverse === undefined) throw new Error('pkwWeKnoraSync not started')
     return this.reverse
+  }
+
+  private reqProcessing(): KvTable<string, ProcessingRecord> {
+    if (this.processing === undefined) throw new Error('pkwWeKnoraSync not started')
+    return this.processing
+  }
+
+  private reqProcessingKb(): KvTable<string, z.infer<typeof processingKbSchema>> {
+    if (this.processingKb === undefined) throw new Error('pkwWeKnoraSync not started')
+    return this.processingKb
   }
 
   /** Workspace-scoped durable entity key. */
@@ -385,6 +438,169 @@ export class WeKnoraSyncService extends Service {
     }
   }
 
+  // ── Note-scoped attachment processing pipeline ──────────────────────────────
+  //
+  // A note-scoped attachment (uploaded inside a Normal Note) is PARSED in a
+  // dedicated internal Processing KB, its derived content (bounded summary +
+  // top chunks) is captured, and the owner Note's remote projection is enriched
+  // with it — WITHOUT creating a second Persistent Knowledge in the main KB.
+
+  private parserConfigFingerprint(kb: Record<string, unknown>): string {
+    const cc = kb.chunking_config as Record<string, unknown> | undefined
+    const relevant = {
+      parser_engine_rules: cc?.parser_engine_rules ?? null,
+      chunk_size: cc?.chunk_size ?? null,
+      chunk_separator: cc?.chunk_separator ?? null,
+      vlm_config: kb.vlm_config ?? null,
+    }
+    return sha256Text(JSON.stringify(relevant))
+  }
+
+  /** Ensure the internal Processing KB exists and mirrors the main KB parser config. */
+  async ensureProcessingKb(): Promise<string | undefined> {
+    try {
+      const existing = this.reqProcessingKb().get(this.config.workspaceId)
+      const mainKb = await this.ctx.pkwWeKnora.getKnowledgeBase(this.config.kbId)
+      const fp = this.parserConfigFingerprint(mainKb)
+
+      let kbId = existing?.processingKbId
+      if (kbId !== undefined) {
+        // Verify it still exists; re-discover/create when it vanished.
+        try { await this.ctx.pkwWeKnora.getKnowledgeBase(kbId) } catch { kbId = undefined }
+      }
+      if (kbId === undefined) {
+        const name = `PKW Processing — ${this.config.workspaceId.slice(0, 8)}`
+        // is_temporary: true → hidden from the WeKnora Documents UI (an internal
+        // parser execution projection, NOT a user knowledge base).
+        const cc = (mainKb.chunking_config as Record<string, unknown> | undefined) ?? {}
+        const created = await this.ctx.pkwWeKnora.createKnowledgeBase(name, {
+          is_temporary: true,
+          chunking_config: cc,
+          ...(mainKb.vlm_config !== undefined ? { vlm_config: mainKb.vlm_config } : {}),
+        })
+        kbId = created.id
+      }
+      // Mirror parser config when it changed (not only on create).
+      if (existing === undefined || existing.configFingerprint !== fp || existing.processingKbId !== kbId) {
+        const cc = (mainKb.chunking_config as Record<string, unknown> | undefined) ?? {}
+        await this.ctx.pkwWeKnora.updateKnowledgeBase(kbId, {
+          chunking_config: cc,
+          ...(mainKb.vlm_config !== undefined ? { vlm_config: mainKb.vlm_config } : {}),
+        })
+      }
+      await this.reqProcessingKb().put(this.config.workspaceId, { workspaceId: this.config.workspaceId, processingKbId: kbId, configFingerprint: fp, updatedAt: this.now() })
+      return kbId
+    } catch {
+      return undefined // offline → retry next drain
+    }
+  }
+
+  /** Capture the bounded derived content of a finished Processing Knowledge. */
+  private async captureDerived(processingKnowledgeId: string, filename: string): Promise<{ summary?: string; chunks?: string[] }> {
+    const k = await this.ctx.pkwWeKnora.getKnowledge(processingKnowledgeId)
+    let chunks: string[] | undefined
+    try {
+      const list = await this.ctx.pkwWeKnora.listKnowledgeChunks(processingKnowledgeId)
+      chunks = list.map(c => c.content).filter(c => c !== undefined && c !== '').slice(0, 8)
+    } catch { chunks = undefined }
+    return { summary: k.description, chunks }
+  }
+
+  /** Core note-scoped processing: upload (idempotent) → poll → capture → persist. */
+  async runNoteScopedProcessing(attachmentId: AttachmentIdT): Promise<boolean> {
+    const rec = this.ctx.pkwAttachments.get(attachmentId)
+    if (rec === undefined || rec.knowledgeMode !== 'note-scoped') return false
+
+    const key = String(attachmentId)
+    const existing = this.reqProcessing().get(key)
+    if (existing?.state === 'derived-ready') return true // already captured
+
+    const kbId = await this.ensureProcessingKb()
+    if (kbId === undefined) return false
+
+    // Idempotent: reuse an existing Processing Knowledge instead of re-uploading.
+    let processingKnowledgeId = existing?.processingKnowledgeId
+    if (processingKnowledgeId === undefined) {
+      const bytes = await this.ctx.pkwAttachments.open(attachmentId)
+      const uploaded = await this.ctx.pkwWeKnora.uploadFile(kbId, { content: bytes, filename: rec.filename, mimeType: rec.mimeType, channel: 'pkw-processing' })
+      processingKnowledgeId = uploaded.id
+      await this.reqProcessing().put(key, { attachmentId: key, workspaceId: this.config.workspaceId, processingKbId: kbId, processingKnowledgeId, state: 'parsing', updatedAt: this.now() })
+    }
+
+    const k = await this.ctx.pkwWeKnora.getKnowledge(processingKnowledgeId)
+    const parseStatus = k.parse_status ?? 'pending'
+    const summaryStatus = k.summary_status ?? 'none'
+    if (parseStatus === 'completed') {
+      const derived = await this.captureDerived(processingKnowledgeId, rec.filename)
+      const derivedHash = sha256Text(JSON.stringify(derived))
+      if (derivedHash !== existing?.derivedHash) {
+        await this.reqProcessing().put(key, { attachmentId: key, workspaceId: this.config.workspaceId, processingKbId: kbId, processingKnowledgeId, state: 'derived-ready', parseStatus, summaryStatus, summary: derived.summary, chunks: derived.chunks, derivedHash, updatedAt: this.now() })
+        await this.markOwnerNotesDirty(attachmentId)
+      } else {
+        await this.reqProcessing().put(key, { attachmentId: key, workspaceId: this.config.workspaceId, processingKbId: kbId, processingKnowledgeId, state: 'derived-ready', parseStatus, summaryStatus, summary: derived.summary, chunks: derived.chunks, derivedHash, updatedAt: this.now() })
+      }
+      return true
+    }
+    if (parseStatus === 'failed') {
+      await this.reqProcessing().put(key, { attachmentId: key, workspaceId: this.config.workspaceId, processingKbId: kbId, processingKnowledgeId, state: 'failed', parseStatus, summaryStatus, lastError: k.error_message, updatedAt: this.now() })
+      return false
+    }
+    // pending/processing → still parsing, retry next drain.
+    await this.reqProcessing().put(key, { attachmentId: key, workspaceId: this.config.workspaceId, processingKbId: kbId, processingKnowledgeId, state: 'parsing', parseStatus, summaryStatus, updatedAt: this.now() })
+    return false
+  }
+
+  /** Mark every Note that references this attachment dirty, so runNoteSync re-projects it. */
+  private async markOwnerNotesDirty(attachmentId: AttachmentIdT): Promise<void> {
+    const id = String(attachmentId)
+    for (const n of this.ctx.pkwNotes.list({})) {
+      if (n.deletedAt !== undefined) continue
+      const doc = await this.ctx.pkwNotes.getDocument(n.noteId).catch(() => undefined)
+      if (doc === undefined) continue
+      if (doc.attachments.some(a => String(a.attachmentId) === id)) {
+        await this.markDirty(ENTITY_NOTE, String(n.noteId), n.observedRevision)
+      }
+    }
+  }
+
+  /** Sweep all note-scoped attachments through the processing pipeline. */
+  async drainNoteScopedProcessing(): Promise<void> {
+    for (const rec of this.ctx.pkwAttachments.list({})) {
+      if (rec.knowledgeMode !== 'note-scoped') continue
+      try { await this.runNoteScopedProcessing(rec.id) } catch { /* retry next drain */ }
+    }
+  }
+
+  /** Derived content for a note-scoped attachment (for owner Note enrichment). */
+  getDerivedContent(attachmentId: AttachmentIdT): { summary?: string; chunks?: string[] } | undefined {
+    const rec = this.reqProcessing().get(String(attachmentId))
+    if (rec === undefined || rec.state !== 'derived-ready') return undefined
+    return { summary: rec.summary, chunks: rec.chunks }
+  }
+
+  /** Read the note-scoped attachment refs a Note's canonical Markdown references. */
+  async noteScopedDerivedFor(noteId: NoteIdT): Promise<Array<{ attachmentId: string; filename: string; summary?: string; chunks?: string[] }>> {
+    const doc = await this.ctx.pkwNotes.getDocument(noteId)
+    const out: Array<{ attachmentId: string; filename: string; summary?: string; chunks?: string[] }> = []
+    for (const ref of doc.attachments) {
+      const att = this.ctx.pkwAttachments.get(ref.attachmentId)
+      if (att === undefined || att.knowledgeMode !== 'note-scoped') continue
+      const derived = this.getDerivedContent(att.id)
+      if (derived === undefined) continue
+      out.push({ attachmentId: String(att.id), filename: att.filename, summary: derived.summary, chunks: derived.chunks })
+    }
+    return out
+  }
+
+  /** Single source of truth: a Note's remote projection (normalized canonical + note-scoped derived content). */
+  private async noteRemoteProjection(noteId: NoteIdT): Promise<{ markdown: string; fingerprint: string }> {
+    const doc = await this.ctx.pkwNotes.getDocument(noteId)
+    let remoteMarkdown = normalizeForRemote(doc.markdown)
+    const derived = await this.noteScopedDerivedFor(noteId)
+    if (derived.length > 0) remoteMarkdown = enrichNoteForKnowledge(remoteMarkdown, derived)
+    return { markdown: remoteMarkdown, fingerprint: remoteManualFingerprint(remoteMarkdown) }
+  }
+
   getMapping(noteId: NoteIdT): MappingRecord | undefined {
     return this.reqMappings().get(this.entityKey(ENTITY_NOTE, String(noteId)))
   }
@@ -482,8 +698,9 @@ export class WeKnoraSyncService extends Service {
     }
 
     const doc = await this.ctx.pkwNotes.getDocument(noteId)
-    const remoteMarkdown = normalizeForRemote(doc.markdown)
-    const fingerprint = remoteManualFingerprint(remoteMarkdown)
+    // Remote projection = normalized canonical text + note-scoped attachment
+    // derived content (bounded). The canonical local Markdown is NEVER changed.
+    const { markdown: remoteMarkdown, fingerprint } = await this.noteRemoteProjection(noteId)
 
     if (mapping !== undefined && mapping.remoteFingerprint === fingerprint) {
       // No-op when already synced; reactivate a stale/deleted mapping on restore.
@@ -639,8 +856,8 @@ export class WeKnoraSyncService extends Service {
     if (entityType === ENTITY_NOTE) {
       const rec = this.ctx.pkwNotes.get(NoteId(entityId))
       if (rec === undefined || rec.deletedAt !== undefined) return undefined
-      const doc = await this.ctx.pkwNotes.getDocument(NoteId(entityId))
-      return remoteManualFingerprint(doc.markdown)
+      const { fingerprint } = await this.noteRemoteProjection(NoteId(entityId))
+      return fingerprint
     }
     const rec = this.ctx.pkwAttachments.get(AttachmentId(entityId))
     if (rec === undefined || rec.deletedAt !== undefined) return undefined
@@ -824,14 +1041,13 @@ export class WeKnoraSyncService extends Service {
       const key = this.entityKey(ENTITY_NOTE, String(noteId))
       const record = this.ctx.pkwNotes.get(noteId)
       if (record === undefined || record.deletedAt !== undefined) return undefined
-      const doc = await this.ctx.pkwNotes.getDocument(noteId)
-      const fingerprint = remoteManualFingerprint(doc.markdown)
+      const { markdown: remoteMarkdown, fingerprint } = await this.noteRemoteProjection(noteId)
       const mapping = this.reqMappings().get(key)
       if (mapping !== undefined) {
         try {
           const remote = await this.ctx.pkwWeKnora.readManualContent(mapping.knowledgeId)
           if (remoteManualFingerprint(remote) === fingerprint) return mapping.knowledgeId
-          return this.updateManual(noteId, doc.markdown, fingerprint, mapping, doc.note.title)
+          return this.updateManual(noteId, remoteMarkdown, fingerprint, mapping, record.title)
         } catch {
           return undefined
         }
@@ -864,13 +1080,19 @@ export class WeKnoraSyncService extends Service {
       return undefined
     }
 
-    // Knowledge Ownership: note-scoped / local-only attachments never become an
-    // independent Persistent Attachment Knowledge. A note-scoped attachment is a
-    // supporting source of its owner Note Knowledge; its derived content enriches
-    // the owner Note's remote projection (see KNOWLEDGE_INGESTION_POLICY.md).
-    if (record.knowledgeMode === 'note-scoped' || record.knowledgeMode === 'local-only') {
+    // Knowledge Ownership: note-scoped attachments are PARSED in the internal
+    // Processing KB (never become a Persistent main-KB Attachment Knowledge);
+    // local-only attachments stay local.
+    if (record.knowledgeMode === 'local-only') {
       if (mapping === undefined) await this.clearDirty(key)
       else await this.runRemoteDelete(ENTITY_ATTACHMENT, String(attachmentId), key, mapping) // legacy duplicate cleanup
+      return undefined
+    }
+    if (record.knowledgeMode === 'note-scoped') {
+      // Legacy duplicate cleanup: any old main-KB Attachment Knowledge converges to deleted.
+      if (mapping !== undefined) await this.runRemoteDelete(ENTITY_ATTACHMENT, String(attachmentId), key, mapping)
+      await this.runNoteScopedProcessing(attachmentId)
+      await this.clearDirty(key)
       return undefined
     }
 
@@ -1070,8 +1292,7 @@ export class WeKnoraSyncService extends Service {
         }
         continue
       }
-      const doc = await this.ctx.pkwNotes.getDocument(rec.noteId)
-      const fingerprint = remoteManualFingerprint(doc.markdown)
+      const { fingerprint } = await this.noteRemoteProjection(rec.noteId)
       if (mapping === undefined || mapping.remoteFingerprint !== fingerprint || mapping.syncState !== M_SYNCED) {
         await this.markDirty(ENTITY_NOTE, String(rec.noteId), rec.observedRevision)
         report.markedDirty += 1

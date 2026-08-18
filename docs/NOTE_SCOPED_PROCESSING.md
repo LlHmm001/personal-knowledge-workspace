@@ -64,15 +64,21 @@ The enriched Note Knowledge contains the derived text, so Hybrid Search for an i
 
 Main KB Wiki/Graph sees only the Persistent Note Knowledge. Processing KB artifacts never enter the main KB's Wiki/Graph — this is the primary value of the Processing KB.
 
-## Remaining implementation (not yet wired into the sync worker)
+## Implementation status (wired end-to-end)
 
-The sync worker still **skips** note-scoped attachments (`runAttachmentSync` returns early). The remaining work is:
-1. `ensureProcessingKb()` + config sync on init.
-2. Route note-scoped attachments to the Processing KB (`uploadFile` to processingKbId).
-3. Write the `processing` table (version bump + migration).
-4. `drainNoteScopedProcessing()` sweep: poll parse/summary → capture `description` + top chunks → mark derived-ready.
-5. `runNoteSync` for the owner note: read derived data, build the remote payload via `enrichNoteForKnowledge`, and re-sync when a note-scoped attachment's derived data changes.
-6. Cleanup/retry: on owner note removal (no referencing notes), delete the ProcessingKnowledge; durable delete intent for offline.
+1. ✅ `ensureProcessingKb()` — creates/verifies the Processing KB with `is_temporary: true` (WeKnora `KnowledgeBase.IsTemporary`, hidden from the Documents UI — verified `internal/types/knowledgebase.go:67`), mirrors parser config via a config fingerprint.
+2. ✅ `runAttachmentSync` routes `note-scoped` → `runNoteScopedProcessing` (idempotent upload to Processing KB + poll + capture).
+3. ✅ `processing` + `processing_kb` tables (sync domain v2→v3 migration).
+4. ✅ `drainNoteScopedProcessing()` sweep (wired into the worker interval).
+5. ✅ `runNoteSync` uses `noteRemoteProjection()` (normalized canonical + `enrichNoteForKnowledge` derived) with one consistent fingerprint.
+6. ✅ derived-ready → `markOwnerNotesDirty()` re-syncs every referencing note.
+
+## Remaining (documented gaps)
+
+- `updateKnowledgeBase` partial-patch shape should be verified against the deployed WeKnora.
+- Parser-config change → `needsReparse` + batched reparse is not yet implemented (fingerprint change currently only re-mirrors config, not reprocessing).
+- Cleanup of ProcessingKnowledge on attachment purge / local-only transition is not yet wired to the durable delete intent path.
+- End-to-end ALPHA/BETA search acceptance requires a fake-WeKnora that supports Processing KB routes (not yet in the test harness).
 
 ## Standalone / multiple-owner / remove (A11–A14)
 
