@@ -138,6 +138,8 @@ const processingKbSchema = z.object({
   workspaceId: z.string(),
   processingKbId: z.string(),
   configFingerprint: z.string(),
+  /** Old Processing KB ids retired by a create-only config rebuild (cleanup pending). */
+  retiredKbIds: z.array(z.string()).optional(),
   updatedAt: z.string(),
 })
 
@@ -458,53 +460,102 @@ export class WeKnoraSyncService extends Service {
       chunk_size: cc?.chunk_size ?? null,
       chunk_separator: cc?.chunk_separator ?? null,
       vlm_config: kb.vlm_config ?? null,
+      // CREATE-ONLY fields are part of the processing contract too (an empty
+      // embedding_model_id leaves knowledge stuck in 'processing').
+      embedding_model_id: kb.embedding_model_id ?? null,
+      summary_model_id: kb.summary_model_id ?? null,
     }
     return sha256Text(JSON.stringify(relevant))
   }
 
-  /** Ensure the internal Processing KB exists and mirrors the main KB parser config. */
+  /** Fingerprint of CREATE-ONLY KB fields (cannot be fixed by updateKnowledgeBase). */
+  private createOnlyFingerprint(kb: Record<string, unknown>): string {
+    return sha256Text(JSON.stringify({
+      embedding_model_id: kb.embedding_model_id ?? null,
+      summary_model_id: kb.summary_model_id ?? null,
+    }))
+  }
+
+  /** Ensure the internal Processing KB exists and mirrors the main KB parser config.
+   *
+   * MUTABLE config (chunking_config / vlm_config) is reconciled in-place via
+   * updateKnowledgeBase. CREATE-ONLY config (embedding_model_id / summary_model_id)
+   * cannot be fixed by update (WeKnora ignores them on PUT), so a drift there
+   * triggers a CONTROLLED REBUILD: create a new KB → validate it → atomically
+   * switch the mapping → retire the old KB (cleanup pending, never deleted first).
+   */
   async ensureProcessingKb(): Promise<string | undefined> {
     try {
       const existing = this.reqProcessingKb().get(this.config.workspaceId)
       const mainKb = await this.ctx.pkwWeKnora.getKnowledgeBase(this.config.kbId)
       const fp = this.parserConfigFingerprint(mainKb)
-
-      let kbId = existing?.processingKbId
-      if (kbId !== undefined) {
-        // Verify it still exists; re-discover/create when it vanished.
-        try { await this.ctx.pkwWeKnora.getKnowledgeBase(kbId) } catch { kbId = undefined }
-      }
       const name = `PKW Processing — ${this.config.workspaceId.slice(0, 8)}`
+      const cc = (mainKb.chunking_config as Record<string, unknown> | undefined) ?? {}
+      const vlm = mainKb.vlm_config
       const emb = typeof mainKb.embedding_model_id === 'string' ? mainKb.embedding_model_id : ''
       const sum = typeof mainKb.summary_model_id === 'string' ? mainKb.summary_model_id : ''
-      if (kbId === undefined) {
-        // is_temporary: true → hidden from the WeKnora Documents UI (an internal
-        // parser execution projection, NOT a user knowledge base). The create body
-        // mirrors parser config AND the embedding/summary models (required for the
-        // parse pipeline to reach 'completed' — an empty embedding_model_id leaves
-        // knowledge stuck in 'processing').
-        const cc = (mainKb.chunking_config as Record<string, unknown> | undefined) ?? {}
+
+      const createNew = async (): Promise<string> => {
         const created = await this.ctx.pkwWeKnora.createKnowledgeBase(name, {
           is_temporary: true,
           chunking_config: cc,
-          ...(mainKb.vlm_config !== undefined ? { vlm_config: mainKb.vlm_config } : {}),
+          ...(vlm !== undefined ? { vlm_config: vlm } : {}),
           ...(emb !== '' ? { embedding_model_id: emb } : {}),
           ...(sum !== '' ? { summary_model_id: sum } : {}),
         })
-        kbId = created.id
-      } else if (existing !== undefined && existing.configFingerprint !== fp) {
-        // Parser config changed on the main KB → mirror to the existing Processing KB.
-        // WeKnora's UpdateKnowledgeBaseRequest requires `name`.
-        const cc = (mainKb.chunking_config as Record<string, unknown> | undefined) ?? {}
-        await this.ctx.pkwWeKnora.updateKnowledgeBase(kbId, {
-          name,
-          chunking_config: cc,
-          ...(mainKb.vlm_config !== undefined ? { vlm_config: mainKb.vlm_config } : {}),
-          ...(emb !== '' ? { embedding_model_id: emb } : {}),
-          ...(sum !== '' ? { summary_model_id: sum } : {}),
-        })
+        // Validate the CREATE-ONLY contract before committing to the new KB.
+        const got = await this.ctx.pkwWeKnora.getKnowledgeBase(created.id)
+        const gotEmb = typeof got.embedding_model_id === 'string' ? got.embedding_model_id : ''
+        if (emb !== '' && gotEmb === '') {
+          throw new Error(`pkwWeKnoraSync: new Processing KB missing embedding_model_id`)
+        }
+        return created.id
       }
-      await this.reqProcessingKb().put(this.config.workspaceId, { workspaceId: this.config.workspaceId, processingKbId: kbId, configFingerprint: fp, updatedAt: this.now() })
+
+      let kbId = existing?.processingKbId
+      let retired = existing?.retiredKbIds ?? []
+      let needCreate = false
+      if (kbId === undefined) {
+        needCreate = true
+      } else {
+        try {
+          const existingKb = await this.ctx.pkwWeKnora.getKnowledgeBase(kbId)
+          const drift = this.createOnlyFingerprint(existingKb) !== this.createOnlyFingerprint(mainKb)
+          if (drift) {
+            // CREATE-ONLY drift → controlled rebuild (update cannot fix it).
+            this.ctx.logger.info(`[pkw.knowledge] processing-kb create-only drift → rebuild (old ${kbId})`)
+            retired = [...retired, kbId]
+            needCreate = true
+            kbId = undefined
+          } else if (existing !== undefined && existing.configFingerprint !== fp) {
+            // MUTABLE-only drift → in-place update.
+            await this.ctx.pkwWeKnora.updateKnowledgeBase(kbId, {
+              name,
+              chunking_config: cc,
+              ...(vlm !== undefined ? { vlm_config: vlm } : {}),
+              ...(emb !== '' ? { embedding_model_id: emb } : {}),
+              ...(sum !== '' ? { summary_model_id: sum } : {}),
+            })
+          }
+        } catch {
+          // Existing KB vanished → recreate.
+          needCreate = true
+          kbId = undefined
+        }
+      }
+
+      if (needCreate) {
+        kbId = await createNew()
+      }
+      if (kbId === undefined) throw new Error('pkwWeKnoraSync: failed to resolve Processing KB id')
+
+      await this.reqProcessingKb().put(this.config.workspaceId, {
+        workspaceId: this.config.workspaceId,
+        processingKbId: kbId,
+        configFingerprint: fp,
+        ...(retired.length > 0 ? { retiredKbIds: retired } : {}),
+        updatedAt: this.now(),
+      })
       return kbId
     } catch {
       return undefined // offline → retry next drain
