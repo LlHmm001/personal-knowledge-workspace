@@ -33,6 +33,7 @@ export { companionUserContent, extractAttachmentSummary, hasCompanionUserContent
 export { companionNoteMarkdown, filenameStem, sanitizeNoteBase, uniqueNotePath } from './direct-upload.ts'
 export { enrichNoteForKnowledge, stripInternalFrontmatter } from './note-projection.ts'
 export type { NoteProjectionBudget, NoteScopedDerived } from './note-projection.ts'
+export { createDocxNote, extractDocxText, readDocxNoteId, writeDocxNoteId } from './docx-note.ts'
 export { parseNoteId } from './frontmatter.ts'
 export { attachmentDomainSpec, noteDomainSpec, operationCommitRecord, pkwDomainSpec, taskDomainSpec } from './spec.ts'
 export type { OperationCommitRecord } from './spec.ts'
