@@ -29,7 +29,7 @@ export { applyCompletionToggle, baselineFromSubtasks, completedCount, deriveComp
 export type { CompletionDraft, SubtaskSeedItem, SubtaskSeedSource } from './subtask-draft.ts'
 export { deriveSelectAll, parseTrashItemKey, reconcileSelection, summarizeBatch, trashItemKey } from './trash.ts'
 export type { BatchResult, SelectAllState, TrashItemKind } from './trash.ts'
-export { extractAttachmentSummary, insertAttachmentSummary } from './companion-summary.ts'
+export { companionUserContent, extractAttachmentSummary, hasCompanionUserContent, insertAttachmentSummary } from './companion-summary.ts'
 export { companionNoteMarkdown, filenameStem, sanitizeNoteBase, uniqueNotePath } from './direct-upload.ts'
 export { parseNoteId } from './frontmatter.ts'
 export { attachmentDomainSpec, noteDomainSpec, operationCommitRecord, pkwDomainSpec, taskDomainSpec } from './spec.ts'

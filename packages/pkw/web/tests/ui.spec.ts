@@ -184,4 +184,13 @@ describe('PKW web UI (served page)', () => {
     expect(js).toContain('remove-missing-note')
     expect(js).toContain('rescan-notes')
   })
+
+  it('wires attachment-backed companion upgrade + feature-level knowledge errors', () => {
+    const js = script()
+    expect(js).toContain('upgrade-companion')
+    expect(js).toContain("api('upgradeCompanionNote'")
+    expect(js).toContain('wikiUnavailable')
+    expect(js).toContain('graphUnavailable')
+    expect(js).toContain('companionUpgrade')
+  })
 })

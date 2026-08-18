@@ -74,6 +74,8 @@ const noteIndexRecordSchema = z.object({
   createdAt: z.string(),
   updatedAt: z.string(),
   deletedAt: z.string().optional(),
+  canonicalMissing: z.boolean().optional(),
+  attachmentBacked: z.boolean().optional(),
 })
 
 const attachmentRecordSchema = z.object({

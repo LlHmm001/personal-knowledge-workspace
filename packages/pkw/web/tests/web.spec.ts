@@ -227,7 +227,7 @@ describe('PKW Web Host Bridge (real Core integration)', () => {
     const { web, routes } = await boot()
     const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])
     const up = await web.call('uploadAttachment', { filename: 'p.png', mimeType: 'image/png', contentBase64: png.toString('base64') }) as { attachmentId: string }
-    const route = routes.find(r => r.path === '/pkw/attachment/')
+    const route = routes.find(r => r.path === '/pkw/attachment')
     expect(route).toBeDefined()
     const captured: { status: number; headers: Record<string, string>; body: Buffer } = { status: 0, headers: {}, body: Buffer.alloc(0) }
     let resolveEnd!: () => void
@@ -244,9 +244,19 @@ describe('PKW Web Host Bridge (real Core integration)', () => {
     expect(captured.body).toEqual(png)
   })
 
+  it('registers prefix routes with NO trailing slash (WebServer matcher contract)', async () => {
+    const { routes } = await boot()
+    const prefixes = routes.filter(r => r.kind === 'prefix')
+    expect(prefixes.length).toBeGreaterThan(0)
+    for (const r of prefixes) expect(r.path.endsWith('/')).toBe(false)
+    const att = routes.find(r => r.path === '/pkw/attachment')
+    expect(att).toBeDefined()
+    expect(att!.kind).toBe('prefix')
+  })
+
   it('404s unknown or malformed attachment ids', async () => {
     const { routes } = await boot()
-    const route = routes.find(r => r.path === '/pkw/attachment/')
+    const route = routes.find(r => r.path === '/pkw/attachment')
     expect(route).toBeDefined()
     const invoke = async (url: string): Promise<number> => {
       let resolveEnd!: () => void

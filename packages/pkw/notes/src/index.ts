@@ -241,6 +241,7 @@ export class NotesService extends Service {
       fileSize: Buffer.byteLength(markdown, 'utf8'),
       createdAt: now,
       updatedAt: now,
+      ...(input.attachmentBacked === true ? { attachmentBacked: true } : {}),
     }
     await this.putRecord(record, input.relativePath)
     return record
@@ -274,6 +275,15 @@ export class NotesService extends Service {
     await this.commitEvent(NOTE_UPDATED, String(noteId), payload)
     const record = { ...existing, contentHash: hash, observedRevision, updatedAt: new Date().toISOString(), fileSize: Buffer.byteLength(next, 'utf8') }
     await this.putRecord(record, existing.relativePath)
+    return record
+  }
+
+  /** Toggle the attachment-backed flag (Companion Note remote-uniqueness policy). */
+  async setAttachmentBacked(noteId: NoteId, flag: boolean): Promise<NoteIndexRecord> {
+    const existing = this.requireTable().get(noteId)
+    if (existing === undefined) throw new Error(`pkwNotes: unknown note '${noteId}'`)
+    const record = { ...existing, attachmentBacked: flag ? true : undefined }
+    await this.requireTable().put(noteId, record)
     return record
   }
 

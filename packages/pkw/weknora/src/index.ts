@@ -397,16 +397,20 @@ export class WeKnoraClient extends Service {
     if (opts.folderId !== undefined) qs.set('folder_id', opts.folderId)
     qs.set('page', String(opts.page ?? 1))
     qs.set('page_size', String(opts.pageSize ?? 200))
-    return this.request<WikiPageList>('GET', `/knowledge-bases/${kbId}/wiki/pages?${qs.toString()}`)
+    // NOTE: WeKnora's Wiki routes live under `/knowledgebase/{kb_id}/wiki` (SINGULAR
+    // "knowledgebase"), unlike the KB ingestion routes which use `/knowledge-bases`
+    // (plural). Using the plural here 404'd every Wiki/Graph call, which is what made
+    // the Knowledge View report "unavailable" while the topbar still showed "connected".
+    return this.request<WikiPageList>('GET', `/knowledgebase/${kbId}/wiki/pages?${qs.toString()}`)
   }
 
   async getWikiPage(kbId: string, slug: string): Promise<WikiPage> {
-    return this.request<WikiPage>('GET', `/knowledge-bases/${kbId}/wiki/pages/${encodeURIComponent(slug)}`)
+    return this.request<WikiPage>('GET', `/knowledgebase/${kbId}/wiki/pages/${encodeURIComponent(slug)}`)
   }
 
   async listWikiFolders(kbId: string, parentId: string = ''): Promise<WikiFolderList> {
     const qs = parentId ? `?parent_id=${encodeURIComponent(parentId)}` : ''
-    return this.request<WikiFolderList>('GET', `/knowledge-bases/${kbId}/wiki/folders${qs}`)
+    return this.request<WikiFolderList>('GET', `/knowledgebase/${kbId}/wiki/folders${qs}`)
   }
 
   async getWikiGraph(kbId: string, opts: { mode?: string; center?: string; depth?: number; types?: string[]; limit?: number } = {}): Promise<WikiGraphData> {
@@ -416,11 +420,11 @@ export class WeKnoraClient extends Service {
     if (opts.depth) qs.set('depth', String(opts.depth))
     if (opts.types && opts.types.length) qs.set('types', opts.types.join(','))
     if (opts.limit) qs.set('limit', String(opts.limit))
-    return this.request<WikiGraphData>('GET', `/knowledge-bases/${kbId}/wiki/graph?${qs.toString()}`)
+    return this.request<WikiGraphData>('GET', `/knowledgebase/${kbId}/wiki/graph?${qs.toString()}`)
   }
 
   async getWikiStats(kbId: string): Promise<WikiStats> {
-    return this.request<WikiStats>('GET', `/knowledge-bases/${kbId}/wiki/stats`)
+    return this.request<WikiStats>('GET', `/knowledgebase/${kbId}/wiki/stats`)
   }
 
   /** Fingerprint the exact Manual payload the adapter sends for the given content. */

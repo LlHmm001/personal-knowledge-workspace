@@ -283,11 +283,11 @@ const STR = {
     parseStatus:'解析状态', summary:'摘要', reparse:'重新解析', reparseStarted:'已提交重新解析',
     noteMissing:'笔记文件已不存在', noteMissingBody:'笔记“{id}”的 Markdown 文件在工作区中找不到，可能已被外部删除或移动。', rescan:'重新扫描', removeFromWorkspace:'从工作区移除', removeMissingConfirm:'从工作区移除“{id}”？该笔记文件已不存在。此操作将清理 PKW 中的残留记录和知识库投影，无法从回收站恢复该文件。',
     missingSource:'源文件已不存在',
-    knowledgeWiki:'Wiki', knowledgeGraph:'图谱', knowledgeSearchTab:'搜索', wikiGenerated:'WeKnora 生成内容', wikiOpenNote:'打开笔记', wikiEmpty:'该知识库尚未生成 Wiki 页面。', wikiSearchPlaceholder:'搜索 Wiki 页面…', graphEmpty:'图谱暂无节点。', graphFit:'适应屏幕', graphHideRelations:'隐藏关系', graphShowRelations:'显示关系', graphFull:'全库概览', knowledgeUnavailable:'WeKnora 暂不可用',
+    knowledgeWiki:'Wiki', knowledgeGraph:'图谱', knowledgeSearchTab:'搜索', wikiGenerated:'WeKnora 生成内容', wikiOpenNote:'打开笔记', wikiEmpty:'该知识库尚未生成 Wiki 页面。', wikiSearchPlaceholder:'搜索 Wiki 页面…', graphEmpty:'图谱暂无节点。', graphFit:'适应屏幕', graphHideRelations:'隐藏关系', graphShowRelations:'显示关系', graphFull:'全库概览', knowledgeUnavailable:'WeKnora 暂不可用', wikiUnavailable:'Wiki 暂不可用', graphUnavailable:'图谱暂不可用',
     companionNote:'建立伴随笔记', noteLocation:'笔记位置', kbIndex:'知识库索引', kbIndexHint:'索引可解析附件', uploadedNoNote:'文件已上传，但伴随笔记创建失败', uploadedCompanion:'已生成 {n} 篇伴随笔记',
     attGridView:'网格视图', attListView:'列表视图', attSearchPlaceholder:'搜索文件名…', attTypeAll:'全部', attTypeImage:'图片', attTypeDocument:'文档', attTypeOther:'其它', attSort:'排序', attSortRecent:'最近', attSortName:'名称', attSortSize:'大小',
     attSelectAll:'全选', attSelected:'已选择 {n} 项', attBatchTrash:'移入回收站', attBatchReparse:'重新解析', attBatchIndex:'重新索引', attClearSelection:'取消选择',
-    attCompanion:'伴随笔记', attCreateCompanion:'创建伴随笔记', attOpenCompanion:'打开伴随笔记', attPreview:'预览', attCopyRef:'复制引用', attNoCompanion:'未建伴随笔记', attCopied:'已复制引用', attUploadResult:'上传完成：附件 {a} · 伴随笔记 {n} · 失败 {f}', attUploadResultNoNote:'上传完成：附件 {a} 成功，伴随笔记失败 {f}', attUploadPartial:'部分上传失败：{a}/{t} 成功', attCreatedNote:'已创建伴随笔记', attOpenedExisting:'该附件已有伴随笔记，已打开', attBatchNoSelection:'请先选择附件',
+    attCompanion:'伴随笔记', attCreateCompanion:'创建伴随笔记', attOpenCompanion:'打开伴随笔记', attPreview:'预览', attCopyRef:'复制引用', attNoCompanion:'未建伴随笔记', attCopied:'已复制引用', attUploadResult:'上传完成：附件 {a} · 伴随笔记 {n} · 失败 {f}', attUploadResultNoNote:'上传完成：附件 {a} 成功，伴随笔记失败 {f}', attUploadPartial:'部分上传失败：{a}/{t} 成功', attCreatedNote:'已创建伴随笔记', attOpenedExisting:'该附件已有伴随笔记，已打开', attBatchNoSelection:'请先选择附件', companionUpgrade:'将伴随笔记作为独立知识同步', companionUpgraded:'已作为独立知识同步', attachmentBacked:'附件驱动（不独立同步）',
     uploadProgress:'上传中…', uploadSuccess:'已上传', uploadFailed:'上传失败', searching:'搜索中…', noHits:'没有命中「{q}」。', searchHint:'输入关键词搜索本地笔记与附件（经 WeKnora hybrid search）。',
     score:'得分', openNote:'打开笔记', openAttachment:'打开附件', externalWeKnora:'WeKnora 外部', noteLabel:'笔记', attachmentLabel:'附件',
     details:'详情', noteId:'NoteId', attachmentId:'AttachmentId', path:'路径', revision:'版本', updated:'更新时间', lastError:'最近错误', maintenance:'维护', advanced:'高级',
@@ -344,11 +344,11 @@ const STR = {
     parseStatus:'Parse status', summary:'Summary', reparse:'Reparse', reparseStarted:'Reparse submitted',
     noteMissing:'Note file is missing', noteMissingBody:'The Markdown file for note "{id}" cannot be found in the workspace. It may have been deleted or moved externally.', rescan:'Rescan', removeFromWorkspace:'Remove from workspace', removeMissingConfirm:'Remove "{id}" from the workspace? Its file is already missing. This will clean up the leftover PKW records and knowledge projection, and the file cannot be restored from Trash.',
     missingSource:'Source file missing',
-    knowledgeWiki:'Wiki', knowledgeGraph:'Graph', knowledgeSearchTab:'Search', wikiGenerated:'WeKnora generated', wikiOpenNote:'Open note', wikiEmpty:'This knowledge base has no generated Wiki pages yet.', wikiSearchPlaceholder:'Search Wiki pages…', graphEmpty:'No graph nodes.', graphFit:'Fit screen', graphHideRelations:'Hide relations', graphShowRelations:'Show relations', graphFull:'Full library', knowledgeUnavailable:'WeKnora unavailable',
+    knowledgeWiki:'Wiki', knowledgeGraph:'Graph', knowledgeSearchTab:'Search', wikiGenerated:'WeKnora generated', wikiOpenNote:'Open note', wikiEmpty:'This knowledge base has no generated Wiki pages yet.', wikiSearchPlaceholder:'Search Wiki pages…', graphEmpty:'No graph nodes.', graphFit:'Fit screen', graphHideRelations:'Hide relations', graphShowRelations:'Show relations', graphFull:'Full library', knowledgeUnavailable:'WeKnora unavailable', wikiUnavailable:'Wiki unavailable', graphUnavailable:'Graph unavailable',
     companionNote:'Create companion note', noteLocation:'Note location', kbIndex:'Knowledge indexing', kbIndexHint:'Index parseable attachments', uploadedNoNote:'File uploaded, but companion note creation failed', uploadedCompanion:'Created {n} companion notes',
     attGridView:'Grid view', attListView:'List view', attSearchPlaceholder:'Search filename…', attTypeAll:'All', attTypeImage:'Images', attTypeDocument:'Documents', attTypeOther:'Other', attSort:'Sort', attSortRecent:'Recent', attSortName:'Name', attSortSize:'Size',
     attSelectAll:'Select all', attSelected:'{n} selected', attBatchTrash:'Trash', attBatchReparse:'Reparse', attBatchIndex:'Re-index', attClearSelection:'Clear selection',
-    attCompanion:'Companion note', attCreateCompanion:'Create companion note', attOpenCompanion:'Open companion note', attPreview:'Preview', attCopyRef:'Copy reference', attNoCompanion:'No companion note', attCopied:'Reference copied', attUploadResult:'Upload done: {a} attachments · {n} companion notes · {f} failed', attUploadResultNoNote:'Upload done: {a} attachments, {f} companion notes failed', attUploadPartial:'Partial upload: {a}/{t} succeeded', attCreatedNote:'Companion note created', attOpenedExisting:'Companion note already exists — opened', attBatchNoSelection:'Select attachments first',
+    attCompanion:'Companion note', attCreateCompanion:'Create companion note', attOpenCompanion:'Open companion note', attPreview:'Preview', attCopyRef:'Copy reference', attNoCompanion:'No companion note', attCopied:'Reference copied', attUploadResult:'Upload done: {a} attachments · {n} companion notes · {f} failed', attUploadResultNoNote:'Upload done: {a} attachments, {f} companion notes failed', attUploadPartial:'Partial upload: {a}/{t} succeeded', attCreatedNote:'Companion note created', attOpenedExisting:'Companion note already exists — opened', attBatchNoSelection:'Select attachments first', companionUpgrade:'Sync companion note as independent knowledge', companionUpgraded:'Synced as independent knowledge', attachmentBacked:'Attachment-backed (not independently synced)',
     uploadProgress:'Uploading…', uploadSuccess:'Uploaded', uploadFailed:'Upload failed', searching:'Searching…', noHits:'No hits for 「{q}」.', searchHint:'Type a query to search notes & attachments (via WeKnora hybrid search).',
     score:'score', openNote:'Open note', openAttachment:'Open attachment', externalWeKnora:'external WeKnora', noteLabel:'Note', attachmentLabel:'Attachment',
     details:'Details', noteId:'NoteId', attachmentId:'AttachmentId', path:'Path', revision:'Revision', updated:'Updated', lastError:'Last error', maintenance:'Maintenance', advanced:'Advanced',
@@ -737,7 +737,7 @@ function renderEditorShell(d){
     '<button class="btn primary" data-action="save-note">' + esc(t('save')) + '</button>' +
     '<button class="btn" data-action="rename-note">' + esc(t('renameMove')) + '</button>' +
     '<button class="btn" data-action="move-note" data-id="' + esc(state.selectedNoteId) + '">' + esc(t('moveNoteTo')) + '</button>' +
-    '<button class="btn" data-action="sync-note" data-id="' + esc(state.selectedNoteId) + '">' + esc(t('syncNow')) + '</button>' +
+    (d.note && d.note.attachmentBacked ? '<button class="btn" data-action="upgrade-companion" data-id="' + esc(state.selectedNoteId) + '">' + esc(t('companionUpgrade')) + '</button>' : '<button class="btn" data-action="sync-note" data-id="' + esc(state.selectedNoteId) + '">' + esc(t('syncNow')) + '</button>') +
     '<button class="btn" data-action="selection-to-task">' + esc(t('selectionToTask')) + '</button>' +
     '<button class="btn danger" data-action="delete-note">' + esc(t('del')) + '</button>' +
     '<span id="saveStatus" class="saved">✓ ' + esc(t('saved')) + '</span>' +
@@ -1803,7 +1803,7 @@ async function renderWikiList(){
       '<input id="wikiSearch" placeholder="' + esc(t('wikiSearchPlaceholder')) + '" style="width:100%;margin-bottom:10px">' +
       pages.map(p => '<div class="tree-row" data-action="open-wiki-page" data-slug="' + esc(p.slug) + '"><span class="ic">📄</span><span class="nm">' + esc(p.title) + '</span>' + (p.page_type ? '<span class="badge">' + esc(p.page_type) + '</span>' : '') + '</div>').join('')
     $('#wikiSearch').addEventListener('keydown', (e) => { if (e.key === 'Enter') { const q = $('#wikiSearch').value.trim(); wikiSearch(q) } })
-  } catch (e) { $('#main').innerHTML = '<div class="empty">' + esc(t('knowledgeUnavailable')) + '</div>' }
+  } catch (e) { $('#main').innerHTML = '<div class="empty"><h3>' + esc(t('wikiUnavailable')) + '</h3><p class="muted">' + esc(e.message || '') + '</p><button class="btn" data-action="knowledge-tab" data-tab="wiki">' + esc(t('retry')) + '</button></div>' }
 }
 async function wikiSearch(q){
   if (!q) { renderWikiList(); return }
@@ -1845,7 +1845,7 @@ function renderGraphView(){
       '<canvas id="graphCanvas" style="width:100%;height:58vh;border:1px solid var(--border);border-radius:8px;background:var(--bg-surface)"></canvas>' +
       '<div class="muted small" style="margin-top:6px">' + ['summary', 'entity', 'concept', 'synthesis', 'comparison'].map(ty => '<span class="badge graph-legend-item' + (state.graphTypes.includes(ty) ? '' : ' dim') + '" data-action="graph-filter-type" data-type="' + ty + '" style="background:' + graphColor(ty) + ';color:#fff;margin-right:6px;cursor:pointer">' + esc(ty) + '</span>').join('') + '</div>'
     drawGraph(nodes, edges)
-  }).catch(() => { $('#main').innerHTML = '<div class="empty">' + esc(t('knowledgeUnavailable')) + '</div>' })
+  }).catch(e => { $('#main').innerHTML = '<div class="empty"><h3>' + esc(t('graphUnavailable')) + '</h3><p class="muted">' + esc((e && e.message) || '') + '</p><button class="btn" data-action="knowledge-tab" data-tab="graph">' + esc(t('retry')) + '</button></div>' })
 }
 function drawGraph(nodes, edges){
   const canvas = $('#graphCanvas'); if (!canvas) return
@@ -1884,7 +1884,11 @@ async function runSearch(q){
       const local = r.local
       const title = r.remote.title || r.remote.filename || r.remote.knowledgeId
       const kind = local ? (local.entityType === 'note' ? t('noteLabel') : t('attachmentLabel')) : t('externalWeKnora')
-      const openBtn = local ? '<button data-action="open-' + (local.entityType === 'note' ? 'note' : 'attachment') + '" data-id="' + esc(local.entityId) + '">' + (local.entityType === 'note' ? esc(t('openNote')) : esc(t('openAttachment'))) + '</button>' : ''
+      // Attachment hit with a Companion Note → open the Companion Note (one knowledge object).
+      const openTarget = local && local.entityType === 'attachment' && local.companionNoteId
+        ? { action: 'open-note', id: local.companionNoteId, label: t('openNote') }
+        : local ? (local.entityType === 'note' ? { action: 'open-note', id: local.entityId, label: t('openNote') } : { action: 'open-attachment', id: local.entityId, label: t('openAttachment') }) : null
+      const openBtn = openTarget ? '<button data-action="' + openTarget.action + '" data-id="' + esc(openTarget.id) + '">' + esc(openTarget.label) + '</button>' : ''
       return '<div class="hit"><div class="t">' + esc(title) + '</div><div class="snippet">' + esc((r.remote.content || '').slice(0, 220)) + '</div><div class="ref">' + esc(t('score')) + ' ' + (r.remote.score != null ? r.remote.score.toFixed(3) : '—') + ' · ' + esc(kind) + openBtn + '</div></div>'
     }).join('')
   } catch (e) { $('#main').innerHTML = '<div class="empty">' + esc(t('searchFailed')) + ': ' + esc(e.message) + '</div>' }
@@ -2553,6 +2557,7 @@ document.addEventListener('click', (e) => {
   else if (act === 'rename-folder') renameFolder(path)
   else if (act === 'delete-folder') deleteFolder(path)
   else if (act === 'sync-note') syncEntity('note', id)
+  else if (act === 'upgrade-companion') { api('upgradeCompanionNote', { noteId: id }).then(() => { toast(t('companionUpgraded'), 'ok'); openNote(id) }).catch(e => toast(t('genericError') + ': ' + e.message, 'err')) }
   else if (act === 'sync-now') syncNow()
   else if (act === 'reconcile') reconcile()
   else if (act === 'upload-attachment') uploadDialog()

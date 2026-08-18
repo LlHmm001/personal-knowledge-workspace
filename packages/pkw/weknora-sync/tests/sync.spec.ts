@@ -413,6 +413,24 @@ describe('pkw weknora sync (vertical slice)', () => {
     expect(fake.manuals.size).toBe(1) // no second remote object created
   })
 
+  it('attachment-backed Companion Note is skipped (no independent Note Knowledge)', async () => {
+    const { notes, sync, fake } = await boot()
+    const note = await notes.create({ relativePath: 'c.md', markdown: '# 海报\n\n![](attachments/att_x/海报.jpg)\n', attachmentBacked: true })
+    await expect(sync.syncNote(note.noteId)).rejects.toThrow(/did not converge/)
+    expect(sync.getMapping(note.noteId)).toBeUndefined()
+    expect(fake.manuals.size).toBe(0) // no remote manual knowledge
+  })
+
+  it('upgrading an attachment-backed note to independent creates the Note Knowledge', async () => {
+    const { notes, sync, fake } = await boot()
+    const note = await notes.create({ relativePath: 'c.md', markdown: '# 海报\n\n这是我的补充。\n', attachmentBacked: true })
+    await notes.setAttachmentBacked(note.noteId, false)
+    const kid = await sync.syncNote(note.noteId)
+    expect(kid).toBeDefined()
+    expect(fake.manuals.size).toBe(1)
+    expect(sync.getMapping(note.noteId)!.knowledgeId).toBe(kid)
+  })
+
   it('recovers a lost mapping via remote identity lookup (unknown-outcome)', async () => {
     const { notes, adapter, sync } = await boot()
     const note = await notes.create({ relativePath: 'a.md', markdown: '# v1\n\nlost mapping\n' })

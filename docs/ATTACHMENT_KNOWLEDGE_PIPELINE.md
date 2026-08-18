@@ -162,3 +162,15 @@ Wiki pages / Graph nodes          = WeKnora-derived knowledge (NOT Proposition /
 - Note Knowledge 与 Attachment Knowledge 是两条**独立 projection**（Note=manual Markdown 文本；Attachment=file binary+parser）。
 - Wiki/Graph 由 WeKnora 从 KB 聚合生成，是 **derived knowledge**，不映射回单一 NoteId/AttachmentId（WikiPage/GraphNode 无 knowledge_id 字段）——PKW 只做 title 匹配启发式 deep-link（否则显示「WeKnora 生成内容」），不伪造 NoteId。
 - 未来 PLL 是另一层，Wiki node ≠ Proposition、Graph edge ≠ Memory Relation。
+
+---
+
+## 10. Knowledge Foundation v2 Closure — route fixes (evidence)
+
+Two independent "broken" symptoms shared one cause each, proven by live HTTP probes:
+
+1. **Live image + Manager thumbnail broken** → `GET /pkw/attachment/<id>` returned `200 text/html` (the DSH GUI shell), NOT the image. Cause: the `/pkw/attachment/` prefix route was registered **with a trailing slash**; the WebServer matcher is `pathname.startsWith(path + '/')`, so `/pkw/attachment//…` never matched and every request fell to the SPA fallback. Fix: register `path: '/pkw/attachment'` (no trailing slash). Byte-route identity is the `AttachmentId` only; `filename` is display metadata.
+
+2. **Topbar "connected" but Knowledge View "unavailable"** → `listWikiPages`/`listWikiFolders`/`getWikiGraph`/`getWikiStats` hit `/knowledge-bases/<id>/wiki/*` (plural) which 404'd. Cause: WeKnora's Wiki routes live under `/knowledgebase/<id>/wiki/*` (**singular** `knowledgebase`) — `internal/router/routes_knowledge.go:287`. Fix: the WeKnora client now uses the singular prefix. Connectivity (`serviceReachable`/`authValid`) is a different signal than per-feature capability (`wikiAvailable`/`graphAvailable`); the UI reports the failed feature, not the whole integration.
+
+3. **Duplicate remote Knowledge** → see `docs/KNOWLEDGE_IDENTITY_POLICY.md`: a Direct Upload is now **attachment-backed** (one remote Knowledge = the Attachment Knowledge; the Companion Note stays local and is promoted to an independent Note Knowledge only on explicit user request).

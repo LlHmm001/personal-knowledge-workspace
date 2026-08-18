@@ -25,7 +25,7 @@ import { z } from 'zod'
 import { randomUUID } from 'node:crypto'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import type { Domain, KvTable } from '@deepseek-ai/dsh-storage-domain'
-import { AttachmentId, NoteId, extractAttachmentSummary, insertAttachmentSummary } from '@deepseek-ai/dsh-pkw-domain'
+import { AttachmentId, NoteId, extractAttachmentSummary, hasCompanionUserContent, insertAttachmentSummary } from '@deepseek-ai/dsh-pkw-domain'
 import type { NoteId as NoteIdT, AttachmentId as AttachmentIdT } from '@deepseek-ai/dsh-pkw-domain'
 import {
   WeKnoraError,
@@ -177,6 +177,8 @@ export interface RetrievalResult {
     workspaceId: string
     entityType: string
     entityId: string
+    /** For an attachment hit, the Companion Note to open (if one exists) so a single uploaded file surfaces as one knowledge object. */
+    companionNoteId?: string
   }
 }
 
@@ -465,6 +467,17 @@ export class WeKnoraSyncService extends Service {
     const mapping = this.reqMappings().get(key)
     if (record.deletedAt !== undefined) {
       await this.runRemoteDelete(ENTITY_NOTE, String(noteId), key, mapping)
+      return undefined
+    }
+
+    // Attachment-backed Companion Note: the Attachment Knowledge is the single
+    // remote projection. Do NOT create an independent Note Knowledge. If an older
+    // Companion Note already has a Note Knowledge mapping, converge it to deleted
+    // (migration) so the duplicate remote card is removed without touching the
+    // local Companion Note.
+    if (record.attachmentBacked === true) {
+      if (mapping !== undefined) await this.runRemoteDelete(ENTITY_NOTE, String(noteId), key, mapping)
+      else await this.clearDirty(key)
       return undefined
     }
 
@@ -1035,11 +1048,35 @@ export class WeKnoraSyncService extends Service {
         if (mapping !== undefined && mapping.syncState !== M_DELETED) report.markedDeleted += 1
         continue
       }
+      if (rec.attachmentBacked === true) {
+        // Attachment-backed: no independent Note Knowledge. Converge any legacy
+        // Companion Note Knowledge to deleted; the drain performs the remote delete.
+        if (mapping !== undefined && mapping.syncState !== M_DELETED) {
+          await this.convergeDeleted(key, mapping)
+          await this.markDirty(ENTITY_NOTE, String(rec.noteId), rec.observedRevision)
+          report.markedDeleted += 1
+        } else {
+          await this.clearDirty(key)
+        }
+        continue
+      }
       const doc = await this.ctx.pkwNotes.getDocument(rec.noteId)
       const fingerprint = remoteManualFingerprint(doc.markdown)
       if (mapping === undefined || mapping.remoteFingerprint !== fingerprint || mapping.syncState !== M_SYNCED) {
         await this.markDirty(ENTITY_NOTE, String(rec.noteId), rec.observedRevision)
         report.markedDirty += 1
+      }
+    }
+
+    // Migration: mark legacy Companion Notes (no user-authored content) as
+    // attachment-backed so their duplicate Note Knowledge converges to deleted.
+    for (const att of this.ctx.pkwAttachments.list()) {
+      if (att.companionNoteId === undefined) continue
+      const note = this.ctx.pkwNotes.get(att.companionNoteId)
+      if (note === undefined || note.deletedAt !== undefined || note.attachmentBacked === true) continue
+      const doc = await this.ctx.pkwNotes.getDocument(note.noteId)
+      if (!hasCompanionUserContent(doc.markdown)) {
+        await this.ctx.pkwNotes.setAttachmentBacked(note.noteId, true)
       }
     }
 
@@ -1088,6 +1125,16 @@ export class WeKnoraSyncService extends Service {
 
   private toRetrievalResult(kbId: string, chunk: SearchResultChunk): RetrievalResult {
     const rev = this.reqReverse().get(chunk.knowledge_id)
+    let local: RetrievalResult['local']
+    if (rev !== undefined) {
+      local = { workspaceId: rev.workspaceId, entityType: rev.entityType, entityId: rev.entityId }
+      // Attachment hit → prefer the Companion Note so one uploaded file surfaces
+      // as a single knowledge object (attachment-backed policy).
+      if (rev.entityType === ENTITY_ATTACHMENT) {
+        const att = this.ctx.pkwAttachments.get(AttachmentId(rev.entityId))
+        if (att !== undefined && att.companionNoteId !== undefined) local.companionNoteId = String(att.companionNoteId)
+      }
+    }
     return {
       remote: {
         kbId,
@@ -1101,7 +1148,7 @@ export class WeKnoraSyncService extends Service {
         source: chunk.knowledge_source,
         channel: chunk.knowledge_channel,
       },
-      ...(rev === undefined ? {} : { local: { workspaceId: rev.workspaceId, entityType: rev.entityType, entityId: rev.entityId } }),
+      ...(local === undefined ? {} : { local }),
     }
   }
 }

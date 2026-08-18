@@ -226,7 +226,12 @@ export class PkwWebService extends Service {
     // The renderer rewrites `attachments/<id>/<file>` srcs/hrefs to this URL;
     // bytes stream with the stored mime + inline (image) / download (file).
     this.ctx.effect(() => this.ctx.webServer.register({
-      kind: 'prefix', path: '/pkw/attachment/', handler: (req, res) => {
+      // NOTE: WebServer prefix matching is `pathname.startsWith(path + '/')` and
+      // requires `path` to have NO trailing slash. A trailing slash here made the
+      // matcher look for `/pkw/attachment//…`, so every byte request fell through
+      // to the SPA fallback and returned the GUI shell — breaking BOTH Live images
+      // and Attachment Manager thumbnails.
+      kind: 'prefix', path: '/pkw/attachment', handler: (req, res) => {
         void this.serveAttachment(req, res)
       },
     }), 'pkw.web.attachment')
@@ -235,6 +240,9 @@ export class PkwWebService extends Service {
   private async serveAttachment(req: IncomingMessage, res: ServerResponse): Promise<void> {
     try {
       const url = new URL(req.url ?? '/', 'http://localhost')
+      // The byte route identity is the stable AttachmentId ONLY. The trailing
+      // `<filename>` segment (if any) is never used for lookup — filename is
+      // display/reference metadata, not route identity (CJK/spaces/rename safe).
       const id = decodeURIComponent(url.pathname.slice('/pkw/attachment/'.length)).replace(/^\/+|\/+$/g, '')
       if (!/^att_[0-9a-f]{12}$/.test(id)) {
         res.writeHead(404, { 'Content-Type': 'text/plain' })
@@ -250,7 +258,7 @@ export class PkwWebService extends Service {
       const bytes = await this.attachments.open(AttachmentId(id))
       const mime = rec.mimeType || 'application/octet-stream'
       const safeName = (rec.filename ?? 'attachment').replace(/["\r\n\\]/g, '_')
-      const disposition = mime.startsWith('image/') ? 'inline' : `attachment; filename="${safeName}"`
+      const disposition = mime.startsWith('image/') || mime === 'application/pdf' ? 'inline' : `attachment; filename="${safeName}"`
       res.writeHead(200, {
         'Content-Type': mime,
         'Content-Disposition': disposition,
@@ -258,7 +266,8 @@ export class PkwWebService extends Service {
         'Cache-Control': 'private, max-age=3600',
       })
       res.end(Buffer.from(bytes))
-    } catch {
+    } catch (error) {
+      this.ctx.logger.warn(`pkw.attachment serve failed: ${error instanceof Error ? error.message : String(error)}`)
       res.writeHead(404, { 'Content-Type': 'text/plain' })
       res.end('not found')
     }
@@ -322,6 +331,7 @@ export class PkwWebService extends Service {
           updatedAt: n.updatedAt,
           observedRevision: n.observedRevision,
           deleted: n.deletedAt !== undefined,
+          attachmentBacked: n.attachmentBacked === true,
           sync: this.syncView('note', String(n.noteId), snap),
         }))
       }
@@ -330,7 +340,7 @@ export class PkwWebService extends Service {
         const doc = await this.notes.getDocument(noteId)
         const { frontmatterRaw, body } = splitFrontmatter(doc.markdown)
         return {
-          note: { noteId: String(doc.note.noteId), relativePath: doc.note.relativePath, title: doc.note.title, tags: doc.note.tags, updatedAt: doc.note.updatedAt, observedRevision: doc.note.observedRevision, contentHash: doc.note.contentHash },
+          note: { noteId: String(doc.note.noteId), relativePath: doc.note.relativePath, title: doc.note.title, tags: doc.note.tags, updatedAt: doc.note.updatedAt, observedRevision: doc.note.observedRevision, contentHash: doc.note.contentHash, attachmentBacked: doc.note.attachmentBacked === true },
           markdown: doc.markdown,
           frontmatter: frontmatterRaw,
           body,
@@ -586,6 +596,15 @@ export class PkwWebService extends Service {
         const folder = args.folder !== undefined ? String(args.folder) : ''
         return this.ensureCompanionNote(id, folder)
       }
+      case 'upgradeCompanionNote': {
+        // Explicitly promote an attachment-backed Companion Note to an independent
+        // Note Knowledge (so user-authored companion text becomes searchable).
+        // Never auto-upgraded: this is a user-triggered, durable decision.
+        const noteId = NoteId(String(args.noteId))
+        await this.notes.setAttachmentBacked(noteId, false)
+        await this.sync.syncNote(noteId)
+        return { upgraded: true, noteId: String(noteId) }
+      }
       case 'deleteAttachment': {
         await this.attachments.remove(AttachmentId(String(args.attachmentId)))
         return { deleted: true }
@@ -827,13 +846,13 @@ export class PkwWebService extends Service {
    * path from the STORED filename (never the raw upload name), creates the note,
    * persists `companionNoteId`, and returns the new note. No WeKnora dependency.
    */
-  private async ensureCompanionNote(id: AttachmentId, folder: string): Promise<{ noteId: string; relativePath: string; title: string; created: boolean }> {
+  private async ensureCompanionNote(id: AttachmentId, folder: string): Promise<{ noteId: string; relativePath: string; title: string; created: boolean; attachmentBacked: boolean }> {
     const rec = this.attachments.get(id)
     if (rec === undefined) throw new Error(`pkwWeb: unknown attachment '${id}'`)
     if (rec.companionNoteId !== undefined) {
       const existing = this.notes.get(rec.companionNoteId)
       if (existing !== undefined && existing.deletedAt === undefined) {
-        return { noteId: String(existing.noteId), relativePath: existing.relativePath, title: existing.title, created: false }
+        return { noteId: String(existing.noteId), relativePath: existing.relativePath, title: existing.title, created: false, attachmentBacked: existing.attachmentBacked === true }
       }
     }
     const base = sanitizeNoteBase(filenameStem(rec.filename))
@@ -841,9 +860,12 @@ export class PkwWebService extends Service {
     for (const n of this.notes.list({ includeDeleted: true })) existingPaths.add(n.relativePath)
     const notePath = uniqueNotePath(folder, base, existingPaths)
     const markdown = companionNoteMarkdown(base, String(rec.id), rec.filename, rec.mimeType)
-    const created = await this.notes.create({ relativePath: notePath, markdown })
+    // Attachment-backed Companion Note: local canonical note only. It does NOT
+    // create an independent remote Note Knowledge (avoids the duplicate WeKnora
+    // card). The Attachment Knowledge is the single remote projection.
+    const created = await this.notes.create({ relativePath: notePath, markdown, attachmentBacked: true })
     await this.attachments.setCompanionNote(rec.id, created.noteId)
-    return { noteId: String(created.noteId), relativePath: created.relativePath, title: created.title, created: true }
+    return { noteId: String(created.noteId), relativePath: created.relativePath, title: created.title, created: true, attachmentBacked: true }
   }
 }
 

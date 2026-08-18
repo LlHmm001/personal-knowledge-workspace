@@ -194,6 +194,8 @@ export interface NoteIndexRecord {
   deletedAt?: string
   /** Set when the note was soft-deleted while its canonical file was already missing (not recoverable from Trash). */
   canonicalMissing?: boolean
+  /** When true the note is an attachment-backed Companion Note: it stays local and does NOT create an independent remote Note Knowledge unless explicitly upgraded. */
+  attachmentBacked?: boolean
 }
 
 /** Attachment catalog record (workspace file is the binary source of truth). */
@@ -239,6 +241,8 @@ export interface NoteListFilter {
 export interface CreateNoteInput {
   relativePath: string
   markdown: string
+  /** Mark a Direct Upload Companion Note as attachment-backed (no independent remote Knowledge). */
+  attachmentBacked?: boolean
 }
 
 export interface ReconcileReport {
@@ -275,6 +279,7 @@ export interface PkwNotesService {
   create(input: CreateNoteInput): Promise<NoteIndexRecord>
   update(noteId: NoteId, markdown: string): Promise<NoteIndexRecord>
   move(noteId: NoteId, newRelativePath: string): Promise<NoteIndexRecord>
+  setAttachmentBacked(noteId: NoteId, flag: boolean): Promise<NoteIndexRecord>
   delete(noteId: NoteId): Promise<void>
   restore(noteId: NoteId): Promise<NoteIndexRecord>
   purge(noteId: NoteId): Promise<void>

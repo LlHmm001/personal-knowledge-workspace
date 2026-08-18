@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { extractAttachmentSummary, insertAttachmentSummary } from '../src/index.ts'
+import { companionUserContent, extractAttachmentSummary, hasCompanionUserContent, insertAttachmentSummary } from '../src/index.ts'
 
 describe('companion attachment-summary materialization', () => {
   it('inserts a new managed block at the end', () => {
@@ -29,5 +29,17 @@ describe('companion attachment-summary materialization', () => {
   it('is a same-summary no-op (extract === new summary)', () => {
     const md = insertAttachmentSummary('# 海报\n', 'att_x', '相同摘要')
     expect(extractAttachmentSummary(md, 'att_x')).toBe('相同摘要')
+  })
+
+  it('distinguishes managed region from user-authored content (never body.length)', () => {
+    const managed = '# 海报\n\n![](attachments/att_x/海报.png)\n\n' + insertAttachmentSummary('', 'att_x', '自动摘要')
+    expect(hasCompanionUserContent(managed)).toBe(false)
+    expect(companionUserContent(managed)).toBe('')
+
+    const withNote = managed + '\n\n这是我的补充笔记。\n'
+    expect(hasCompanionUserContent(withNote)).toBe(true)
+    expect(companionUserContent(withNote)).toContain('这是我的补充笔记。')
+    expect(companionUserContent(withNote)).not.toContain('att_x')
+    expect(companionUserContent(withNote)).not.toContain('附件解析摘要')
   })
 })
