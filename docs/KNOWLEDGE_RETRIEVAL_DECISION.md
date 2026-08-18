@@ -69,3 +69,14 @@ An attachment with no referencing Note is **not** a Business Knowledge; Processi
 ## Regression guard
 
 `note-scoped`/`standalone`/`local-only`, Processing KB, derived capture, and "same Note KnowledgeId" are unchanged. This is PKW orchestration only — no WeKnora fork.
+
+## Browser Evidence follow-up (HEAD 49e6eb2 +)
+
+1. **Search provenance** — `RetrievalResult.local` now carries `matchedAttachmentId` + `matchReason`; the Search UI shows "正文命中" vs "附件命中 · <filename>" (federated remap to the owner Note). Processing KnowledgeId is never shown.
+2. **Projection hygiene** — `stripInternalFrontmatter()` removes the PKW `id:` (and `pkw:*`) frontmatter from the remote projection before it enters WeKnora embedding/summary/Wiki/Graph; user `title`/`tags`/custom YAML are kept. Canonical Markdown unchanged.
+3. **Image rendering in WeKnora** — WeKnora's main-KB payload now carries only `图片附件：<file>` (no renderable URL). The PKW attachment byte route is **localhost-only and unauthenticated-by-path** (serves any `att_<12hex>` to the loopback). Exposing private attachments publicly just to render them in WeKnora's backend UI is rejected (security-first). Decision: **WeKnora backend shows `图片附件：<file>`; PKW's Business Knowledge Viewer is the place images are rendered.** No WeKnora fork (F8 deferred).
+4. **Summary refresh** — WeKnora `updateManualKnowledge` updates content/chunks but does NOT reliably regenerate the stale `description` ("No textual content..."). The reparse seam (`POST /knowledge/:id/reparse`) exists; wiring an explicit summary-refresh on content change is a follow-up, not done here.
+
+## Parser lifecycle
+
+`processing` records now store `configFingerprint`; `listNeedsReparse()` returns derived-ready attachments whose captured fingerprint differs from the current Processing KB fingerprint. No automatic bulk reparse (K).

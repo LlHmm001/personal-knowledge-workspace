@@ -25,7 +25,7 @@ import { z } from 'zod'
 import { randomUUID } from 'node:crypto'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import type { Domain, KvTable } from '@deepseek-ai/dsh-storage-domain'
-import { AttachmentId, NoteId, enrichNoteForKnowledge, extractAttachmentSummary, hasCompanionUserContent, insertAttachmentSummary } from '@deepseek-ai/dsh-pkw-domain'
+import { AttachmentId, NoteId, enrichNoteForKnowledge, extractAttachmentSummary, hasCompanionUserContent, insertAttachmentSummary, stripInternalFrontmatter } from '@deepseek-ai/dsh-pkw-domain'
 import type { NoteId as NoteIdT, AttachmentId as AttachmentIdT } from '@deepseek-ai/dsh-pkw-domain'
 import {
   WeKnoraError,
@@ -127,6 +127,8 @@ const processingRecordSchema = z.object({
   summary: z.string().optional(),
   chunks: z.array(z.string()).optional(),
   derivedHash: z.string().optional(),
+  /** Parser config fingerprint at capture time (for needsReparse detection). */
+  configFingerprint: z.string().optional(),
   lastError: z.string().optional(),
   updatedAt: z.string(),
 })
@@ -539,12 +541,13 @@ export class WeKnoraSyncService extends Service {
     if (kbId === undefined) return false
 
     // Idempotent: reuse an existing Processing Knowledge instead of re-uploading.
+    const cfgFp = this.reqProcessingKb().get(this.config.workspaceId)?.configFingerprint
     let processingKnowledgeId = existing?.processingKnowledgeId
     if (processingKnowledgeId === undefined) {
       const bytes = await this.ctx.pkwAttachments.open(attachmentId)
       const uploaded = await this.ctx.pkwWeKnora.uploadFile(kbId, { content: bytes, filename: rec.filename, mimeType: rec.mimeType, channel: 'pkw-processing' })
       processingKnowledgeId = uploaded.id
-      await this.reqProcessing().put(key, { attachmentId: key, workspaceId: this.config.workspaceId, processingKbId: kbId, processingKnowledgeId, state: 'parsing', updatedAt: this.now() })
+      await this.reqProcessing().put(key, { attachmentId: key, workspaceId: this.config.workspaceId, processingKbId: kbId, processingKnowledgeId, state: 'parsing', configFingerprint: cfgFp, updatedAt: this.now() })
     }
 
     const k = await this.ctx.pkwWeKnora.getKnowledge(processingKnowledgeId)
@@ -554,19 +557,19 @@ export class WeKnoraSyncService extends Service {
       const derived = await this.captureDerived(processingKnowledgeId, rec.filename)
       const derivedHash = sha256Text(JSON.stringify(derived))
       if (derivedHash !== existing?.derivedHash) {
-        await this.reqProcessing().put(key, { attachmentId: key, workspaceId: this.config.workspaceId, processingKbId: kbId, processingKnowledgeId, state: 'derived-ready', parseStatus, summaryStatus, summary: derived.summary, chunks: derived.chunks, derivedHash, updatedAt: this.now() })
+        await this.reqProcessing().put(key, { attachmentId: key, workspaceId: this.config.workspaceId, processingKbId: kbId, processingKnowledgeId, state: 'derived-ready', parseStatus, summaryStatus, summary: derived.summary, chunks: derived.chunks, derivedHash, configFingerprint: cfgFp, updatedAt: this.now() })
         await this.markOwnerNotesDirty(attachmentId)
       } else {
-        await this.reqProcessing().put(key, { attachmentId: key, workspaceId: this.config.workspaceId, processingKbId: kbId, processingKnowledgeId, state: 'derived-ready', parseStatus, summaryStatus, summary: derived.summary, chunks: derived.chunks, derivedHash, updatedAt: this.now() })
+        await this.reqProcessing().put(key, { attachmentId: key, workspaceId: this.config.workspaceId, processingKbId: kbId, processingKnowledgeId, state: 'derived-ready', parseStatus, summaryStatus, summary: derived.summary, chunks: derived.chunks, derivedHash, configFingerprint: cfgFp, updatedAt: this.now() })
       }
       return true
     }
     if (parseStatus === 'failed') {
-      await this.reqProcessing().put(key, { attachmentId: key, workspaceId: this.config.workspaceId, processingKbId: kbId, processingKnowledgeId, state: 'failed', parseStatus, summaryStatus, lastError: k.error_message, updatedAt: this.now() })
+      await this.reqProcessing().put(key, { attachmentId: key, workspaceId: this.config.workspaceId, processingKbId: kbId, processingKnowledgeId, state: 'failed', parseStatus, summaryStatus, configFingerprint: cfgFp, lastError: k.error_message, updatedAt: this.now() })
       return false
     }
     // pending/processing → still parsing, retry next drain.
-    await this.reqProcessing().put(key, { attachmentId: key, workspaceId: this.config.workspaceId, processingKbId: kbId, processingKnowledgeId, state: 'parsing', parseStatus, summaryStatus, updatedAt: this.now() })
+    await this.reqProcessing().put(key, { attachmentId: key, workspaceId: this.config.workspaceId, processingKbId: kbId, processingKnowledgeId, state: 'parsing', parseStatus, summaryStatus, configFingerprint: cfgFp, updatedAt: this.now() })
     return false
   }
 
@@ -598,6 +601,17 @@ export class WeKnoraSyncService extends Service {
     return { summary: rec.summary, chunks: rec.chunks }
   }
 
+  /** AttachmentIds whose captured config fingerprint differs from the current one (needs reparse). */
+  listNeedsReparse(): string[] {
+    const current = this.reqProcessingKb().get(this.config.workspaceId)?.configFingerprint
+    if (current === undefined) return []
+    const out: string[] = []
+    for (const [attachmentId, rec] of this.reqProcessing().entries()) {
+      if (rec.state === 'derived-ready' && rec.configFingerprint !== undefined && rec.configFingerprint !== current) out.push(attachmentId)
+    }
+    return out
+  }
+
   /** Read the note-scoped attachment refs a Note's canonical Markdown references. */
   async noteScopedDerivedFor(noteId: NoteIdT): Promise<Array<{ attachmentId: string; filename: string; summary?: string; chunks?: string[] }>> {
     const doc = await this.ctx.pkwNotes.getDocument(noteId)
@@ -615,7 +629,9 @@ export class WeKnoraSyncService extends Service {
   /** Single source of truth: a Note's remote projection (normalized canonical + note-scoped derived content). */
   private async noteRemoteProjection(noteId: NoteIdT): Promise<{ markdown: string; fingerprint: string }> {
     const doc = await this.ctx.pkwNotes.getDocument(noteId)
-    let remoteMarkdown = normalizeForRemote(doc.markdown)
+    // Projection hygiene: strip PKW internal frontmatter (`id:`/`pkw:*`) before
+    // it can enter WeKnora embedding/summary/Wiki/Graph. Canonical stays intact.
+    let remoteMarkdown = normalizeForRemote(stripInternalFrontmatter(doc.markdown))
     const derived = await this.noteScopedDerivedFor(noteId)
     if (derived.length > 0) remoteMarkdown = enrichNoteForKnowledge(remoteMarkdown, derived)
     return { markdown: remoteMarkdown, fingerprint: remoteManualFingerprint(remoteMarkdown) }

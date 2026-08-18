@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { enrichNoteForKnowledge } from '../src/note-projection.ts'
+import { enrichNoteForKnowledge, stripInternalFrontmatter } from '../src/note-projection.ts'
 
 describe('note-scoped attachment remote projection', () => {
   it('appends a bounded attachment summary block per derived attachment', () => {
@@ -52,5 +52,18 @@ describe('note-scoped attachment remote projection', () => {
     ])
     expect(out).not.toContain(late) // A1 drops the late marker
     expect(out.length).toBeLessThan(20000)
+  })
+
+  it('strips the PKW id: frontmatter but keeps user fields (projection hygiene)', () => {
+    const md = '---\nid: note_abc123\ntitle: "项目复盘"\ntags:\n  - 客户\n---\n\n# 项目复盘\n\n正文'
+    const out = stripInternalFrontmatter(md)
+    expect(out).not.toContain('note_abc123')
+    expect(out).toContain('title: "项目复盘"')
+    expect(out).toContain('tags:')
+    expect(out).toContain('# 项目复盘')
+  })
+
+  it('drops the whole frontmatter when only id: remains', () => {
+    expect(stripInternalFrontmatter('---\nid: note_x\n---\n\n# body')).toBe('# body')
   })
 })

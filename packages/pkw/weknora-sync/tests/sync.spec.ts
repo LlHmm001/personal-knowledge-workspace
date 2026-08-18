@@ -14,7 +14,7 @@ import { SqliteStorageBackend } from '@deepseek-ai/dsh-storage-sqlite'
 import WorkspaceRegistry from '@deepseek-ai/dsh-workspace'
 import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
 import { WeKnoraError, canonicalizeRemoteManualContent, redactSecrets } from '@deepseek-ai/dsh-pkw-weknora'
-import { NoteId } from '@deepseek-ai/dsh-pkw-domain'
+import { NoteId, stripInternalFrontmatter } from '@deepseek-ai/dsh-pkw-domain'
 import PkwEventStoreService from '../../events/src/index.ts'
 import PkwWorkspaceService from '../../workspace/src/index.ts'
 import NotesService from '../../notes/src/index.ts'
@@ -451,7 +451,7 @@ describe('pkw weknora sync (vertical slice)', () => {
     const { notes, adapter, sync } = await boot()
     const note = await notes.create({ relativePath: 'a.md', markdown: '# v1\n\nlost mapping\n' })
     const doc = await notes.getDocument(note.noteId)
-    await adapter.createManualKnowledge('kb-1', { title: note.title, content: doc.markdown })
+    await adapter.createManualKnowledge('kb-1', { title: note.title, content: stripInternalFrontmatter(doc.markdown) })
     expect(sync.getMapping(note.noteId)).toBeUndefined()
     const recovered = await sync.recoverNote(note.noteId)
     expect(recovered).toBeDefined()
@@ -474,8 +474,8 @@ describe('pkw weknora sync (vertical slice)', () => {
     const { notes, adapter, sync } = await boot()
     const note = await notes.create({ relativePath: 'a.md', markdown: '# target\n' })
     const doc = await notes.getDocument(note.noteId)
-    await adapter.createManualKnowledge('kb-1', { title: 'other', content: '---\nid: note_other\n---\n\n# other\n' })
-    await adapter.createManualKnowledge('kb-1', { title: doc.note.title, content: doc.markdown })
+    await adapter.createManualKnowledge('kb-1', { title: 'other', content: '# other\n' })
+    await adapter.createManualKnowledge('kb-1', { title: doc.note.title, content: stripInternalFrontmatter(doc.markdown) })
     const recovered = await sync.recoverNote(note.noteId)
     expect(recovered).toBeDefined()
     expect(sync.getMapping(note.noteId)!.knowledgeId).toBe(recovered)
@@ -540,8 +540,9 @@ describe('manual create distributed failures', () => {
     const { notes, adapter, sync, fake } = await boot()
     const note = await notes.create({ relativePath: 'a.md', markdown: '# v1\n\ncanonical\n' })
     const doc = await notes.getDocument(note.noteId)
-    const a = await adapter.createManualKnowledge('kb-1', { title: note.title, content: doc.markdown })
-    const b = await adapter.createManualKnowledge('kb-1', { title: note.title, content: doc.markdown })
+    const body = stripInternalFrontmatter(doc.markdown)
+    const a = await adapter.createManualKnowledge('kb-1', { title: note.title, content: body })
+    const b = await adapter.createManualKnowledge('kb-1', { title: note.title, content: body })
     fake.manuals.get(a.id)!.parseStatus = 'pending'
     fake.manuals.get(b.id)!.parseStatus = 'completed'
 

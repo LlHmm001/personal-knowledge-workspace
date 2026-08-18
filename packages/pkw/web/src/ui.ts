@@ -292,7 +292,7 @@ const STR = {
     attSelectAll:'全选', attSelected:'已选择 {n} 项', attBatchTrash:'移入回收站', attBatchReparse:'重新解析', attBatchIndex:'重新索引', attClearSelection:'取消选择',
     attCompanion:'伴随笔记', attCreateCompanion:'创建伴随笔记', attOpenCompanion:'打开伴随笔记', attPreview:'预览', attCopyRef:'复制引用', attNoCompanion:'未建伴随笔记', attCopied:'已复制引用', attUploadResult:'上传完成：附件 {a} · 伴随笔记 {n} · 失败 {f}', attUploadResultNoNote:'上传完成：附件 {a} 成功，伴随笔记失败 {f}', attUploadPartial:'部分上传失败：{a}/{t} 成功', attCreatedNote:'已创建伴随笔记', attOpenedExisting:'该附件已有伴随笔记，已打开', attBatchNoSelection:'请先选择附件', companionUpgrade:'将伴随笔记作为独立知识同步', companionUpgraded:'已作为独立知识同步', attachmentBacked:'附件驱动（不独立同步）',
     uploadProgress:'上传中…', uploadSuccess:'已上传', uploadFailed:'上传失败', searching:'搜索中…', noHits:'没有命中「{q}」。', searchHint:'输入关键词搜索本地笔记与附件（经 WeKnora hybrid search）。',
-    score:'得分', openNote:'打开笔记', openAttachment:'打开附件', externalWeKnora:'WeKnora 外部', noteLabel:'笔记', attachmentLabel:'附件',
+    score:'得分', openNote:'打开笔记', openAttachment:'打开附件', externalWeKnora:'WeKnora 外部', noteLabel:'笔记', attachmentLabel:'附件', noteBodyMatch:'正文命中', attMatch:'附件命中',
     details:'详情', noteId:'NoteId', attachmentId:'AttachmentId', path:'路径', revision:'版本', updated:'更新时间', lastError:'最近错误', maintenance:'维护', advanced:'高级',
     workspaceSummary:'工作区摘要', kb:'知识库', state:'状态', parse:'解析', syncSection:'WeKnora 同步', noSyncInfo:'尚未同步。',
     reconcileDone:'重建完成', reconcileResult:'笔记修复 {a} · 附件修复 {b} · 待同步 {c} · 已删 {d}', syncingAll:'正在同步…', genericError:'操作失败', ok:'完成', emptyPreview:'（空）', searchFailed:'搜索失败',
@@ -353,7 +353,7 @@ const STR = {
     attSelectAll:'Select all', attSelected:'{n} selected', attBatchTrash:'Trash', attBatchReparse:'Reparse', attBatchIndex:'Re-index', attClearSelection:'Clear selection',
     attCompanion:'Companion note', attCreateCompanion:'Create companion note', attOpenCompanion:'Open companion note', attPreview:'Preview', attCopyRef:'Copy reference', attNoCompanion:'No companion note', attCopied:'Reference copied', attUploadResult:'Upload done: {a} attachments · {n} companion notes · {f} failed', attUploadResultNoNote:'Upload done: {a} attachments, {f} companion notes failed', attUploadPartial:'Partial upload: {a}/{t} succeeded', attCreatedNote:'Companion note created', attOpenedExisting:'Companion note already exists — opened', attBatchNoSelection:'Select attachments first', companionUpgrade:'Sync companion note as independent knowledge', companionUpgraded:'Synced as independent knowledge', attachmentBacked:'Attachment-backed (not independently synced)',
     uploadProgress:'Uploading…', uploadSuccess:'Uploaded', uploadFailed:'Upload failed', searching:'Searching…', noHits:'No hits for 「{q}」.', searchHint:'Type a query to search notes & attachments (via WeKnora hybrid search).',
-    score:'score', openNote:'Open note', openAttachment:'Open attachment', externalWeKnora:'external WeKnora', noteLabel:'Note', attachmentLabel:'Attachment',
+    score:'score', openNote:'Open note', openAttachment:'Open attachment', externalWeKnora:'external WeKnora', noteLabel:'Note', attachmentLabel:'Attachment', noteBodyMatch:'Body match', attMatch:'Attachment match',
     details:'Details', noteId:'NoteId', attachmentId:'AttachmentId', path:'Path', revision:'Revision', updated:'Updated', lastError:'Last error', maintenance:'Maintenance', advanced:'Advanced',
     workspaceSummary:'Workspace summary', kb:'KB', state:'State', parse:'Parse', syncSection:'WeKnora Sync', noSyncInfo:'Not synced yet.',
     reconcileDone:'Reconcile done', reconcileResult:'Notes repaired {a} · attachments repaired {b} · dirty {c} · deleted {d}', syncingAll:'Syncing…', genericError:'Operation failed', ok:'Done', emptyPreview:'(empty)', searchFailed:'Search failed',
@@ -1906,7 +1906,17 @@ async function runSearch(q){
         ? { action: 'open-note', id: local.companionNoteId, label: t('openNote') }
         : local ? (local.entityType === 'note' ? { action: 'open-note', id: local.entityId, label: t('openNote') } : { action: 'open-attachment', id: local.entityId, label: t('openAttachment') }) : null
       const openBtn = openTarget ? '<button data-action="' + openTarget.action + '" data-id="' + esc(openTarget.id) + '">' + esc(openTarget.label) + '</button>' : ''
-      return '<div class="hit"><div class="t">' + esc(title) + '</div><div class="snippet">' + esc((r.remote.content || '').slice(0, 220)) + '</div><div class="ref">' + esc(t('score')) + ' ' + (r.remote.score != null ? r.remote.score.toFixed(3) : '—') + ' · ' + esc(kind) + openBtn + '</div></div>'
+      // Federated search provenance: show WHY this Business Knowledge matched
+      // (Main-KB note body vs Processing-KB attachment, remapped to the owner Note).
+      let provenance = ''
+      if (local && local.entityType === 'note') {
+        if (local.matchReason === 'attachment' || local.matchedAttachmentId) {
+          provenance = t('attMatch') + ' · ' + esc(r.remote.filename || local.matchedAttachmentId || '')
+        } else {
+          provenance = t('noteBodyMatch')
+        }
+      }
+      return '<div class="hit"><div class="t">' + esc(title) + '</div><div class="snippet">' + esc((r.remote.content || '').slice(0, 220)) + '</div><div class="ref">' + esc(t('score')) + ' ' + (r.remote.score != null ? r.remote.score.toFixed(3) : '—') + ' · ' + esc(kind) + (provenance ? ' · ' + provenance : '') + openBtn + '</div></div>'
     }).join('')
   } catch (e) { $('#main').innerHTML = '<div class="empty">' + esc(t('searchFailed')) + ': ' + esc(e.message) + '</div>' }
 }

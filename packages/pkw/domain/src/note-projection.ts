@@ -28,6 +28,31 @@ export interface NoteProjectionBudget {
   maxTotalChars?: number
 }
 
+/**
+ * Strip PKW-owned internal frontmatter keys from the canonical Markdown for the
+ * remote projection. `id` (and any `pkw:*` internal key) must never enter WeKnora
+ * embedding/summary/Wiki/Graph; user fields (title/tags/custom YAML) are kept.
+ * Canonical Markdown is unchanged — this is projection-only.
+ */
+export function stripInternalFrontmatter(markdown: string): string {
+  const out = String(markdown).replace(/^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*\r?\n?/, (block) => {
+    const inner = block
+      .replace(/^---[ \t]*\r?\n/, '')
+      .replace(/\r?\n---[ \t]*\r?\n?$/, '')
+    const lines = inner.split('\n').filter(line => {
+      const t = line.trim()
+      if (t === '') return false
+      if (/^id:[ \t]*\S/.test(t)) return false
+      if (/^pkw[:_-]/.test(t)) return false
+      return true
+    })
+    if (lines.length === 0) return ''
+    return '---\n' + lines.join('\n') + '\n---\n'
+  })
+  // A fully-dropped frontmatter leaves a leading blank line; trim one newline.
+  return out.replace(/^\r?\n/, '')
+}
+
 const DEFAULT_MAX_SUMMARY = 2000
 const DEFAULT_MAX_CHUNK = 4000
 const DEFAULT_MAX_TOTAL = 12000
