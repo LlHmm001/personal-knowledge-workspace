@@ -1910,8 +1910,11 @@ async function runSearch(q){
       // (Main-KB note body vs Processing-KB attachment, remapped to the owner Note).
       let provenance = ''
       if (local && local.entityType === 'note') {
-        if (local.matchReason === 'attachment' || local.matchedAttachmentId) {
-          provenance = t('attMatch') + ' · ' + esc(r.remote.filename || local.matchedAttachmentId || '')
+        const attName = r.remote.filename || local.matchedAttachmentId || ''
+        if (local.matchReason === 'both') {
+          provenance = t('noteBodyMatch') + ' · ' + t('attMatch') + ' · ' + esc(attName)
+        } else if (local.matchReason === 'attachment' || local.matchedAttachmentId) {
+          provenance = t('attMatch') + ' · ' + esc(attName)
         } else {
           provenance = t('noteBodyMatch')
         }

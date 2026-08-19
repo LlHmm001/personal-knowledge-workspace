@@ -220,8 +220,8 @@ export interface RetrievalResult {
     companionNoteId?: string
     /** A2 federation: when a Processing-KB hit remaps to an owner Note, the matched Source Asset (AttachmentId). */
     matchedAttachmentId?: string
-    /** Why this Business Knowledge matched: 'note' (Main KB) or 'attachment' (Processing KB, remapped). */
-    matchReason?: 'note' | 'attachment'
+    /** Why this Business Knowledge matched: 'note' (Main KB body), 'attachment' (Processing KB remapped), or 'both'. */
+    matchReason?: 'note' | 'attachment' | 'both'
   }
 }
 
@@ -1465,7 +1465,8 @@ export class WeKnoraSyncService extends Service {
       // keep one result but record both match reasons.
       if (r.local?.matchedAttachmentId !== undefined) {
         existing.local!.matchedAttachmentId = r.local.matchedAttachmentId
-        existing.local!.matchReason = 'attachment'
+        // A prior body hit (matchReason undefined) + this attachment hit → 'both'.
+        if (existing.local!.matchReason === undefined) existing.local!.matchReason = 'both'
         if (existing.remote.score < r.remote.score) existing.remote.score = r.remote.score
       }
     }
