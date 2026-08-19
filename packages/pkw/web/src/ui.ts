@@ -32,6 +32,7 @@ header .spacer{flex:1}
 .langbtn:hover{background:var(--bg-hover)}
 aside{border-right:1px solid var(--border);background:var(--panel);display:flex;flex-direction:column;min-height:0}
 .nav{padding:10px 10px 6px;flex:0 0 auto}.nav button{display:block;width:100%;text-align:left;padding:8px 12px;border:0;background:none;border-radius:8px;cursor:pointer;font-size:13px;color:var(--ink);margin-bottom:2px}
+.nav .nav-group-label{font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);font-weight:650;padding:4px 10px;margin-bottom:4px}
 .nav button.active,.nav button:hover{background:var(--bg-hover)}.nav button.active{font-weight:650;color:var(--accent)}
 #list{overflow:auto;padding:6px 8px 12px;flex:1 1 auto}
 .tree-toolbar{display:flex;gap:4px;padding:6px 8px;border-bottom:1px solid var(--border);flex:0 0 auto;align-items:center}
@@ -258,13 +259,14 @@ mark{background:var(--mark-bg);border-radius:2px;padding:0 2px}
   </header>
   <aside>
     <div class="nav">
+      <div class="nav-group-label">Workspace</div>
       <button data-view="overview">总览</button>
       <button data-view="notes">笔记</button>
+      <button data-view="knowledge">知识库</button>
+      <button data-view="search">搜索</button>
       <button data-view="attachments">附件</button>
       <button data-view="tasks">待办</button>
       <button data-view="trash">回收站</button>
-      <button data-view="knowledge">知识库</button>
-      <button data-view="search">搜索</button>
     </div>
     <div id="treeToolbar"></div>
     <div id="list"></div>
