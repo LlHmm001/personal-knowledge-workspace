@@ -246,6 +246,7 @@ mark{background:var(--mark-bg);border-radius:2px;padding:0 2px}
 .bk-att-main{flex:1 1 auto;min-width:0}
 .bk-att-name{font-weight:600;margin-bottom:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bk-summary{margin-top:6px;font-size:13px;line-height:1.5}
+.bk-att-side{flex:0 0 auto;display:flex;flex-direction:column;align-items:flex-end;gap:6px}
 /* Search → Viewer navigation context */
 .search-context-banner{display:inline-block;margin:2px 0 4px;padding:3px 10px;border-radius:999px;font-size:12px;background:var(--bg-hover);color:var(--text-secondary);border:1px solid var(--border)}
 </style>
@@ -270,7 +271,7 @@ mark{background:var(--mark-bg);border-radius:2px;padding:0 2px}
       <button data-view="notes">笔记</button>
       <button data-view="knowledge">知识</button>
       <button data-view="search">搜索</button>
-      <button data-view="attachments">附件</button>
+      <button data-view="attachments">来源</button>
       <button data-view="tasks">待办</button>
       <button data-view="trash">回收站</button>
     </div>
@@ -303,11 +304,12 @@ const STR = {
     themeSystem:'跟随系统', themeLight:'浅色', themeDark:'深色',
     knowledge:'知识', knowledgeIndexed:'已索引', knowledgePending:'待索引', knowledgeNotIndexed:'未索引', knowledgeParseFailed:'解析失败', relatedNotes:'相关笔记', relatedKnowledge:'相关知识', refAttachments:'引用附件', mime:'类型', attWaiting:'等待解析', attProcessing:'解析中', attReady:'已解析', attFailed:'解析失败', attachments:'附件', businessKnowledge:'知识',
     knowledgeBrowse:'浏览', knowledgeBrowseTitle:'知识发现', knowledgeEmpty:'还没有可发现的知识。', knowledgeOffline:'知识检索暂不可用', sourceLabel:'来源', attachmentsN:'附件 ×{n}', knowledgeFilterPlaceholder:'筛选知识（标题 / 摘要 / 来源）…',
+    sources:'来源', sourcesDesc:'你上传的知识资料来源文件。', usedIn:'用于', usedByN:'{n} 篇笔记使用', isolated:'未关联笔记', isolatedHint:'该文件还没有被任何笔记引用。', hasSummary:'有摘要', refresh:'刷新', sourceFiles:'来源文件',
     parseStatus:'解析状态', summary:'摘要', reparse:'重新解析', reparseStarted:'已提交重新解析',
     noteMissing:'笔记文件已不存在', noteMissingBody:'笔记“{id}”的 Markdown 文件在工作区中找不到，可能已被外部删除或移动。', rescan:'重新扫描', removeFromWorkspace:'从工作区移除', removeMissingConfirm:'从工作区移除“{id}”？该笔记文件已不存在。此操作将清理 PKW 中的残留记录和知识库投影，无法从回收站恢复该文件。',
     missingSource:'源文件已不存在',
-    knowledgeWiki:'Wiki', knowledgeGraph:'图谱', knowledgeSearchTab:'搜索', wikiGenerated:'WeKnora 生成内容', wikiOpenNote:'打开笔记', wikiEmpty:'该知识库尚未生成 Wiki 页面。', wikiSearchPlaceholder:'搜索 Wiki 页面…', graphEmpty:'图谱暂无节点。', graphFit:'适应屏幕', graphHideRelations:'隐藏关系', graphShowRelations:'显示关系', graphFull:'全库概览', knowledgeUnavailable:'WeKnora 暂不可用', wikiUnavailable:'Wiki 暂不可用', graphUnavailable:'图谱暂不可用',
-    companionNote:'建立伴随笔记', noteLocation:'笔记位置', kbIndex:'知识库索引', kbIndexHint:'索引可解析附件', uploadedNoNote:'文件已上传，但伴随笔记创建失败', uploadedCompanion:'已生成 {n} 篇伴随笔记',
+    knowledgeWiki:'Wiki', knowledgeGraph:'图谱', knowledgeSearchTab:'搜索', wikiGenerated:'WeKnora 生成内容', wikiOpenNote:'打开笔记', wikiEmpty:'尚未生成 Wiki 页面。', wikiSearchPlaceholder:'搜索 Wiki 页面…', graphEmpty:'图谱暂无节点。', graphFit:'适应屏幕', graphHideRelations:'隐藏关系', graphShowRelations:'显示关系', graphFull:'全库概览', knowledgeUnavailable:'WeKnora 暂不可用', wikiUnavailable:'Wiki 暂不可用', graphUnavailable:'图谱暂不可用',
+    companionNote:'建立伴随笔记', noteLocation:'笔记位置', kbIndex:'解析并索引', kbIndexHint:'提取摘要与正文用于搜索', uploadedNoNote:'文件已上传，但伴随笔记创建失败', uploadedCompanion:'已生成 {n} 篇伴随笔记',
     attGridView:'网格视图', attListView:'列表视图', attSearchPlaceholder:'搜索文件名…', attTypeAll:'全部', attTypeImage:'图片', attTypeDocument:'文档', attTypeOther:'其它', attSort:'排序', attSortRecent:'最近', attSortName:'名称', attSortSize:'大小',
     attSelectAll:'全选', attSelected:'已选择 {n} 项', attBatchTrash:'移入回收站', attBatchReparse:'重新解析', attBatchIndex:'重新索引', attClearSelection:'取消选择',
     attCompanion:'伴随笔记', attCreateCompanion:'创建伴随笔记', attOpenCompanion:'打开伴随笔记', attPreview:'预览', attCopyRef:'复制引用', attNoCompanion:'未建伴随笔记', attCopied:'已复制引用', attUploadResult:'上传完成：附件 {a} · 伴随笔记 {n} · 失败 {f}', attUploadResultNoNote:'上传完成：附件 {a} 成功，伴随笔记失败 {f}', attUploadPartial:'部分上传失败：{a}/{t} 成功', attCreatedNote:'已创建伴随笔记', attOpenedExisting:'该附件已有伴随笔记，已打开', attBatchNoSelection:'请先选择附件', companionUpgrade:'将伴随笔记作为独立知识同步', companionUpgraded:'已作为独立知识同步', attachmentBacked:'附件驱动（不独立同步）',
@@ -365,11 +367,12 @@ const STR = {
     themeSystem:'Follow system', themeLight:'Light', themeDark:'Dark',
     knowledge:'Knowledge', knowledgeIndexed:'Indexed', knowledgePending:'Pending', knowledgeNotIndexed:'Not indexed', knowledgeParseFailed:'Parse failed', relatedNotes:'Related notes', relatedKnowledge:'Related knowledge', refAttachments:'Referenced attachments', mime:'Type', attWaiting:'Waiting', attProcessing:'Processing', attReady:'Parsed', attFailed:'Parse failed', attachments:'Attachments', businessKnowledge:'Knowledge',
     knowledgeBrowse:'Browse', knowledgeBrowseTitle:'Knowledge Discovery', knowledgeEmpty:'No discoverable knowledge yet.', knowledgeOffline:'Knowledge search unavailable', sourceLabel:'Source', attachmentsN:'{n} attachments', knowledgeFilterPlaceholder:'Filter knowledge (title / summary / source)…',
+    sources:'Sources', sourcesDesc:'The source files that make up your knowledge.', usedIn:'Used in', usedByN:'{n} notes use this', isolated:'Not linked to a note', isolatedHint:'This file is not referenced by any note yet.', hasSummary:'Has summary', refresh:'Refresh', sourceFiles:'Source files',
     parseStatus:'Parse status', summary:'Summary', reparse:'Reparse', reparseStarted:'Reparse submitted',
     noteMissing:'Note file is missing', noteMissingBody:'The Markdown file for note "{id}" cannot be found in the workspace. It may have been deleted or moved externally.', rescan:'Rescan', removeFromWorkspace:'Remove from workspace', removeMissingConfirm:'Remove "{id}" from the workspace? Its file is already missing. This will clean up the leftover PKW records and knowledge projection, and the file cannot be restored from Trash.',
     missingSource:'Source file missing',
-    knowledgeWiki:'Wiki', knowledgeGraph:'Graph', knowledgeSearchTab:'Search', wikiGenerated:'WeKnora generated', wikiOpenNote:'Open note', wikiEmpty:'This knowledge base has no generated Wiki pages yet.', wikiSearchPlaceholder:'Search Wiki pages…', graphEmpty:'No graph nodes.', graphFit:'Fit screen', graphHideRelations:'Hide relations', graphShowRelations:'Show relations', graphFull:'Full library', knowledgeUnavailable:'WeKnora unavailable', wikiUnavailable:'Wiki unavailable', graphUnavailable:'Graph unavailable',
-    companionNote:'Create companion note', noteLocation:'Note location', kbIndex:'Knowledge indexing', kbIndexHint:'Index parseable attachments', uploadedNoNote:'File uploaded, but companion note creation failed', uploadedCompanion:'Created {n} companion notes',
+    knowledgeWiki:'Wiki', knowledgeGraph:'Graph', knowledgeSearchTab:'Search', wikiGenerated:'WeKnora generated', wikiOpenNote:'Open note', wikiEmpty:'No Wiki pages generated yet.', wikiSearchPlaceholder:'Search Wiki pages…', graphEmpty:'No graph nodes.', graphFit:'Fit screen', graphHideRelations:'Hide relations', graphShowRelations:'Show relations', graphFull:'Full library', knowledgeUnavailable:'WeKnora unavailable', wikiUnavailable:'Wiki unavailable', graphUnavailable:'Graph unavailable',
+    companionNote:'Create companion note', noteLocation:'Note location', kbIndex:'Parse & index', kbIndexHint:'Extract summary & text for search', uploadedNoNote:'File uploaded, but companion note creation failed', uploadedCompanion:'Created {n} companion notes',
     attGridView:'Grid view', attListView:'List view', attSearchPlaceholder:'Search filename…', attTypeAll:'All', attTypeImage:'Images', attTypeDocument:'Documents', attTypeOther:'Other', attSort:'Sort', attSortRecent:'Recent', attSortName:'Name', attSortSize:'Size',
     attSelectAll:'Select all', attSelected:'{n} selected', attBatchTrash:'Trash', attBatchReparse:'Reparse', attBatchIndex:'Re-index', attClearSelection:'Clear selection',
     attCompanion:'Companion note', attCreateCompanion:'Create companion note', attOpenCompanion:'Open companion note', attPreview:'Preview', attCopyRef:'Copy reference', attNoCompanion:'No companion note', attCopied:'Reference copied', attUploadResult:'Upload done: {a} attachments · {n} companion notes · {f} failed', attUploadResultNoNote:'Upload done: {a} attachments, {f} companion notes failed', attUploadPartial:'Partial upload: {a}/{t} succeeded', attCreatedNote:'Companion note created', attOpenedExisting:'Companion note already exists — opened', attBatchNoSelection:'Select attachments first', companionUpgrade:'Sync companion note as independent knowledge', companionUpgraded:'Synced as independent knowledge', attachmentBacked:'Attachment-backed (not independently synced)',
@@ -435,6 +438,7 @@ const state = {
   tasksCache: [],
   matricesCache: [],
   attachmentsCache: [],
+  noteAttachments: [],
   searchContext: null,
   searchQuery: '',
   searchResults: null,
@@ -493,7 +497,7 @@ function restoreScroll(){
 }
 
 function toast(msg, kind){ const el = $('#toast'); el.innerHTML = '<div class="toast ' + (kind || 'ok') + '">' + esc(msg) + '</div>'; el.style.display = 'block'; clearTimeout(toast._t); toast._t = setTimeout(() => { el.style.display = 'none' }, 3200) }
-function applyLang(){ document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en'; $('#search').placeholder = t('searchPlaceholder'); $('#langBtn').textContent = lang === 'zh' ? 'EN' : '中文'; document.querySelectorAll('.nav button').forEach(b => b.textContent = t(b.dataset.view)) }
+function applyLang(){ document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en'; $('#search').placeholder = t('searchPlaceholder'); $('#langBtn').textContent = lang === 'zh' ? 'EN' : '中文'; document.querySelectorAll('.nav button').forEach(b => b.textContent = b.dataset.view === 'attachments' ? t('sources') : t(b.dataset.view)) }
 // ── Theme (system / light / dark) — preference in localStorage, tokens in CSS ──
 function currentThemeMode(){ return localStorage.getItem('pkw-theme') || 'system' }
 function applyTheme(mode){
@@ -549,6 +553,7 @@ function setView(v){
   state.view = v
   viewSeq++
   viewStart = performance.now()
+  clearTimeout(sourcesPollTimer)
   if (v !== 'notes') { state.selectedNoteId = null; state.selectedFolder = null }
   if (v !== 'attachments') state.selectedAttachmentId = null
   render()
@@ -736,12 +741,14 @@ function destroyVditor(){ if (setupLiveAttachmentRewrite._obs) { setupLiveAttach
 async function openNote(noteId){
   state.selectedNoteId = noteId; state.selectedFolder = null
   destroyVditor()
+  clearTimeout(sourcesPollTimer)
   state.editor = { noteId, persistedMarkdown: '', dirty: false, saving: false, mode: localStorage.getItem('pkw-editor-mode') || 'live' }
   $('#main').innerHTML = '<div class="empty">' + esc(t('loading')) + '</div>'
   $('#detail').innerHTML = '' // clear stale Inspector immediately
   try {
     const d = await api('getNote', { noteId })
     state.editor = { noteId, persistedMarkdown: d.markdown, body: d.body || '', frontmatter: d.frontmatter || '', dirty: false, saving: false, mode: localStorage.getItem('pkw-editor-mode') || 'live', observedRevision: d.note && d.note.observedRevision, contentHash: d.note && d.note.contentHash }
+    state.noteAttachments = d.attachments || []
     // Expand parent folders so the opened Note is visible + highlighted in the tree
     // (identity stays NoteId; path is only used to reveal ancestors).
     if (d.note && d.note.relativePath) expandFoldersForPath(d.note.relativePath)
@@ -749,7 +756,7 @@ async function openNote(noteId){
     bindEditor()
     $('#detail').innerHTML = detailNote(d)
     renderNoteAttachmentKnowledge(d)
-    renderBusinessKnowledgeAttachments(d)
+    renderSources(d.note.noteId, d.attachments)
     renderRelatedKnowledge(d)
     await renderTree()
     kickSyncPoll(d.sync)
@@ -1129,24 +1136,46 @@ function procStateBadge(state){
   if (state === 'processing') return '<span class="badge warn">' + esc(t('attProcessing')) + '</span>'
   return '<span class="badge">' + esc(t('attWaiting')) + '</span>'
 }
-function renderBusinessKnowledgeAttachments(d){
-  if (!d.attachments || !d.attachments.length) return
-  api('noteAttachmentSummaries', { noteId: d.note.noteId }).then(sums => {
-    const box = $('#bkAttachments')
-    if (!box || state.selectedNoteId !== d.note.noteId) return
+let sourcesPollTimer = null
+// Sources (Business Knowledge Viewer): a Note's referenced attachments as
+// "source files" — filename / type / size / processing state / real summary /
+// owner count / retry, with a manual refresh + a light poll while processing.
+function renderSources(noteId, attachments){
+  const box = $('#bkAttachments')
+  if (!box) return
+  if (!attachments || !attachments.length) { box.innerHTML = ''; return }
+  api('noteAttachmentSummaries', { noteId }).then(sums => {
+    if (!box || state.selectedNoteId !== noteId) return
     const rows = (sums || []).map(s => {
       const isImage = (s.mimeType || '').indexOf('image/') === 0
-      const thumb = isImage ? '<img class="bk-thumb" src="/pkw/attachment/' + esc(s.attachmentId) + '" alt="" loading="lazy" data-action="att-preview" data-id="' + esc(s.attachmentId) + '">' : '<span class="bk-ic" data-action="att-preview" data-id="' + esc(s.attachmentId) + '">📄</span>'
+      const thumb = isImage
+        ? '<img class="bk-thumb" src="/pkw/attachment/' + esc(s.attachmentId) + '" alt="" loading="lazy" data-action="att-preview" data-id="' + esc(s.attachmentId) + '">'
+        : '<span class="bk-ic" data-action="att-preview" data-id="' + esc(s.attachmentId) + '">📄</span>'
       const summary = s.description ? '<div class="bk-summary muted">' + esc(s.description) + '</div>' : ''
+      const ownerHint = s.ownerCount > 1 ? '<span class="badge">' + esc(t('usedByN', { n: s.ownerCount })) + '</span>' : ''
+      const retryBtn = s.processingState === 'failed'
+        ? '<button class="btn small" data-action="reparse-attachment" data-id="' + esc(s.attachmentId) + '">' + esc(t('reparse')) + '</button>'
+        : ''
       return '<div class="bk-att">' + thumb +
-        '<div class="bk-att-main"><div class="bk-att-name" data-action="att-preview" data-id="' + esc(s.attachmentId) + '">' + esc(s.filename) + '</div>' +
-        '<div class="muted small">' + esc(s.mimeType || '') + (s.sizeBytes != null ? ' · ' + fmtSize(s.sizeBytes) : '') + '</div>' +
-        summary + '</div>' +
-        '<div>' + procStateBadge(s.processingState) + '</div>' +
+        '<div class="bk-att-main">' +
+          '<div class="bk-att-name" data-action="att-preview" data-id="' + esc(s.attachmentId) + '">' + esc(s.filename) + '</div>' +
+          '<div class="muted small">' + esc(s.mimeType || '') + (s.sizeBytes != null ? ' · ' + fmtSize(s.sizeBytes) : '') + '</div>' +
+          summary +
+        '</div>' +
+        '<div class="bk-att-side">' + procStateBadge(s.processingState) + ownerHint + retryBtn + '</div>' +
         '</div>'
     }).join('')
-    if (rows) box.innerHTML = '<h3>' + esc(t('attachments')) + '</h3>' + rows
+    box.innerHTML = '<h3>' + esc(t('sourceFiles')) + ' <button class="btn small" data-action="refresh-sources">' + esc(t('refresh')) + '</button></h3>' + rows
+    if ((sums || []).some(s => s.processingState === 'processing')) scheduleSourcesPoll(noteId, attachments)
   }).catch(() => {})
+}
+function scheduleSourcesPoll(noteId, attachments){
+  clearTimeout(sourcesPollTimer)
+  if (state.view !== 'notes' || state.selectedNoteId !== noteId) return
+  sourcesPollTimer = setTimeout(() => {
+    if (state.view !== 'notes' || state.selectedNoteId !== noteId) return
+    renderSources(noteId, attachments)
+  }, 4000)
 }
 // Related Knowledge (lightweight): reads existing WeKnora Wiki-graph relations and
 // maps them back to local Notes. Optional — renders nothing when there is no data
@@ -1371,6 +1400,10 @@ function attCompanionHtml(a){
   if (a.companionNoteId) return '<button class="btn small" data-action="att-open-companion" data-id="' + esc(a.attachmentId) + '">📄 ' + esc(a.companionNoteTitle || t('attCompanion')) + '</button>'
   return '<button class="btn small" data-action="att-create-companion" data-id="' + esc(a.attachmentId) + '">+ ' + esc(t('attCreateCompanion')) + '</button>'
 }
+function sourceOwnerBadge(a){
+  if (!a.ownerCount) return '<span class="badge warn">' + esc(t('isolated')) + '</span>'
+  return '<span class="badge">📄 ' + a.ownerCount + '</span>'
+}
 function attRowHtml(a){
   const sel = state.attSelection.has(a.attachmentId)
   return '<div class="tree-row att-row ' + (sel ? 'selected' : '') + '" data-action="open-attachment" data-id="' + esc(a.attachmentId) + '">' +
@@ -1379,8 +1412,8 @@ function attRowHtml(a){
     '<span class="nm">' + esc(a.filename) + '</span>' +
     '<span class="muted small">' + esc(attTypeOf(a.mimeType)) + '</span>' +
     '<span class="muted small">' + fmtSize(a.sizeBytes) + '</span>' +
-    '<span class="muted small">' + esc(fmtStamp(a.createdAt)) + '</span>' +
-    knowledgeBadge(a.sync) +
+    procStateBadge(a.processingState) +
+    sourceOwnerBadge(a) +
     attCompanionHtml(a) +
     '</div>'
 }
@@ -1391,7 +1424,7 @@ function attCardHtml(a){
     '<div class="att-thumbwrap">' + (attTypeOf(a.mimeType) === 'image' ? '<img class="att-thumb" src="/pkw/attachment/' + esc(a.attachmentId) + '" alt="" loading="lazy">' : '<span class="att-ic big">📄</span>') + '</div>' +
     '<div class="att-card-name">' + esc(a.filename) + '</div>' +
     '<div class="muted small">' + fmtSize(a.sizeBytes) + ' · ' + esc(fmtStamp(a.createdAt)) + '</div>' +
-    '<div>' + knowledgeBadge(a.sync) + '</div>' +
+    '<div>' + procStateBadge(a.processingState) + sourceOwnerBadge(a) + '</div>' +
     '</div>'
 }
 function attToolbarHtml(){
@@ -1422,7 +1455,7 @@ function attBatchBarHtml(){
   return html
 }
 function attListHtml(list){
-  if (!list.length) return '<div class="empty"><h3>' + esc(t('emptyAttachments')) + '</h3><p class="muted">' + esc(t('attachmentsDesc')) + '</p><div class="cta"><button class="btn primary" data-action="upload-attachment">+ ' + esc(t('upload')) + '</button></div></div>'
+  if (!list.length) return '<div class="empty"><h3>' + esc(t('emptyAttachments')) + '</h3><p class="muted">' + esc(t('sourcesDesc')) + '</p><div class="cta"><button class="btn primary" data-action="upload-attachment">+ ' + esc(t('upload')) + '</button></div></div>'
   if (state.attMode === 'grid') return '<div class="att-grid">' + list.map(attCardHtml).join('') + '</div>'
   return list.map(attRowHtml).join('')
 }
@@ -1430,7 +1463,7 @@ function renderAttachmentsFrom(list){
   state.attachmentsCache = list || []
   $('#treeToolbar').innerHTML = ''
   $('#list').innerHTML = ''
-  $('#main').innerHTML = '<h2>' + esc(t('attachments')) + '</h2><p class="muted">' + esc(t('attachmentsDesc')) + '</p>' +
+  $('#main').innerHTML = '<h2>' + esc(t('sources')) + '</h2><p class="muted">' + esc(t('sourcesDesc')) + '</p>' +
     '<div id="attToolbar">' + attToolbarHtml() + '</div>' +
     '<div id="attBatchBar">' + attBatchBarHtml() + '</div>' +
     '<div id="attList">' + attListHtml(attFilteredList()) + '</div>'
@@ -1442,7 +1475,7 @@ function attRerenderList(){
 }
 async function renderAttachments(){
   const seq = viewSeq
-  $('#detail').innerHTML = '<h3>' + esc(t('attachments')) + '</h3><div class="kv muted">' + esc(t('attachmentDetailHint')) + '</div>'
+  $('#detail').innerHTML = '<h3>' + esc(t('sources')) + '</h3><div class="kv muted">' + esc(t('attachmentDetailHint')) + '</div>'
   if (state.attachmentsCache.length) { renderAttachmentsFrom(state.attachmentsCache); viewMark('warm-paint', 'cache=hit') }
   else { $('#list').innerHTML = ''; $('#main').innerHTML = '<div class="empty">' + esc(t('loading')) + '</div>'; viewMark('shell', 'cache=miss') }
   try {
@@ -1458,28 +1491,35 @@ async function openAttachment(id){
   state.selectedAttachmentId = id
   try {
     const d = await api('getAttachment', { attachmentId: id })
-    const a = d.attachment, s = d.sync, c = d.companionNote
-    const rel = await api('attachmentRelatedNotes', { attachmentId: id }).catch(() => [])
-    const kn = await api('getAttachmentKnowledge', { attachmentId: id }).catch(() => ({}))
-    const summaryHtml = (kn && (kn.summaryStatus || kn.description))
-      ? '<div class="kv"><b>' + esc(t('parseStatus')) + '</b> <span class="v">' + esc(kn.summaryStatus === 'completed' ? t('knowledgeIndexed') : (kn.summaryStatus || kn.parseStatus || '—')) + '</span></div>' +
-        (kn.description ? '<div class="kv"><b>' + esc(t('summary')) + '</b> <span class="v">' + esc(kn.description) + '</span></div>' : '')
+    const a = d.attachment, c = d.companionNote
+    const owners = d.owners || []
+    const summaryHtml = d.summary
+      ? '<h3>' + esc(t('summary')) + '</h3><div class="kv"><span class="v">' + esc(d.summary) + '</span></div>'
       : ''
+    const ownersHtml = owners.length
+      ? '<h3>' + esc(t('usedIn')) + '</h3>' + owners.map(r => '<div class="tree-row" data-action="open-note" data-id="' + esc(r.noteId) + '"><span class="ic">📄</span><span class="nm">' + esc(r.title) + '</span></div>').join('')
+      : '<h3>' + esc(t('usedIn')) + '</h3><div class="kv muted">' + esc(t('isolatedHint')) + '</div>'
     const companionHtml = c
       ? '<div class="kv"><b>' + esc(t('attCompanion')) + '</b> <span class="v"><a href="#" data-action="open-note" data-id="' + esc(c.noteId) + '">' + esc(c.title) + '</a></span></div>'
-      : '<div class="kv"><b>' + esc(t('attCompanion')) + '</b> <span class="v muted">' + esc(t('attNoCompanion')) + '</span></div>'
-    $('#detail').innerHTML = '<h3>' + esc(t('knowledge')) + '</h3>' + knowledgeBadge(s) +
+      : ''
+    const reparseBtn = (d.processingState === 'failed' || d.processingState === 'ready')
+      ? ' <button class="btn small" data-action="reparse-attachment" data-id="' + esc(id) + '">' + esc(t('reparse')) + '</button>'
+      : ''
+    $('#detail').innerHTML = '<h3>' + esc(t('sources')) + '</h3>' + procStateBadge(d.processingState) +
       '<div class="kv"><b>' + esc(t('mime')) + '</b> <span class="v mono">' + esc(a.mimeType) + '</span></div>' +
+      '<div class="kv"><b>' + esc(t('size')) + '</b> <span class="v">' + fmtSize(a.sizeBytes) + '</span></div>' +
+      '<div class="kv"><b>' + esc(t('updated')) + '</b> <span class="v">' + esc(fmtStamp(a.createdAt)) + '</span></div>' +
       summaryHtml +
       companionHtml +
-      (s && s.knowledgeId ? '<div class="kv"><b>' + esc(t('knowledgeId')) + '</b> <span class="v mono">' + esc(s.knowledgeId) + '</span></div>' + '<button class="btn small" data-action="reparse-attachment" data-id="' + esc(id) + '">' + esc(t('reparse')) + '</button>' : '') +
-      (rel && rel.length ? '<h3>' + esc(t('relatedNotes')) + '</h3>' + rel.map(r => '<div class="tree-row" data-action="open-note" data-id="' + esc(r.noteId) + '"><span class="ic">📄</span><span class="nm">' + esc(r.title) + '</span></div>').join('') : '') +
-      '<h3>' + esc(t('details')) + '</h3><div class="kv"><b>' + esc(t('attachmentId')) + '</b> <span class="v mono">' + esc(a.attachmentId) + '</span></div><div class="kv"><b>' + esc(t('size')) + '</b> ' + fmtSize(a.sizeBytes) + '</div><h3>' + esc(t('syncSection')) + '</h3>' + syncBadgeHtml(s) + '<h3>' + esc(t('maintenance')) + '</h3>' +
-      (c ? '<button class="btn small" data-action="att-open-companion" data-id="' + esc(id) + '">' + esc(t('attOpenCompanion')) + '</button>' : '<button class="btn small" data-action="att-create-companion" data-id="' + esc(id) + '">' + esc(t('attCreateCompanion')) + '</button>') +
-      ' <button class="btn small" data-action="att-copy-ref" data-id="' + esc(id) + '">' + esc(t('attCopyRef')) + '</button>' +
+      ownersHtml +
+      '<h3>' + esc(t('maintenance')) + '</h3>' +
+      '<button class="btn small" data-action="att-preview" data-id="' + esc(id) + '">' + esc(t('attPreview')) + '</button>' +
       ' <button class="btn small" data-action="download-attachment" data-id="' + esc(id) + '">' + esc(t('download')) + '</button>' +
-      ' <button class="btn small danger" data-action="delete-attachment" data-id="' + esc(id) + '">' + esc(t('del')) + '</button>'
-    await refreshAttachments()
+      reparseBtn +
+      (c ? ' <button class="btn small" data-action="att-open-companion" data-id="' + esc(id) + '">' + esc(t('attOpenCompanion')) + '</button>' : ' <button class="btn small" data-action="att-create-companion" data-id="' + esc(id) + '">' + esc(t('attCreateCompanion')) + '</button>') +
+      ' <button class="btn small" data-action="att-copy-ref" data-id="' + esc(id) + '">' + esc(t('attCopyRef')) + '</button>' +
+      ' <button class="btn small danger" data-action="delete-attachment" data-id="' + esc(id) + '">' + esc(t('del')) + '</button>' +
+      '<h3>' + esc(t('details')) + '</h3><div class="kv"><b>' + esc(t('attachmentId')) + '</b> <span class="v mono">' + esc(a.attachmentId) + '</span></div>'
   } catch (e) { toast(t('genericError') + ': ' + e.message, 'err') }
 }
 async function uploadFileBinary(file, indexable){
@@ -2772,7 +2812,8 @@ document.addEventListener('click', (e) => {
   else if (act === 'reconcile') reconcile()
   else if (act === 'upload-attachment') uploadDialog()
   else if (act === 'download-attachment') downloadAttachment(id)
-  else if (act === 'reparse-attachment') { api('reparseAttachmentKnowledge', { attachmentId: id }).then(() => { toast(t('reparseStarted'), 'ok'); openAttachment(id) }).catch(e => toast(t('genericError') + ': ' + e.message, 'err')) }
+  else if (act === 'reparse-attachment') { api('reparseAttachmentKnowledge', { attachmentId: id }).then(() => { toast(t('reparseStarted'), 'ok'); if (state.view === 'notes' && state.selectedNoteId !== null) renderSources(state.selectedNoteId, state.noteAttachments); else if (state.selectedAttachmentId !== null) openAttachment(id) }).catch(e => toast(t('genericError') + ': ' + e.message, 'err')) }
+  else if (act === 'refresh-sources') { if (state.selectedNoteId !== null) renderSources(state.selectedNoteId, state.noteAttachments) }
   else if (act === 'delete-attachment') delAttachment(id)
   else if (act === 'att-mode') { state.attMode = mode === 'grid' ? 'grid' : 'list'; localStorage.setItem('pkw-att-mode', state.attMode); renderAttachmentsFrom(state.attachmentsCache) }
   else if (act === 'att-type') { state.attType = el.dataset.type || 'all'; localStorage.setItem('pkw-att-type', state.attType); renderAttachmentsFrom(state.attachmentsCache) }

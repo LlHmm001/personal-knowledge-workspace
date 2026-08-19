@@ -221,4 +221,14 @@ describe('PKW web UI (served page)', () => {
     expect(js).not.toContain('remote.knowledgeId')
     expect(js).not.toContain('externalWeKnora')
   })
+
+  it('ships the Knowledge Sources surface (attachment → sources, owner + processing state)', () => {
+    const js = script()
+    expect(js).toContain('renderSources')
+    expect(js).toContain('sourceOwnerBadge')
+    expect(js).toContain('refresh-sources')
+    expect(js).toContain('noteAttachmentSummaries')
+    expect(js).toContain('sourceFiles')
+    expect(js).toContain('isolatedHint')
+  })
 })

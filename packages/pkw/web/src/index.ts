@@ -512,8 +512,14 @@ export class PkwWebService extends Service {
       case 'listTrashFolders': return (await this.notes.listTrashFolders()).map(e => ({ trashEntryId: String(e.trashEntryId), originalPath: e.originalPath, deletedAt: e.deletedAt }))
       case 'listAttachments': {
         const snap = this.syncSnapshot()
+        const owners = await this.attachmentOwners()
         return this.attachments.list().map(a => {
           const companion = a.companionNoteId !== undefined ? this.notes.get(a.companionNoteId) : undefined
+          const derived = this.sync.getDerivedContent(a.id)
+          const ownerNotes = owners.get(String(a.id)) ?? []
+          const key = `attachment:${String(a.id)}`
+          const mapping = this.sync.getAttachmentMapping(a.id)
+          const intent = snap.intents.get(key)
           return {
             attachmentId: String(a.id),
             filename: a.filename,
@@ -525,20 +531,19 @@ export class PkwWebService extends Service {
             indexable: a.indexable !== false,
             companionNoteId: a.companionNoteId !== undefined ? String(a.companionNoteId) : undefined,
             companionNoteTitle: companion !== undefined && companion.deletedAt === undefined ? companion.title : undefined,
-            sync: this.syncView('attachment', String(a.id), snap),
+            processingState: this.sync.getAttachmentProcessingState(a.id),
+            summary: derived?.summary,
+            hasSummary: derived?.summary !== undefined && derived.summary.trim() !== '',
+            ownerCount: ownerNotes.length,
+            indexed: mapping !== undefined && mapping.knowledgeId !== undefined && mapping.syncState === 'synced',
+            pending: snap.dirty.has(key) || intent !== undefined,
+            error: intent?.lastError,
           }
         })
       }
       case 'attachmentRelatedNotes': {
-        // Note↔Attachment relation is derived from Markdown (no structural table).
-        const id = String(args.attachmentId)
-        const out: Array<{ noteId: string; title: string }> = []
-        for (const n of this.notes.list({})) {
-          if (n.deletedAt !== undefined) continue
-          const doc = await this.notes.getDocument(n.noteId)
-          if (doc.attachments.some(a => String(a.attachmentId) === id)) out.push({ noteId: String(n.noteId), title: n.title })
-        }
-        return out
+        const owners = await this.attachmentOwners()
+        return owners.get(String(args.attachmentId)) ?? []
       }
       case 'getAttachmentKnowledge': {
         // Remote Attachment Knowledge projection (WeKnora-derived summary).
@@ -558,11 +563,12 @@ export class PkwWebService extends Service {
         return { reparse: true }
       }
       case 'noteAttachmentSummaries': {
-        // Business Knowledge Viewer aggregation: for a Note's referenced
+        // Business Knowledge Viewer (Sources) aggregation: for a Note's referenced
         // attachments, surface filename/mime/size + processing state + summary
-        // (when available). No remote identity is exposed to the user.
+        // (when available) + owner count. No remote identity is exposed.
         const doc = await this.notes.getDocument(NoteId(String(args.noteId)))
-        const out: Array<{ attachmentId: string; filename: string; mimeType?: string; sizeBytes?: number; processingState?: string; description?: string; summaryStatus?: string }> = []
+        const owners = await this.attachmentOwners()
+        const out: Array<{ attachmentId: string; filename: string; mimeType?: string; sizeBytes?: number; processingState?: string; description?: string; summaryStatus?: string; ownerCount?: number }> = []
         for (const ref of doc.attachments) {
           const rec = this.attachments.get(ref.attachmentId)
           const derived = this.sync.getDerivedContent(ref.attachmentId)
@@ -574,6 +580,7 @@ export class PkwWebService extends Service {
             processingState: this.sync.getAttachmentProcessingState(ref.attachmentId),
             description: derived?.summary,
             summaryStatus: derived !== undefined ? 'completed' : undefined,
+            ownerCount: (owners.get(String(ref.attachmentId)) ?? []).length,
           })
         }
         return out
@@ -588,6 +595,12 @@ export class PkwWebService extends Service {
         const rec = this.attachments.get(id)
         if (rec === undefined) throw new Error(`pkwWeb: unknown attachment '${args.attachmentId}'`)
         const companion = rec.companionNoteId !== undefined ? this.notes.get(rec.companionNoteId) : undefined
+        const derived = this.sync.getDerivedContent(id)
+        const owners = (await this.attachmentOwners()).get(String(id)) ?? []
+        const mapping = this.sync.getAttachmentMapping(id)
+        const snap = this.syncSnapshot()
+        const key = `attachment:${String(id)}`
+        const intent = snap.intents.get(key)
         return {
           attachment: {
             attachmentId: String(rec.id), filename: rec.filename, mimeType: rec.mimeType,
@@ -598,7 +611,14 @@ export class PkwWebService extends Service {
           companionNote: companion !== undefined && companion.deletedAt === undefined
             ? { noteId: String(companion.noteId), relativePath: companion.relativePath, title: companion.title }
             : null,
-          sync: this.syncView('attachment', String(rec.id), this.syncSnapshot()),
+          processingState: this.sync.getAttachmentProcessingState(id),
+          summary: derived?.summary,
+          hasSummary: derived?.summary !== undefined && derived.summary.trim() !== '',
+          owners,
+          ownerCount: owners.length,
+          indexed: mapping !== undefined && mapping.knowledgeId !== undefined && mapping.syncState === 'synced',
+          pending: snap.dirty.has(key) || intent !== undefined,
+          error: intent?.lastError,
         }
       }
       case 'downloadAttachment': {
@@ -970,6 +990,25 @@ export class PkwWebService extends Service {
       if (out.length >= 5) break
     }
     return out
+  }
+
+  /**
+   * Note↔Attachment relation (derived from canonical Markdown, no structural
+   * table): attachmentId → referencing Notes. One pass over the Notes registry;
+   * used for owner counts, "used by" lists, and isolated-attachment detection.
+   */
+  private async attachmentOwners(): Promise<Map<string, Array<{ noteId: string; title: string }>>> {
+    const map = new Map<string, Array<{ noteId: string; title: string }>>()
+    for (const n of this.notes.list()) {
+      const doc = await this.notes.getDocument(n.noteId)
+      for (const ref of doc.attachments) {
+        const key = String(ref.attachmentId)
+        let arr = map.get(key)
+        if (arr === undefined) { arr = []; map.set(key, arr) }
+        arr.push({ noteId: String(n.noteId), title: n.title })
+      }
+    }
+    return map
   }
 
   private async summary(): Promise<unknown> {

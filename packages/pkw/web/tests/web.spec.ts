@@ -167,7 +167,7 @@ describe('PKW Web Host Bridge (real Core integration)', () => {
     expect(Array.isArray(s.recent)).toBe(true)
   })
 
-  it('listNotes includes folder + per-entity sync view; listAttachments includes sync view', async () => {
+  it('listNotes includes folder + per-entity sync view; listAttachments exposes source fields (no remote ids)', async () => {
     const { web } = await boot()
     await web.call('createNote', { relativePath: 'sub/a.md', markdown: '# hi\n' })
     const notes = await web.call('listNotes', {}) as Array<Record<string, unknown>>
@@ -175,7 +175,31 @@ describe('PKW Web Host Bridge (real Core integration)', () => {
     expect(notes[0]!.sync).toBeDefined()
     await web.call('uploadAttachment', { filename: 'x.txt', mimeType: 'text/plain', contentBase64: Buffer.from('hi').toString('base64') })
     const atts = await web.call('listAttachments', {}) as Array<Record<string, unknown>>
-    expect(atts[0]!.sync).toBeDefined()
+    expect(atts[0]!.processingState).toBeDefined()
+    expect(atts[0]!.ownerCount).toBe(0)
+    expect(atts[0]!.hasSummary).toBe(false)
+    expect(atts[0]!).not.toHaveProperty('knowledgeId')
+    expect(atts[0]!).not.toHaveProperty('kbId')
+    expect(atts[0]!).not.toHaveProperty('sync')
+  })
+
+  it('attachment owners surface through getAttachment: isolated → referenced by a Note (stable NoteId)', async () => {
+    const { web } = await boot()
+    const up = await web.call('uploadAttachment', { filename: 'x.txt', mimeType: 'text/plain', contentBase64: Buffer.from('hello').toString('base64') }) as { attachmentId: string }
+    // Isolated: no Note references the attachment yet.
+    const isolated = await web.call('getAttachment', { attachmentId: up.attachmentId }) as { owners: Array<{ noteId: string; title: string }>; ownerCount: number; processingState: string }
+    expect(isolated.ownerCount).toBe(0)
+    expect(isolated.owners).toHaveLength(0)
+    expect(['waiting', 'processing', 'ready', 'failed']).toContain(isolated.processingState)
+    // Create a Companion Note → the attachment is now referenced by exactly one Note.
+    const note = await web.call('createCompanionNote', { attachmentId: up.attachmentId, folder: '' }) as { noteId: string }
+    const det = await web.call('getAttachment', { attachmentId: up.attachmentId }) as { owners: Array<{ noteId: string; title: string }>; ownerCount: number }
+    expect(det.ownerCount).toBe(1)
+    expect(det.owners[0]!.noteId).toBe(note.noteId)
+    // And listAttachments reflects the owner count without exposing remote ids.
+    const list = await web.call('listAttachments', {}) as Array<Record<string, unknown>>
+    expect(list[0]!.ownerCount).toBe(1)
+    expect(list[0]!).not.toHaveProperty('knowledgeId')
   })
 
   it('getAttachment + downloadAttachment round-trip through the bridge', async () => {
