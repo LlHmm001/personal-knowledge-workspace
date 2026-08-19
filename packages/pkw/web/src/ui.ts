@@ -428,6 +428,8 @@ const state = {
   matricesCache: [],
   attachmentsCache: [],
   searchContext: null,
+  searchQuery: '',
+  searchResults: null,
   attMode: localStorage.getItem('pkw-att-mode') || 'list',
   attQuery: localStorage.getItem('pkw-att-query') || '',
   attType: localStorage.getItem('pkw-att-type') || 'all',
@@ -731,6 +733,9 @@ async function openNote(noteId){
   try {
     const d = await api('getNote', { noteId })
     state.editor = { noteId, persistedMarkdown: d.markdown, body: d.body || '', frontmatter: d.frontmatter || '', dirty: false, saving: false, mode: localStorage.getItem('pkw-editor-mode') || 'live', observedRevision: d.note && d.note.observedRevision, contentHash: d.note && d.note.contentHash }
+    // Expand parent folders so the opened Note is visible + highlighted in the tree
+    // (identity stays NoteId; path is only used to reveal ancestors).
+    if (d.note && d.note.relativePath) expandFoldersForPath(d.note.relativePath)
     $('#main').innerHTML = renderEditorShell(d)
     bindEditor()
     $('#detail').innerHTML = detailNote(d)
@@ -746,6 +751,14 @@ async function openNote(noteId){
 function renderMissingNote(noteId){
   $('#main').innerHTML = '<div class="empty"><h3>⚠ ' + esc(t('noteMissing')) + '</h3><p class="muted">' + esc(t('noteMissingBody', { id: noteId })) + '</p><div class="cta"><button class="btn" data-action="rescan-notes">' + esc(t('rescan')) + '</button> <button class="btn danger" data-action="remove-missing-note" data-id="' + esc(noteId) + '">' + esc(t('removeFromWorkspace')) + '</button></div></div>'
   $('#detail').innerHTML = '<h3>⚠ ' + esc(t('noteMissing')) + '</h3><div class="kv"><b>' + esc(t('noteId')) + '</b> <span class="v mono">' + esc(noteId) + '</span></div>'
+}
+function expandFoldersForPath(relativePath){
+  const parts = String(relativePath || '').split('/')
+  let cur = ''
+  for (let i = 0; i < parts.length - 1; i++) {
+    cur = cur === '' ? parts[i] : cur + '/' + parts[i]
+    state.collapsed.delete(cur)
+  }
 }
 function searchContextBanner(ctx){
   let label = t('noteBodyMatch')
@@ -1838,7 +1851,13 @@ async function renderTrash(){
   } catch (e) { if (seq === viewSeq) $('#main').innerHTML = '<div class="empty">' + esc(t('genericError')) + ': ' + esc(e.message) + '</div>' }
 }
 
-function renderSearchView(){ $('#list').innerHTML = ''; $('#treeToolbar').innerHTML = ''; $('#detail').innerHTML = ''; $('#main').innerHTML = '<h2>' + esc(t('search')) + '</h2><p class="muted">' + esc(t('searchHint')) + '</p>' }
+function renderSearchView(){
+  $('#list').innerHTML = ''; $('#treeToolbar').innerHTML = ''; $('#detail').innerHTML = ''
+  // Restore the last search (query + results) so Search → Note → Back returns
+  // to the same results instead of a blank search view.
+  if (state.searchQuery && state.searchResults) renderSearchResults(state.searchQuery, state.searchResults)
+  else $('#main').innerHTML = '<h2>' + esc(t('search')) + '</h2><p class="muted">' + esc(t('searchHint')) + '</p>'
+}
 // ── Knowledge view (Wiki / Graph / Search) — WeKnora-derived projection ──────
 function renderKnowledgeView(){
   const tabs = [['search', t('knowledgeSearchTab')], ['wiki', t('knowledgeWiki')], ['graph', t('knowledgeGraph')]]
@@ -1942,42 +1961,40 @@ function drawGraph(nodes, edges){
   canvas._fit = () => { panX = 0; panY = 0; scale = 1; render() }
   canvas._toggleRel = () => { showRel = !showRel; const b = document.querySelector('[data-action="graph-toggle-rel"]'); if (b) b.textContent = showRel ? t('graphHideRelations') : t('graphShowRelations'); render() }
 }
+function renderSearchResults(q, results){
+  if (!results || !results.length) { $('#main').innerHTML = '<div class="empty">' + t('noHits', { q: esc(q) }) + '</div>'; return }
+  $('#main').innerHTML = '<h2>' + esc(t('search')) + '<span class="sub">' + esc(q) + '</span></h2>' + results.map(r => {
+    const local = r.local
+    const title = r.remote.title || r.remote.filename || r.remote.knowledgeId
+    const kind = local ? (local.entityType === 'note' ? t('noteLabel') : t('attachmentLabel')) : t('externalWeKnora')
+    const openTarget = local && local.entityType === 'attachment' && local.companionNoteId
+      ? { action: 'open-note', id: local.companionNoteId, label: t('openNote') }
+      : local ? (local.entityType === 'note' ? { action: 'open-note', id: local.entityId, label: t('openNote') } : { action: 'open-attachment', id: local.entityId, label: t('openAttachment') }) : null
+    const openBtn = openTarget
+      ? '<button data-action="' + openTarget.action + '" data-id="' + esc(openTarget.id) + '"' +
+        (local && local.entityType === 'note'
+          ? ' data-reason="' + esc(local.matchReason || 'note') + '" data-attname="' + esc(local.matchedAttachmentId ? (r.remote.filename || local.matchedAttachmentId) : '') + '"'
+          : '') +
+        '>' + esc(openTarget.label) + '</button>'
+      : ''
+    let provenance = ''
+    if (local && local.entityType === 'note') {
+      const attName = r.remote.filename || local.matchedAttachmentId || ''
+      if (local.matchReason === 'both') provenance = t('noteBodyMatch') + ' · ' + t('attMatch') + ' · ' + esc(attName)
+      else if (local.matchReason === 'attachment' || local.matchedAttachmentId) provenance = t('attMatch') + ' · ' + esc(attName)
+      else provenance = t('noteBodyMatch')
+    }
+    return '<div class="hit"><div class="t">' + esc(title) + '</div><div class="snippet">' + esc((r.remote.content || '').slice(0, 220)) + '</div><div class="ref">' + esc(t('score')) + ' ' + (r.remote.score != null ? r.remote.score.toFixed(3) : '—') + ' · ' + esc(kind) + (provenance ? ' · ' + provenance : '') + openBtn + '</div></div>'
+  }).join('')
+}
 async function runSearch(q){
+  state.searchQuery = q
   $('#main').innerHTML = '<div class="empty">' + esc(t('searching')) + '</div>'
   try {
     const results = await api('search', { query: q, limit: 10 })
-    if (!results.length) { $('#main').innerHTML = '<div class="empty">' + t('noHits', { q: esc(q) }) + '</div>'; return }
-    $('#main').innerHTML = '<h2>' + esc(t('search')) + '<span class="sub">' + esc(q) + '</span></h2>' + results.map(r => {
-      const local = r.local
-      const title = r.remote.title || r.remote.filename || r.remote.knowledgeId
-      const kind = local ? (local.entityType === 'note' ? t('noteLabel') : t('attachmentLabel')) : t('externalWeKnora')
-      // Attachment hit with a Companion Note → open the Companion Note (one knowledge object).
-      const openTarget = local && local.entityType === 'attachment' && local.companionNoteId
-        ? { action: 'open-note', id: local.companionNoteId, label: t('openNote') }
-        : local ? (local.entityType === 'note' ? { action: 'open-note', id: local.entityId, label: t('openNote') } : { action: 'open-attachment', id: local.entityId, label: t('openAttachment') }) : null
-      const openBtn = openTarget
-        ? '<button data-action="' + openTarget.action + '" data-id="' + esc(openTarget.id) + '"' +
-          (local && local.entityType === 'note'
-            ? ' data-reason="' + esc(local.matchReason || 'note') + '" data-attname="' + esc(local.matchedAttachmentId ? (r.remote.filename || local.matchedAttachmentId) : '') + '"'
-            : '') +
-          '>' + esc(openTarget.label) + '</button>'
-        : ''
-      // Federated search provenance: show WHY this Business Knowledge matched
-      // (Main-KB note body vs Processing-KB attachment, remapped to the owner Note).
-      let provenance = ''
-      if (local && local.entityType === 'note') {
-        const attName = r.remote.filename || local.matchedAttachmentId || ''
-        if (local.matchReason === 'both') {
-          provenance = t('noteBodyMatch') + ' · ' + t('attMatch') + ' · ' + esc(attName)
-        } else if (local.matchReason === 'attachment' || local.matchedAttachmentId) {
-          provenance = t('attMatch') + ' · ' + esc(attName)
-        } else {
-          provenance = t('noteBodyMatch')
-        }
-      }
-      return '<div class="hit"><div class="t">' + esc(title) + '</div><div class="snippet">' + esc((r.remote.content || '').slice(0, 220)) + '</div><div class="ref">' + esc(t('score')) + ' ' + (r.remote.score != null ? r.remote.score.toFixed(3) : '—') + ' · ' + esc(kind) + (provenance ? ' · ' + provenance : '') + openBtn + '</div></div>'
-    }).join('')
-  } catch (e) { $('#main').innerHTML = '<div class="empty">' + esc(t('searchFailed')) + ': ' + esc(e.message) + '</div>' }
+    state.searchResults = results
+    renderSearchResults(q, results)
+  } catch (e) { state.searchResults = null; $('#main').innerHTML = '<div class="empty">' + esc(t('searchFailed')) + ': ' + esc(e.message) + '</div>' }
 }
 async function syncNow(){ toast(t('syncingAll'), 'warn'); try { await api('syncNow'); toast(t('ok'), 'ok'); await render() } catch (e) { toast(t('genericError') + ': ' + e.message, 'err') } }
 async function syncEntity(et, id){ try { await api('syncEntity', { entityType: et, entityId: id }); toast(t('ok'), 'ok'); if (et === 'note' && state.selectedNoteId === id) await openNote(id); else await renderTree() } catch (e) { toast(t('genericError') + ': ' + e.message, 'err') } }
