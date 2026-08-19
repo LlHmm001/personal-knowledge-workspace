@@ -239,6 +239,8 @@ mark{background:var(--mark-bg);border-radius:2px;padding:0 2px}
 .bk-att-main{flex:1 1 auto;min-width:0}
 .bk-att-name{font-weight:600;margin-bottom:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bk-summary{margin-top:6px;font-size:13px;line-height:1.5}
+/* Search → Viewer navigation context */
+.search-context-banner{display:inline-block;margin:2px 0 4px;padding:3px 10px;border-radius:999px;font-size:12px;background:var(--bg-hover);color:var(--text-secondary);border:1px solid var(--border)}
 </style>
 </head>
 <body>
@@ -423,6 +425,7 @@ const state = {
   tasksCache: [],
   matricesCache: [],
   attachmentsCache: [],
+  searchContext: null,
   attMode: localStorage.getItem('pkw-att-mode') || 'list',
   attQuery: localStorage.getItem('pkw-att-query') || '',
   attType: localStorage.getItem('pkw-att-type') || 'all',
@@ -742,6 +745,12 @@ function renderMissingNote(noteId){
   $('#main').innerHTML = '<div class="empty"><h3>⚠ ' + esc(t('noteMissing')) + '</h3><p class="muted">' + esc(t('noteMissingBody', { id: noteId })) + '</p><div class="cta"><button class="btn" data-action="rescan-notes">' + esc(t('rescan')) + '</button> <button class="btn danger" data-action="remove-missing-note" data-id="' + esc(noteId) + '">' + esc(t('removeFromWorkspace')) + '</button></div></div>'
   $('#detail').innerHTML = '<h3>⚠ ' + esc(t('noteMissing')) + '</h3><div class="kv"><b>' + esc(t('noteId')) + '</b> <span class="v mono">' + esc(noteId) + '</span></div>'
 }
+function searchContextBanner(ctx){
+  let label = t('noteBodyMatch')
+  if (ctx.reason === 'both') label = t('noteBodyMatch') + ' · ' + t('attMatch') + ' · ' + esc(ctx.attName || '')
+  else if (ctx.reason === 'attachment') label = t('attMatch') + ' · ' + esc(ctx.attName || '')
+  return '<div class="search-context-banner">' + label + '</div>'
+}
 function renderEditorShell(d){
   const mode = state.editor.mode
   const fm = parseFrontmatterClient(d.markdown)
@@ -757,6 +766,7 @@ function renderEditorShell(d){
     '<span class="spacer"></span>' + modeBtn('live', 'modeLive') + modeBtn('source', 'modeSource') + modeBtn('reading', 'modeReading') +
     '</div>' +
     '<div class="editor-head"><span class="title">' + esc(fm.title || d.note.title || '') + '</span><span class="path">' + esc(d.note.relativePath) + '</span></div>' +
+    (state.searchContext ? searchContextBanner(state.searchContext) : '') +
     '<div id="editorPane">' +
       (mode === 'live' ? '<div id="vditor" style="min-height:56vh"><div class="empty">' + esc(t('editorLoading')) + '</div></div>' : '') +
       (mode === 'source' ? '<textarea id="editor" aria-label="Markdown">' + esc(d.markdown) + '</textarea>' : '') +
@@ -1943,7 +1953,13 @@ async function runSearch(q){
       const openTarget = local && local.entityType === 'attachment' && local.companionNoteId
         ? { action: 'open-note', id: local.companionNoteId, label: t('openNote') }
         : local ? (local.entityType === 'note' ? { action: 'open-note', id: local.entityId, label: t('openNote') } : { action: 'open-attachment', id: local.entityId, label: t('openAttachment') }) : null
-      const openBtn = openTarget ? '<button data-action="' + openTarget.action + '" data-id="' + esc(openTarget.id) + '">' + esc(openTarget.label) + '</button>' : ''
+      const openBtn = openTarget
+        ? '<button data-action="' + openTarget.action + '" data-id="' + esc(openTarget.id) + '"' +
+          (local && local.entityType === 'note'
+            ? ' data-reason="' + esc(local.matchReason || 'note') + '" data-attname="' + esc(local.matchedAttachmentId ? (r.remote.filename || local.matchedAttachmentId) : '') + '"'
+            : '') +
+          '>' + esc(openTarget.label) + '</button>'
+        : ''
       // Federated search provenance: show WHY this Business Knowledge matched
       // (Main-KB note body vs Processing-KB attachment, remapped to the owner Note).
       let provenance = ''
@@ -2611,7 +2627,7 @@ document.addEventListener('click', (e) => {
   else if (act === 'new-note-here') { state.selectedFolder = path; newNote() }
   else if (act === 'new-folder') newFolder(state.selectedFolder || '')
   else if (act === 'new-subfolder') newFolder(path)
-  else if (act === 'open-note') { setView('notes'); openNote(id) }
+  else if (act === 'open-note') { setView('notes'); if (el.dataset.reason) state.searchContext = { reason: el.dataset.reason, attName: el.dataset.attname || '' }; else state.searchContext = null; openNote(id) }
   else if (act === 'open-attachment') { setView('attachments'); openAttachment(id) }
   else if (act === 'select-folder') { state.selectedFolder = path; state.selectedNoteId = null; renderTree(); renderFolderMain(path); renderDetail() }
   else if (act === 'toggle-folder') { if (state.collapsed.has(path)) state.collapsed.delete(path); else state.collapsed.add(path); const c = document.querySelector('.tree-children[data-folder="' + CSS.escape(path) + '"]'); if (c) { c.style.display = state.collapsed.has(path) ? 'none' : ''; el.textContent = state.collapsed.has(path) ? '▸' : '▾' } }
