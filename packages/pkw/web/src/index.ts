@@ -121,6 +121,7 @@ function plainTextSnippet(markdown: string, max = 220): string {
   text = text
     .replace(/^---[\s\S]*?---\s*/m, '')            // frontmatter
     .replace(/```[\s\S]*?```/g, ' ')               // fenced code
+    .replace(/<[^>]+>/g, ' ')                      // raw HTML (tables etc.)
     .replace(/`([^`]+)`/g, '$1')
     .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
     .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
@@ -942,7 +943,24 @@ export class PkwWebService extends Service {
   private enrichRetrievalResults(results: RetrievalResult[]): unknown[] {
     const out: unknown[] = []
     for (const r of results) {
-      const remote = { content: r.remote.content, snippet: plainTextSnippet(r.remote.content, 220), title: r.remote.title, filename: r.remote.filename, score: r.remote.score }
+      // Best evidence: top 2 distinct cleaned snippets from the aggregated chunks.
+      const evidenceSnippets: string[] = []
+      if (r.evidence !== undefined && r.evidence.length > 0) {
+        const sorted = r.evidence.slice().sort((a, b) => b.score - a.score)
+        for (const ev of sorted) {
+          const s = plainTextSnippet(ev.content, 200)
+          if (s !== '' && !evidenceSnippets.includes(s)) evidenceSnippets.push(s)
+          if (evidenceSnippets.length >= 2) break
+        }
+      }
+      const remote = {
+        content: r.remote.content,
+        snippet: plainTextSnippet(r.remote.content, 220),
+        bestEvidence: evidenceSnippets,
+        title: r.remote.title,
+        filename: r.remote.filename,
+        score: r.remote.score,
+      }
       if (r.local === undefined) { out.push({ remote }); continue }
       // Stale-result guard: a remote hit whose local entity no longer exists (deleted
       // or archived) must NOT surface as a Business Knowledge result. The async

@@ -199,6 +199,14 @@ const M_SYNCED = 'synced'
 const M_STALE = 'stale'
 const M_DELETED = 'deleted'
 
+export interface RetrievalEvidence {
+  chunkId: string
+  content: string
+  score: number
+  filename?: string
+  source?: 'main' | 'processing'
+}
+
 export interface RetrievalResult {
   remote: {
     kbId: string
@@ -222,6 +230,24 @@ export interface RetrievalResult {
     matchedAttachmentId?: string
     /** Why this Business Knowledge matched: 'note' (Main KB body), 'attachment' (Processing KB remapped), or 'both'. */
     matchReason?: 'note' | 'attachment' | 'both'
+  }
+  /** Internal retrieval evidence: every chunk that matched, aggregated to one business object. Never exposed verbatim to the user. */
+  evidence?: RetrievalEvidence[]
+}
+
+/**
+ * Map WeKnora's real parse status enum to the user-facing processing phase.
+ * Unknown values map to 'processing' (处理中), never 'waiting' (等待解析), so a
+ * status we don't recognise still shows "working on it" rather than "not started".
+ */
+export function mapWeKnoraProcessingPhase(parseStatus?: string): 'waiting' | 'processing' | 'optimizing' | 'ready' | 'failed' {
+  switch (parseStatus) {
+    case 'completed': return 'ready'
+    case 'failed': case 'error': return 'failed'
+    case 'optimizing': return 'optimizing'
+    case 'processing': case 'parsing': return 'processing'
+    case 'pending': case 'queued': case 'waiting': case 'none': case '': return 'waiting'
+    default: return 'processing'
   }
 }
 
@@ -663,12 +689,21 @@ export class WeKnoraSyncService extends Service {
   }
 
   /** User-facing processing state for an attachment (no remote identity exposed). */
-  getAttachmentProcessingState(attachmentId: AttachmentIdT): 'waiting' | 'processing' | 'ready' | 'failed' {
+  getAttachmentProcessingState(attachmentId: AttachmentIdT): 'waiting' | 'processing' | 'optimizing' | 'ready' | 'failed' {
     const rec = this.reqProcessing().get(String(attachmentId))
-    if (rec === undefined) return 'waiting'
-    if (rec.state === 'derived-ready') return 'ready'
-    if (rec.state === 'failed') return 'failed'
-    return 'processing'
+    if (rec !== undefined) {
+      if (rec.state === 'derived-ready') return 'ready'
+      if (rec.state === 'failed') return 'failed'
+      // in-flight ('parsing') → map from the captured remote parse status.
+      return mapWeKnoraProcessingPhase(rec.parseStatus)
+    }
+    // Standalone attachment (Sources): the processing state lives on the mapping's
+    // remote parse status, NOT the note-scoped processing table.
+    const mapping = this.getAttachmentMapping(attachmentId)
+    if (mapping !== undefined && mapping.knowledgeId !== undefined) {
+      return mapWeKnoraProcessingPhase(mapping.remoteParseStatus)
+    }
+    return 'waiting'
   }
 
   /** AttachmentIds whose captured config fingerprint differs from the current one (needs reparse). */
@@ -1461,25 +1496,60 @@ export class WeKnoraSyncService extends Service {
       .map(chunk => this.toRetrievalResult(kbId, chunk))
 
     // A2 federation: also search the Processing KB and remap hits to Business
-    // Knowledge (owner Notes), then merge into the Main results (dedupe by NoteId).
+    // Knowledge (owner Notes), then merge into the Main results.
     const processing = await this.searchProcessingForBusiness(query, limit)
 
-    const merged = new Map<string, RetrievalResult>()
+    // Retrieval Core (Foundation-lite): aggregate chunk-level EVIDENCE into one
+    // BUSINESS result per Note / Attachment / Knowledge. A single PDF's N chunks
+    // must never surface as N duplicate cards.
+    const byBusiness = new Map<string, RetrievalResult>()
     for (const r of [...main, ...processing]) {
-      const noteId = r.local?.entityType === ENTITY_NOTE ? r.local.entityId : undefined
-      if (noteId === undefined) { merged.set(`raw:${r.remote.knowledgeId}:${r.remote.chunkId}`, r); continue }
-      const existing = merged.get(noteId)
-      if (existing === undefined) { merged.set(noteId, r); continue }
-      // Same Business Knowledge hit from both Main (body) and Processing (attachment):
-      // keep one result but record both match reasons.
-      if (r.local?.matchedAttachmentId !== undefined) {
-        existing.local!.matchedAttachmentId = r.local.matchedAttachmentId
-        // A prior body hit (matchReason undefined) + this attachment hit → 'both'.
-        if (existing.local!.matchReason === undefined) existing.local!.matchReason = 'both'
-        if (existing.remote.score < r.remote.score) existing.remote.score = r.remote.score
+      const key = this.businessKey(r)
+      const existing = byBusiness.get(key)
+      if (existing === undefined) {
+        r.evidence = [{ chunkId: r.remote.chunkId, content: r.remote.content, score: r.remote.score, filename: r.remote.filename, source: r.remote.kbId === kbId ? 'main' : 'processing' }]
+        byBusiness.set(key, r)
+        continue
+      }
+      // Merge evidence; keep the best-scoring chunk as the headline.
+      existing.evidence!.push({ chunkId: r.remote.chunkId, content: r.remote.content, score: r.remote.score, filename: r.remote.filename, source: r.remote.kbId === kbId ? 'main' : 'processing' })
+      if (r.remote.score > existing.remote.score) {
+        existing.remote.score = r.remote.score
+        existing.remote.content = r.remote.content
+        existing.remote.chunkId = r.remote.chunkId
+        existing.remote.kbId = r.remote.kbId
+      }
+      // Match-reason merge: body hit + attachment hit → 'both'.
+      if (existing.local !== undefined && r.local !== undefined) {
+        if (r.local.matchedAttachmentId !== undefined && existing.local.matchedAttachmentId === undefined) {
+          existing.local.matchedAttachmentId = r.local.matchedAttachmentId
+          existing.local.matchReason = existing.local.matchReason === undefined ? 'attachment' : 'both'
+        } else if (existing.local.matchReason === 'attachment' && r.local.matchReason === undefined && r.local.entityType === ENTITY_NOTE) {
+          existing.local.matchReason = 'both'
+        }
       }
     }
-    return [...merged.values()]
+
+    const results = [...byBusiness.values()]
+    if (results.length === 0) return []
+    // Lightweight relevance floor (rules, not a trained reranker): keep results
+    // within a relative band of the top score, with a conservative absolute floor.
+    results.sort((a, b) => b.remote.score - a.remote.score)
+    const top = results[0]!.remote.score
+    const floor = Math.max(0.1, top * 0.25)
+    return results.filter(r => r.remote.score >= floor).slice(0, limit)
+  }
+
+  /** Business-object identity for retrieval aggregation (Note > Attachment > Knowledge). */
+  private businessKey(r: RetrievalResult): string {
+    if (r.local === undefined) return `knowledge:${r.remote.knowledgeId}`
+    if (r.local.entityType === ENTITY_NOTE) return `note:${r.local.entityId}`
+    if (r.local.entityType === ENTITY_ATTACHMENT) {
+      // A standalone attachment with a Companion Note surfaces as ONE Note object.
+      if (r.local.companionNoteId !== undefined) return `note:${r.local.companionNoteId}`
+      return `attachment:${r.local.entityId}`
+    }
+    return `knowledge:${r.remote.knowledgeId}`
   }
 
   /** A2: search the Processing KB and remap hits → owner Note (Business Knowledge). */

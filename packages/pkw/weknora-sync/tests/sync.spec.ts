@@ -20,7 +20,7 @@ import PkwWorkspaceService from '../../workspace/src/index.ts'
 import NotesService from '../../notes/src/index.ts'
 import AttachmentsService from '../../attachments/src/index.ts'
 import WeKnoraClient from '../../weknora/src/index.ts'
-import WeKnoraSyncService from '../src/index.ts'
+import WeKnoraSyncService, { mapWeKnoraProcessingPhase } from '../src/index.ts'
 import { classifyOutcome } from '../src/outcome.ts'
 
 const dirs: string[] = []
@@ -950,5 +950,20 @@ describe('credential wiring + unavailable', () => {
     const note = await notes.create({ relativePath: 'a.md', markdown: '# v1\n' })
     await sync.drain()
     expect(fake.manuals.size).toBe(0) // no remote call attempted
+  })
+})
+
+describe('mapWeKnoraProcessingPhase', () => {
+  it('maps real WeKnora parse statuses to user phases (unknown → processing, never waiting)', () => {
+    expect(mapWeKnoraProcessingPhase('completed')).toBe('ready')
+    expect(mapWeKnoraProcessingPhase('failed')).toBe('failed')
+    expect(mapWeKnoraProcessingPhase('error')).toBe('failed')
+    expect(mapWeKnoraProcessingPhase('optimizing')).toBe('optimizing')
+    expect(mapWeKnoraProcessingPhase('processing')).toBe('processing')
+    expect(mapWeKnoraProcessingPhase('parsing')).toBe('processing')
+    expect(mapWeKnoraProcessingPhase('pending')).toBe('waiting')
+    expect(mapWeKnoraProcessingPhase('queued')).toBe('waiting')
+    expect(mapWeKnoraProcessingPhase('unknown-status')).toBe('processing')
+    expect(mapWeKnoraProcessingPhase(undefined)).toBe('processing')
   })
 })

@@ -244,4 +244,15 @@ describe('PKW web UI (served page)', () => {
     // No more O(n²) String.fromCharCode + btoa upload path.
     expect(js).not.toContain('btoa(bin)')
   })
+
+  it('ships the Workspace Launcher + responsive bottom nav + unified Knowledge entry', () => {
+    const js = script()
+    const page = renderPage()
+    expect(page).toContain('class="launcher"')
+    expect(page).toContain('id="bottomNav"')
+    expect(js).toContain('mobile-more')
+    expect(js).toContain('kb-clear-search')
+    expect(page).toContain('.launcher{display:grid')
+    expect(page).toContain('@media(max-width:768px)')
+  })
 })

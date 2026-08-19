@@ -34,6 +34,13 @@ aside{border-right:1px solid var(--border);background:var(--panel);display:flex;
 .nav{padding:10px 10px 6px;flex:0 0 auto}.nav button{display:block;width:100%;text-align:left;padding:8px 12px;border:0;background:none;border-radius:8px;cursor:pointer;font-size:13px;color:var(--ink);margin-bottom:2px}
 .nav .nav-group-label{font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);font-weight:650;padding:4px 10px;margin-bottom:4px}
 .nav button.active,.nav button:hover{background:var(--bg-hover)}.nav button.active{font-weight:650;color:var(--accent)}
+.launcher{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.launcher .launch-item{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;padding:10px 6px;border:1px solid transparent;border-radius:10px;background:none;color:var(--ink);cursor:pointer;text-align:center;font-size:12px}
+.launcher .launch-item:hover{background:var(--bg-hover);border-color:var(--border)}
+.launcher .launch-item.active{background:var(--bg-selected);border-color:var(--border-strong);color:var(--accent)}
+.launcher .li-ic{display:flex;align-items:center;justify-content:center;width:26px;height:26px;color:var(--text-secondary)}
+.launcher .launch-item.active .li-ic{color:var(--accent)}
+.launcher .li-label{line-height:1.2}
 #list{overflow:auto;padding:6px 8px 12px;flex:1 1 auto}
 .tree-toolbar{display:flex;gap:4px;padding:6px 8px;border-bottom:1px solid var(--border);flex:0 0 auto;align-items:center}
 .tree-row{display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:7px;cursor:pointer;border:1px solid transparent;font-size:13px}
@@ -215,6 +222,27 @@ mark{background:var(--mark-bg);border-radius:2px;padding:0 2px}
 .wikilink-suggest{position:absolute;z-index:80;background:var(--panel);border:1px solid var(--border);border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.15);max-height:240px;overflow:auto;min-width:240px}
 .wikilink-suggest .item{padding:7px 12px;cursor:pointer;font-size:13px}.wikilink-suggest .item:hover,.wikilink-suggest .item.sel{background:var(--bg-hover)}
 @media(max-width:960px){#app{grid-template-columns:200px 1fr}aside.right{display:none}}
+#bottomNav{display:none}
+.bn-item{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;flex:1 1 0;padding:6px 2px;border:0;background:none;color:var(--text-muted);cursor:pointer;font-size:11px}
+.bn-item .bn-ic{display:flex;align-items:center;justify-content:center;width:24px;height:24px}
+.bn-item.active{color:var(--accent)}
+.bn-item.active .bn-ic,.bn-item:hover .bn-ic{color:var(--accent)}
+/* Mobile / small tablet: single-column workspace + bottom primary nav. */
+@media(max-width:768px){
+  #app{grid-template-columns:1fr;grid-template-rows:52px 1fr 58px;height:100dvh}
+  #app > aside:first-of-type{display:none}
+  #app > aside.right{display:none}
+  main{padding:14px 14px 20px}
+  header #search{width:150px}
+  #bottomNav{display:flex;position:fixed;left:0;right:0;bottom:0;height:58px;background:var(--panel);border-top:1px solid var(--border);z-index:50}
+  .launcher{grid-template-columns:1fr 1fr 1fr}
+}
+@media(max-width:400px){
+  header h1{font-size:13px}
+  header #search{width:110px;padding:6px 8px}
+  #integBadge,#localBadge{display:none}
+  main{padding:10px 10px 16px}
+}
 /* Vditor Live (IR) dark adaptation: the editor surface follows the tokens. */
 [data-theme="dark"] .vditor,[data-theme="dark"] .vditor-ir,[data-theme="dark"] .vditor-reset{background:var(--bg-surface);color:var(--text-primary)}
 [data-theme="dark"] .vditor-toolbar{background:var(--bg-sidebar);border-bottom-color:var(--border)}
@@ -271,13 +299,14 @@ mark{background:var(--mark-bg);border-radius:2px;padding:0 2px}
   <aside>
     <div class="nav">
       <div class="nav-group-label">Workspace</div>
-      <button data-view="overview">总览</button>
-      <button data-view="notes">笔记</button>
-      <button data-view="knowledge">知识</button>
-      <button data-view="search">搜索</button>
-      <button data-view="attachments">来源</button>
-      <button data-view="tasks">待办</button>
-      <button data-view="trash">回收站</button>
+      <div class="launcher">
+        <button data-view="overview" class="launch-item"><span class="li-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg></span><span class="li-label">总览</span></button>
+        <button data-view="notes" class="launch-item"><span class="li-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h8M8 17h5"/></svg></span><span class="li-label">笔记</span></button>
+        <button data-view="knowledge" class="launch-item"><span class="li-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg></span><span class="li-label">知识</span></button>
+        <button data-view="attachments" class="launch-item"><span class="li-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M13 2v7h7"/></svg></span><span class="li-label">来源</span></button>
+        <button data-view="tasks" class="launch-item"><span class="li-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1.4"/><circle cx="4.5" cy="12" r="1.4"/><circle cx="4.5" cy="18" r="1.4"/></svg></span><span class="li-label">待办</span></button>
+        <button data-view="trash" class="launch-item"><span class="li-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg></span><span class="li-label">回收站</span></button>
+      </div>
     </div>
     <div id="treeToolbar"></div>
     <div id="list"></div>
@@ -285,6 +314,13 @@ mark{background:var(--mark-bg);border-radius:2px;padding:0 2px}
   <main id="main"></main>
   <aside class="right" id="detail"></aside>
 </div>
+<nav id="bottomNav" aria-label="Workspace">
+  <button data-view="notes" class="bn-item"><span class="bn-ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h8M8 17h5"/></svg></span><span class="bn-label">笔记</span></button>
+  <button data-view="knowledge" class="bn-item"><span class="bn-ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg></span><span class="bn-label">知识</span></button>
+  <button data-view="attachments" class="bn-item"><span class="bn-ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M13 2v7h7"/></svg></span><span class="bn-label">来源</span></button>
+  <button data-view="tasks" class="bn-item"><span class="bn-ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1.4"/><circle cx="4.5" cy="12" r="1.4"/><circle cx="4.5" cy="18" r="1.4"/></svg></span><span class="bn-label">待办</span></button>
+  <button data-action="mobile-more" class="bn-item"><span class="bn-ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg></span><span class="bn-label">更多</span></button>
+</nav>
 <div id="toast"></div>
 <div id="activity"></div>
 <script>
@@ -307,7 +343,7 @@ const STR = {
     matrixTasksCount:'该四象限中共有 {n} 项任务。', matrixMoveToInbox:'移动到 Inbox', matrixMoveToInboxHint:'保留任务，只移除四象限归属', matrixDeleteTasks:'删除这些任务', matrixDeleteTasksHint:'删除四象限时同时删除其中任务（删除后无法恢复）', matrixDeletingTasks:'正在删除 {n} 项任务，然后删除四象限…', matrixDeletedTasks:'已删除 {n} 项任务和该四象限。',
     batchComplete:'标记完成', batchReopen:'重新打开', batchDelete:'删除 {n} 项任务', batchDeleteConfirm:'删除 {n} 项任务？', batchDeleteHint:'这些任务删除后无法恢复。', batchDone:'已处理 {n} 项', batchPartial:'已处理 {n} 项，{m} 项失败',
     themeSystem:'跟随系统', themeLight:'浅色', themeDark:'深色',
-    knowledge:'知识', knowledgeIndexed:'已索引', knowledgePending:'待索引', knowledgeNotIndexed:'未索引', knowledgeParseFailed:'解析失败', relatedNotes:'相关笔记', relatedKnowledge:'相关知识', refAttachments:'引用附件', mime:'类型', attWaiting:'等待解析', attProcessing:'解析中', attReady:'已解析', attFailed:'解析失败', attachments:'附件', businessKnowledge:'知识',
+    knowledge:'知识', knowledgeIndexed:'已索引', knowledgePending:'待索引', knowledgeNotIndexed:'未索引', knowledgeParseFailed:'解析失败', relatedNotes:'相关笔记', relatedKnowledge:'相关知识', refAttachments:'引用附件', mime:'类型', attWaiting:'等待解析', attProcessing:'解析中', attOptimizing:'优化索引中', attReady:'已解析', attFailed:'解析失败', attachments:'附件', businessKnowledge:'知识',
     knowledgeBrowse:'浏览', knowledgeBrowseTitle:'知识发现', knowledgeEmpty:'还没有可发现的知识。', knowledgeOffline:'知识检索暂不可用', sourceLabel:'来源', attachmentsN:'附件 ×{n}', knowledgeFilterPlaceholder:'筛选知识（标题 / 摘要 / 来源）…',
     sources:'来源', sourcesDesc:'你上传的知识资料来源文件。', usedIn:'用于', usedByN:'{n} 篇笔记使用', isolated:'未关联笔记', isolatedHint:'该文件还没有被任何笔记引用。', hasSummary:'有摘要', refresh:'刷新', sourceFiles:'来源文件',
     parseStatus:'解析状态', summary:'摘要', reparse:'重新解析', reparseStarted:'已提交重新解析',
@@ -370,7 +406,7 @@ const STR = {
     matrixTasksCount:'This matrix has {n} tasks.', matrixMoveToInbox:'Move to Inbox', matrixMoveToInboxHint:'Keep tasks, only remove the matrix', matrixDeleteTasks:'Delete these tasks', matrixDeleteTasksHint:'Delete the tasks together with the matrix (cannot be undone)', matrixDeletingTasks:'Deleting {n} tasks, then deleting this matrix…', matrixDeletedTasks:'Deleted {n} tasks and the matrix.',
     batchComplete:'Mark complete', batchReopen:'Reopen', batchDelete:'Delete {n} tasks', batchDeleteConfirm:'Delete {n} tasks?', batchDeleteHint:'These tasks cannot be restored after deletion.', batchDone:'Processed {n} items', batchPartial:'Processed {n} items, {m} failed',
     themeSystem:'Follow system', themeLight:'Light', themeDark:'Dark',
-    knowledge:'Knowledge', knowledgeIndexed:'Indexed', knowledgePending:'Pending', knowledgeNotIndexed:'Not indexed', knowledgeParseFailed:'Parse failed', relatedNotes:'Related notes', relatedKnowledge:'Related knowledge', refAttachments:'Referenced attachments', mime:'Type', attWaiting:'Waiting', attProcessing:'Processing', attReady:'Parsed', attFailed:'Parse failed', attachments:'Attachments', businessKnowledge:'Knowledge',
+    knowledge:'Knowledge', knowledgeIndexed:'Indexed', knowledgePending:'Pending', knowledgeNotIndexed:'Not indexed', knowledgeParseFailed:'Parse failed', relatedNotes:'Related notes', relatedKnowledge:'Related knowledge', refAttachments:'Referenced attachments', mime:'Type', attWaiting:'Waiting', attProcessing:'Processing', attOptimizing:'Optimizing index', attReady:'Parsed', attFailed:'Parse failed', attachments:'Attachments', businessKnowledge:'Knowledge',
     knowledgeBrowse:'Browse', knowledgeBrowseTitle:'Knowledge Discovery', knowledgeEmpty:'No discoverable knowledge yet.', knowledgeOffline:'Knowledge search unavailable', sourceLabel:'Source', attachmentsN:'{n} attachments', knowledgeFilterPlaceholder:'Filter knowledge (title / summary / source)…',
     sources:'Sources', sourcesDesc:'The source files that make up your knowledge.', usedIn:'Used in', usedByN:'{n} notes use this', isolated:'Not linked to a note', isolatedHint:'This file is not referenced by any note yet.', hasSummary:'Has summary', refresh:'Refresh', sourceFiles:'Source files',
     parseStatus:'Parse status', summary:'Summary', reparse:'Reparse', reparseStarted:'Reparse submitted',
@@ -507,7 +543,7 @@ function toast(msg, kind){ const el = $('#toast'); el.innerHTML = '<div class="t
 // can't show byte progress. Not a job system — just an indeterminate spinner.
 function showActivity(msg){ const el = $('#activity'); if (!el) return; el.innerHTML = '<span class="spinner"></span>' + esc(msg); el.style.display = 'flex'; clearTimeout(showActivity._t) }
 function clearActivity(){ const el = $('#activity'); if (!el) return; clearTimeout(showActivity._t); showActivity._t = setTimeout(() => { el.style.display = 'none' }, 150) }
-function applyLang(){ document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en'; $('#search').placeholder = t('searchPlaceholder'); $('#langBtn').textContent = lang === 'zh' ? 'EN' : '中文'; document.querySelectorAll('.nav button').forEach(b => b.textContent = b.dataset.view === 'attachments' ? t('sources') : t(b.dataset.view)) }
+function applyLang(){ document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en'; $('#search').placeholder = t('searchPlaceholder'); $('#langBtn').textContent = lang === 'zh' ? 'EN' : '中文'; document.querySelectorAll('.nav .launch-item').forEach(b => { const l = b.querySelector('.li-label'); if (l) l.textContent = b.dataset.view === 'attachments' ? t('sources') : t(b.dataset.view) }); document.querySelectorAll('#bottomNav .bn-item').forEach(b => { const l = b.querySelector('.bn-label'); if (l) l.textContent = b.dataset.view === 'attachments' ? t('sources') : t(b.dataset.view) }) }
 // ── Theme (system / light / dark) — preference in localStorage, tokens in CSS ──
 function currentThemeMode(){ return localStorage.getItem('pkw-theme') || 'system' }
 function applyTheme(mode){
@@ -571,6 +607,7 @@ function setView(v){
 function render(){
   applyLang()
   document.querySelectorAll('.nav button').forEach(b => b.classList.toggle('active', b.dataset.view === state.view))
+  document.querySelectorAll('#bottomNav .bn-item').forEach(b => b.classList.toggle('active', b.dataset.view === state.view))
   refreshHeader()
   if (state.view === 'overview') renderOverview()
   else if (state.view === 'notes') { renderTreeToolbar(); renderTree(); renderDetail(); if (state.selectedNoteId === null) { if (state.selectedFolder !== null) renderFolderMain(state.selectedFolder); else renderNotesExplorer() } ensureVditorLoaded().catch(() => {}) }
@@ -578,7 +615,6 @@ function render(){
   else if (state.view === 'tasks') renderTasks()
   else if (state.view === 'trash') renderTrash()
   else if (state.view === 'knowledge') renderKnowledgeView()
-  else renderSearchView()
 }
 
 // ── Overview ────────────────────────────────────────────────────────────────
@@ -1175,6 +1211,7 @@ function renderNoteAttachmentKnowledge(d){
 function procStateBadge(state){
   if (state === 'ready') return '<span class="badge ok">' + esc(t('attReady')) + '</span>'
   if (state === 'failed') return '<span class="badge err">' + esc(t('attFailed')) + '</span>'
+  if (state === 'optimizing') return '<span class="badge warn">' + esc(t('attOptimizing')) + '</span>'
   if (state === 'processing') return '<span class="badge warn">' + esc(t('attProcessing')) + '</span>'
   return '<span class="badge">' + esc(t('attWaiting')) + '</span>'
 }
@@ -1992,43 +2029,21 @@ async function renderTrash(){
   } catch (e) { if (seq === viewSeq) $('#main').innerHTML = '<div class="empty">' + esc(t('genericError')) + ': ' + esc(e.message) + '</div>' }
 }
 
-function renderSearchView(){
-  $('#list').innerHTML = ''; $('#treeToolbar').innerHTML = ''; $('#detail').innerHTML = ''
-  renderSearchMain()
-}
-// Render the search surface into #main only (used by both the standalone Search
-// view and the Knowledge → Search tab, which keeps its sidebar tabs intact).
-function renderSearchMain(){
-  // Restore the last search (query + results) so Search → Note → Back returns
-  // to the same results instead of a blank search view.
-  if (state.searchQuery && state.searchResults) renderSearchResults(state.searchQuery, state.searchResults)
-  else $('#main').innerHTML = '<h2>' + esc(t('search')) + '</h2><p class="muted">' + esc(t('searchHint')) + '</p>'
-}
-// ── Knowledge view (Knowledge Discovery / Wiki / Graph) — user-facing ───────
+// ── Knowledge view: unified Discovery (browse + RAG retrieval). Search and
+// Knowledge share ONE entry point; Wiki/Graph are no longer top-level tabs. ──
 function renderKnowledgeView(){
-  const tabs = [
-    ['browse', t('knowledgeBrowse'), '🗂'],
-    ['search', t('knowledgeSearchTab'), '🔍'],
-    ['wiki', t('knowledgeWiki'), '📖'],
-    ['graph', t('knowledgeGraph'), '🕸'],
-  ]
-  let listHtml = '<div class="list-head">' + esc(t('knowledge')) + '</div><div class="list-section">' + esc(t('knowledgeBrowseTitle')) + '</div>' +
-    tabs.map(([v, label, ic]) => '<div class="tree-row' + (state.knowledgeTab === v ? ' active' : '') + '" data-action="knowledge-tab" data-tab="' + v + '"><span class="ic">' + ic + '</span><span class="nm">' + esc(label) + '</span></div>').join('')
-  if (state.knowledgeTab === 'wiki') {
-    listHtml += '<div class="list-section">' + esc(t('folder')) + '</div>' +
-      '<div class="tree-row' + (state.wikiFolder === '' ? ' active' : '') + '" data-action="wiki-folder" data-folder=""><span class="ic">🗂</span><span class="nm">' + esc(t('trashAll')) + '</span></div>' +
-      '<div id="wikiFolders"></div>'
-    api('listWikiFolders').then(r => {
-      const folders = (r && r.folders) || []
-      const box = $('#wikiFolders')
-      if (box) box.innerHTML = folders.map(f => '<div class="tree-row' + (state.wikiFolder === f.id ? ' active' : '') + '" data-action="wiki-folder" data-folder="' + esc(f.id) + '"><span class="ic">📁</span><span class="nm">' + esc(f.name) + '</span><span class="badge">' + (f.page_count || 0) + '</span></div>').join('')
-    }).catch(() => {})
+  $('#list').innerHTML = '<div class="list-head">' + esc(t('knowledge')) + '</div><div class="list-section">' + esc(t('knowledgeBrowseTitle')) + '</div>'
+  $('#treeToolbar').innerHTML = ''; $('#detail').innerHTML = ''
+  if (state.searchQuery) {
+    if (state.searchResults) {
+      $('#main').innerHTML = '<div class="toolbar"><button class="btn" data-action="kb-clear-search">← ' + esc(t('knowledgeBrowse')) + '</button></div>'
+      renderSearchResults(state.searchQuery, state.searchResults)
+    } else {
+      $('#main').innerHTML = '<div class="empty">' + esc(t('searching')) + '</div>'
+    }
+    return
   }
-  $('#list').innerHTML = listHtml
-  if (state.knowledgeTab === 'browse') { renderKnowledgeBrowse(); return }
-  if (state.knowledgeTab === 'search') { $('#treeToolbar').innerHTML = ''; $('#detail').innerHTML = ''; renderSearchMain(); return }
-  if (state.knowledgeTab === 'wiki') { renderWikiList(); return }
-  renderGraphView()
+  renderKnowledgeBrowse()
 }
 // Unified knowledge card: shared by Knowledge Discovery browse + Search results
 // so "finding knowledge" reads identically regardless of entry point. Exposes
@@ -2041,9 +2056,11 @@ function knowledgeCardHtml(c){
   const openBtn = c.open
     ? '<button class="btn small" data-action="' + esc(c.open.action) + '" data-id="' + esc(c.open.id) + '"' + (c.reasonAttrs || '') + '>' + esc(c.open.label) + '</button>'
     : ''
+  const snippets = (c.snippets && c.snippets.length) ? c.snippets : (c.snippet ? [c.snippet] : [])
+  const snippetHtml = snippets.slice(0, 2).map(s => '<div class="snippet">' + esc(s) + '</div>').join('')
   return '<div class="hit">' +
     '<div class="t">' + esc(c.title) + (c.badges || '') + '</div>' +
-    (c.snippet ? '<div class="snippet">' + esc(c.snippet) + '</div>' : '') +
+    snippetHtml +
     '<div class="ref"><span class="meta">' + meta.join(' · ') + '</span><span class="spacer"></span>' + openBtn + '</div>' +
     '</div>'
 }
@@ -2211,7 +2228,7 @@ function renderSearchResults(q, results){
     }
     return knowledgeCardHtml({
       title,
-      snippet: r.remote.snippet || (r.remote.content || '').slice(0, 220),
+      snippets: (r.remote.bestEvidence && r.remote.bestEvidence.length) ? r.remote.bestEvidence : [r.remote.snippet || (r.remote.content || '').slice(0, 220)],
       reason,
       source: local && local.folder,
       badges: kindBadge,
@@ -2866,6 +2883,7 @@ document.addEventListener('click', (e) => {
   const wiki = e.target.closest('[data-wiki]')
   if (wiki) { openWikiTarget(wiki.dataset.wiki); return }
   const nav = e.target.closest('.nav button'); if (nav) { setView(nav.dataset.view); return }
+  const bn = e.target.closest('#bottomNav [data-view]'); if (bn) { setView(bn.dataset.view); return }
   // Ctrl/Cmd + click toggles task selection (multi-select intent, not open detail).
   if ((e.ctrlKey || e.metaKey) && e.target.closest('.task-card')) {
     toggleTaskSelection(e.target.closest('.task-card').dataset.id)
@@ -2962,6 +2980,16 @@ document.addEventListener('click', (e) => {
   else if (act === 'theme-light') setTheme('light')
   else if (act === 'theme-dark') setTheme('dark')
   else if (act === 'knowledge-tab') { state.knowledgeTab = el.dataset.tab || 'wiki'; renderKnowledgeView() }
+  else if (act === 'kb-clear-search') { state.searchQuery = ''; state.searchResults = null; renderKnowledgeView() }
+  else if (act === 'mobile-more') {
+    const r = el.getBoundingClientRect()
+    showContextMenu(r.left + r.width / 2 - 80, r.top - 100, [
+      { label: t('overview'), action: 'go-overview' },
+      { label: t('trash'), action: 'go-trash' },
+    ])
+  }
+  else if (act === 'go-overview') { dismissContextMenu(); setView('overview') }
+  else if (act === 'go-trash') { dismissContextMenu(); setView('trash') }
   else if (act === 'wiki-folder') { state.wikiFolder = el.dataset.folder || ''; renderKnowledgeView() }
   else if (act === 'open-wiki-page') openWikiPage(el.dataset.slug)
   else if (act === 'back-wiki') renderWikiList()
@@ -3339,7 +3367,7 @@ function quickTaskDialog(matrixId, sourceRefs, prefill){
     $('#tkTitle').focus()
   }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
 }
-$('#search').addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.value.trim()) { state.view = 'search'; render(); runSearch(e.target.value.trim()) } })
+$('#search').addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.value.trim()) { state.view = 'knowledge'; render(); runSearch(e.target.value.trim()) } })
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') { if (taskDetailRequestClose) { taskDetailRequestClose(); return } dismissContextMenu(); dismissSelButton(); dismissWikiSuggest(); return }
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') { e.preventDefault(); if (state.view === 'notes' && state.selectedNoteId !== null) saveNote() }
