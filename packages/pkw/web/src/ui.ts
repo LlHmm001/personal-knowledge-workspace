@@ -41,6 +41,8 @@ aside{border-right:1px solid var(--border);background:var(--panel);display:flex;
 .tree-row .tw{width:16px;text-align:center;color:var(--muted);flex:0 0 auto;font-size:11px}
 .tree-row .ic{flex:0 0 auto;font-size:12px}
 .tree-row .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1 1 auto}
+.inline-rename-input{flex:1 1 auto;min-width:0;padding:2px 6px;border:1px solid var(--accent);border-radius:6px;font-size:13px;background:var(--bg-surface);color:var(--text-primary);font-family:inherit}
+.editor-head .inline-rename-input{font-size:15px;font-weight:600}
 .tree-row .badge{margin-left:2px}
 .trash-item{gap:8px;cursor:default}.trash-check{margin:0;cursor:pointer;flex:0 0 auto}
 .trash-main{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;overflow:hidden}
@@ -68,8 +70,8 @@ select.sel{padding:7px 10px;border:1px solid var(--border);border-radius:8px;fon
 #saveStatus{font-size:12px;color:var(--muted);display:inline-flex;align-items:center;gap:4px}
 #saveStatus.dirty{color:var(--warn);font-weight:600}#saveStatus.saving{color:var(--accent)}#saveStatus.saved{color:var(--ok)}
 #editorPane{border:1px solid var(--border);border-radius:10px;background:var(--panel);overflow:hidden}
-textarea#editor{width:100%;height:56vh;font:13px/1.7 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;padding:14px 16px;border:0;resize:vertical;outline:none;display:block;background:var(--bg-surface);color:var(--text-primary)}
-#preview{padding:14px 18px;min-height:56vh;background:var(--bg-surface);overflow:auto}
+textarea#editor{width:100%;height:calc(100vh - 180px);min-height:320px;font:13px/1.7 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;padding:14px 16px;border:0;resize:vertical;outline:none;display:block;background:var(--bg-surface);color:var(--text-primary)}
+#preview{padding:14px 18px;min-height:calc(100vh - 180px);background:var(--bg-surface);overflow:auto}
 #preview h1{font-size:1.6em;margin:.4em 0 .3em;border-bottom:1px solid var(--border);padding-bottom:.15em}
 #preview h2{font-size:1.35em;margin:.5em 0 .25em}#preview h3{font-size:1.15em}#preview h4,#preview h5,#preview h6{font-size:1em}
 #preview p{margin:.5em 0}#preview ul,#preview ol{margin:.4em 0;padding-left:1.6em}
@@ -151,6 +153,8 @@ aside.right h3:first-child{margin-top:0}
 .stats{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-bottom:16px}
 .stat{border:1px solid var(--border);border-radius:10px;padding:12px 14px;background:var(--panel)}.stat .n{font-size:22px;font-weight:700}.stat .l{font-size:12px;color:var(--muted)}
 #toast{position:fixed;top:60px;left:50%;transform:translateX(-50%);z-index:60;display:none}
+#activity{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);z-index:60;display:none;align-items:center;gap:8px;padding:8px 14px;border-radius:999px;background:var(--panel);border:1px solid var(--border);box-shadow:0 4px 14px rgba(0,0,0,.15);font-size:13px;color:var(--text-secondary)}
+#activity .spinner{margin-right:2px}
 .toast{padding:9px 16px;border-radius:8px;color:#fff;font-size:13px;box-shadow:0 4px 14px rgba(0,0,0,.15)}
 .toast.ok{background:var(--ok)}.toast.err{background:var(--err)}.toast.warn{background:var(--warn)}
 .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:70;display:flex;align-items:center;justify-content:center}
@@ -282,6 +286,7 @@ mark{background:var(--mark-bg);border-radius:2px;padding:0 2px}
   <aside class="right" id="detail"></aside>
 </div>
 <div id="toast"></div>
+<div id="activity"></div>
 <script>
 const STR = {
   zh: {
@@ -291,7 +296,7 @@ const STR = {
     overviewTitle:'工作区概览', overviewNotes:'笔记', overviewAttachments:'附件', overviewMappings:'已同步对象', overviewPendingSync:'待同步', overviewSyncErrors:'同步错误',
     overviewIntegration:'WeKnora 集成', overviewRecent:'最近更新', overviewEmpty:'工作区为空。点击「新建笔记」开始。', recentNote:'笔记', recentAttachment:'附件', noRecent:'暂无最近更新',
     newNote:'新建笔记', newFolder:'新建文件夹', emptyNotes:'还没有笔记。', emptyNotesCta:'新建第一篇笔记', loading:'加载中…', deletedSuffix:'已删除',
-    save:'保存', renameMove:'重命名 / 移动', del:'删除', syncNow:'立即同步', reconcile:'重建索引', localSaved:'本地已保存', localSavedR:'本地已保存 · r{r}', saving:'保存中…',
+    save:'保存', renameMove:'重命名 / 移动', renameTitle:'重命名', del:'删除', syncNow:'立即同步', reconcile:'重建索引', localSaved:'本地已保存', localSavedR:'本地已保存 · r{r}', saving:'保存中…',
     unsaved:'未保存', saved:'已保存', saveFailed:'保存失败',
     preview:'预览', newNotePrompt:'笔记标题（路径自动生成）', renamePrompt:'新相对路径', delNoteConfirm:'删除这篇笔记？', deletedMsg:'已删除', selectNote:'从左侧选择或新建一篇笔记。',
     untitled:'untitled', notSynced:'未同步', synced:'已同步', syncing:'同步中', pending:'待同步', failed:'失败', stale:'已过期', deleted:'已删除',
@@ -354,7 +359,7 @@ const STR = {
     overviewTitle:'Workspace Overview', overviewNotes:'Notes', overviewAttachments:'Attachments', overviewMappings:'Synced objects', overviewPendingSync:'Pending sync', overviewSyncErrors:'Sync errors',
     overviewIntegration:'WeKnora integration', overviewRecent:'Recent', overviewEmpty:'Workspace is empty. Click 「New Note」 to start.', recentNote:'Note', recentAttachment:'Attachment', noRecent:'No recent changes',
     newNote:'New Note', newFolder:'New Folder', emptyNotes:'No notes yet.', emptyNotesCta:'Create your first note', loading:'Loading…', deletedSuffix:'deleted',
-    save:'Save', renameMove:'Rename / Move', del:'Delete', syncNow:'Sync now', reconcile:'Reconcile', localSaved:'Local saved', localSavedR:'Local saved · r{r}', saving:'Saving…',
+    save:'Save', renameMove:'Rename / Move', renameTitle:'Rename', del:'Delete', syncNow:'Sync now', reconcile:'Reconcile', localSaved:'Local saved', localSavedR:'Local saved · r{r}', saving:'Saving…',
     unsaved:'Unsaved', saved:'Saved', saveFailed:'Save failed',
     preview:'Preview', newNotePrompt:'Note title (path is auto-generated)', renamePrompt:'New relative path', delNoteConfirm:'Delete this note?', deletedMsg:'Deleted', selectNote:'Select or create a note from the left.',
     untitled:'untitled', notSynced:'Not synced', synced:'Synced', syncing:'Syncing', pending:'Pending', failed:'Failed', stale:'Stale', deleted:'Deleted',
@@ -463,6 +468,7 @@ const state = {
 // ── View switching: navigation guard + single-flight + instrumentation ──────
 let viewSeq = 0
 let viewStart = 0
+let noteSeq = 0
 const inFlight = {}
 function loadOnce(method, args){
   const key = method + ':' + JSON.stringify(args || {})
@@ -497,6 +503,10 @@ function restoreScroll(){
 }
 
 function toast(msg, kind){ const el = $('#toast'); el.innerHTML = '<div class="toast ' + (kind || 'ok') + '">' + esc(msg) + '</div>'; el.style.display = 'block'; clearTimeout(toast._t); toast._t = setTimeout(() => { el.style.display = 'none' }, 3200) }
+// Lightweight activity indicator (bottom pill): real feedback for async ops that
+// can't show byte progress. Not a job system — just an indeterminate spinner.
+function showActivity(msg){ const el = $('#activity'); if (!el) return; el.innerHTML = '<span class="spinner"></span>' + esc(msg); el.style.display = 'flex'; clearTimeout(showActivity._t) }
+function clearActivity(){ const el = $('#activity'); if (!el) return; clearTimeout(showActivity._t); showActivity._t = setTimeout(() => { el.style.display = 'none' }, 150) }
 function applyLang(){ document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en'; $('#search').placeholder = t('searchPlaceholder'); $('#langBtn').textContent = lang === 'zh' ? 'EN' : '中文'; document.querySelectorAll('.nav button').forEach(b => b.textContent = b.dataset.view === 'attachments' ? t('sources') : t(b.dataset.view)) }
 // ── Theme (system / light / dark) — preference in localStorage, tokens in CSS ──
 function currentThemeMode(){ return localStorage.getItem('pkw-theme') || 'system' }
@@ -563,7 +573,7 @@ function render(){
   document.querySelectorAll('.nav button').forEach(b => b.classList.toggle('active', b.dataset.view === state.view))
   refreshHeader()
   if (state.view === 'overview') renderOverview()
-  else if (state.view === 'notes') { renderTreeToolbar(); renderTree(); renderDetail() }
+  else if (state.view === 'notes') { renderTreeToolbar(); renderTree(); renderDetail(); if (state.selectedNoteId === null) { if (state.selectedFolder !== null) renderFolderMain(state.selectedFolder); else renderNotesExplorer() } ensureVditorLoaded().catch(() => {}) }
   else if (state.view === 'attachments') renderAttachments()
   else if (state.view === 'tasks') renderTasks()
   else if (state.view === 'trash') renderTrash()
@@ -616,14 +626,17 @@ function renderTreeToolbar(){
   $('#sortSel').addEventListener('change', (e) => { state.sortMode = e.target.value; localStorage.setItem('pkw-sort', state.sortMode); renderTree() })
 }
 async function renderTree(){
+  const seq = viewSeq
   // stale-while-revalidate: never blank an existing tree with a loading placeholder.
   if (state.treeRoot.length === 0) $('#list').innerHTML = '<div class="empty">' + esc(t('loading')) + '</div>'
   try {
     const tree = await api('getTree', { sortMode: state.sortMode })
+    if (seq !== viewSeq) return // stale response: a newer navigation owns the surface
     state.treeRoot = tree.root || []
     $('#list').innerHTML = renderTreeNodes(state.treeRoot, '') || '<div class="empty">' + esc(t('emptyNotes')) + '<div class="cta"><button class="btn primary" data-action="new-note">+ ' + esc(t('emptyNotesCta')) + '</button></div></div>'
+    if (state.view === 'notes' && state.selectedNoteId === null && state.selectedFolder === null) renderNotesExplorer()
     restoreScroll()
-  } catch (e) { if (state.treeRoot.length === 0) $('#list').innerHTML = '<div class="empty">' + esc(t('genericError')) + '</div>' }
+  } catch (e) { if (state.treeRoot.length === 0 && seq === viewSeq) $('#list').innerHTML = '<div class="empty">' + esc(t('genericError')) + '</div>' }
 }
 function renderTreeNodes(nodes){ if (!nodes.length) return ''; return nodes.map(n => n.kind === 'folder' ? renderFolderNode(n) : renderNoteNode(n)).join('') }
 function renderFolderNode(n){
@@ -633,7 +646,7 @@ function renderFolderNode(n){
 }
 function renderNoteNode(n){
   const sel = state.selectedNoteId === n.noteId ? ' active' : ''
-  return '<div class="tree-row note ' + sel + '" data-action="open-note" data-id="' + esc(n.noteId) + '"><span class="tw"></span><span class="ic">📄</span><span class="nm">' + esc(n.title || n.relativePath) + '</span> <span class="syncbadge" data-sync="note:' + esc(n.noteId) + '">' + syncBadgeHtml(n.sync) + '</span></div>'
+  return '<div class="tree-row note ' + sel + '" data-action="open-note" data-id="' + esc(n.noteId) + '"><span class="tw"></span><span class="ic">📄</span><span class="nm note-title" data-id="' + esc(n.noteId) + '">' + esc(n.title || n.relativePath) + '</span> <span class="syncbadge" data-sync="note:' + esc(n.noteId) + '">' + syncBadgeHtml(n.sync) + '</span></div>'
 }
 function renderDetail(){
   if (state.view !== 'notes') return
@@ -643,6 +656,29 @@ function renderDetail(){
     $('#detail').innerHTML = '<h3>' + esc(t('folder')) + '</h3><div class="kv"><b>' + esc(t('path')) + '</b> <span class="v mono">' + esc(f) + '/</span></div>' +
       '<h3>' + esc(t('maintenance')) + '</h3><button class="btn small" data-action="rename-folder" data-path="' + esc(f) + '">' + esc(t('renameFolder')) + '</button> <button class="btn small danger" data-action="delete-folder" data-path="' + esc(f) + '">' + esc(t('deleteFolder')) + '</button>'
   } else $('#detail').innerHTML = ''
+}
+// Notes Explorer: the Main-area surface for the Notes view when no Note is open.
+// Same NoteId/Folder/tree data as the sidebar Tree — just a second surface.
+function explorerNoteRow(n){
+  const folder = (n.relativePath || '').includes('/') ? (n.relativePath).slice(0, (n.relativePath).lastIndexOf('/')) : ''
+  return '<div class="tree-row note" data-action="open-note" data-id="' + esc(n.noteId) + '">' +
+    '<span class="ic">📄</span>' +
+    '<span class="nm note-title" data-id="' + esc(n.noteId) + '">' + esc(n.title || n.relativePath) + '</span>' +
+    (folder ? '<span class="muted small mono">' + esc(folder) + '/</span>' : '') +
+    '<span class="spacer" style="flex:1 1 auto"></span>' +
+    '<span class="muted small">' + esc(fmtStamp(n.updatedAt)) + '</span>' +
+    '<span class="syncbadge" data-sync="note:' + esc(n.noteId) + '">' + syncBadgeHtml(n.sync) + '</span>' +
+    '<button class="btn small" data-action="rename-note" data-id="' + esc(n.noteId) + '">' + esc(t('renameTitle')) + '</button>' +
+    '</div>'
+}
+function renderNotesExplorer(){
+  const notes = []
+  collectNotes(state.treeRoot || [], notes)
+  $('#main').innerHTML = '<h2>' + esc(t('notes')) + '</h2>' +
+    '<div class="toolbar"><button class="btn primary" data-action="new-note">+ ' + esc(t('newNote')) + '</button><button class="btn" data-action="new-folder">+ ' + esc(t('newFolder')) + '</button></div>' +
+    (notes.length
+      ? '<div>' + notes.map(explorerNoteRow).join('') + '</div>'
+      : '<div class="empty"><h3>' + esc(t('emptyNotes')) + '</h3><div class="cta"><button class="btn primary" data-action="new-note">+ ' + esc(t('emptyNotesCta')) + '</button></div></div>')
 }
 
 // ── Markdown renderer ───────────────────────────────────────────────────────
@@ -739,6 +775,7 @@ let vditor = null // active Vditor instance (Live mode only)
 function destroyVditor(){ if (setupLiveAttachmentRewrite._obs) { setupLiveAttachmentRewrite._obs.disconnect(); setupLiveAttachmentRewrite._obs = null } if (vditor) { try { vditor.destroy() } catch (e) {} vditor = null } }
 
 async function openNote(noteId){
+  const seq = ++noteSeq
   state.selectedNoteId = noteId; state.selectedFolder = null
   destroyVditor()
   clearTimeout(sourcesPollTimer)
@@ -747,6 +784,7 @@ async function openNote(noteId){
   $('#detail').innerHTML = '' // clear stale Inspector immediately
   try {
     const d = await api('getNote', { noteId })
+    if (seq !== noteSeq || state.view !== 'notes') return // stale: a newer note/view owns the surface
     state.editor = { noteId, persistedMarkdown: d.markdown, body: d.body || '', frontmatter: d.frontmatter || '', dirty: false, saving: false, mode: localStorage.getItem('pkw-editor-mode') || 'live', observedRevision: d.note && d.note.observedRevision, contentHash: d.note && d.note.contentHash }
     state.noteAttachments = d.attachments || []
     // Expand parent folders so the opened Note is visible + highlighted in the tree
@@ -761,6 +799,7 @@ async function openNote(noteId){
     await renderTree()
     kickSyncPoll(d.sync)
   } catch (e) {
+    if (seq !== noteSeq) return // stale error: ignore
     if (String(e.message || '').indexOf('file is missing') >= 0) renderMissingNote(noteId)
     else { $('#main').innerHTML = '<div class="empty">' + esc(t('genericError')) + ': ' + esc(e.message) + '</div>'; $('#detail').innerHTML = '' }
   }
@@ -789,7 +828,7 @@ function renderEditorShell(d){
   const modeBtn = (m, key) => '<button class="btn mode ' + (mode === m ? 'active' : '') + '" data-action="set-mode" data-mode="' + m + '">' + esc(t(key)) + '</button>'
   return '<div class="toolbar">' +
     '<button class="btn primary" data-action="save-note">' + esc(t('save')) + '</button>' +
-    '<button class="btn" data-action="rename-note">' + esc(t('renameMove')) + '</button>' +
+    '<button class="btn" data-action="rename-note">' + esc(t('renameTitle')) + '</button>' +
     '<button class="btn" data-action="move-note" data-id="' + esc(state.selectedNoteId) + '">' + esc(t('moveNoteTo')) + '</button>' +
     (d.note && d.note.attachmentBacked ? '<button class="btn" data-action="upgrade-companion" data-id="' + esc(state.selectedNoteId) + '">' + esc(t('companionUpgrade')) + '</button>' : '<button class="btn" data-action="sync-note" data-id="' + esc(state.selectedNoteId) + '">' + esc(t('syncNow')) + '</button>') +
     '<button class="btn" data-action="selection-to-task">' + esc(t('selectionToTask')) + '</button>' +
@@ -797,10 +836,10 @@ function renderEditorShell(d){
     '<span id="saveStatus" class="saved">✓ ' + esc(t('saved')) + '</span>' +
     '<span class="spacer"></span>' + modeBtn('live', 'modeLive') + modeBtn('source', 'modeSource') + modeBtn('reading', 'modeReading') +
     '</div>' +
-    '<div class="editor-head"><span class="title">' + esc(fm.title || d.note.title || '') + '</span><span class="path">' + esc(d.note.relativePath) + '</span></div>' +
+    '<div class="editor-head"><span class="title note-title" data-id="' + esc(state.selectedNoteId) + '">' + esc(fm.title || d.note.title || '') + '</span><span class="path">' + esc(d.note.relativePath) + '</span></div>' +
     (state.searchContext ? searchContextBanner(state.searchContext) : '') +
     '<div id="editorPane">' +
-      (mode === 'live' ? '<div id="vditor" style="min-height:56vh"><div class="empty">' + esc(t('editorLoading')) + '</div></div>' : '') +
+      (mode === 'live' ? '<div id="vditor" style="min-height:calc(100vh - 180px)"><div class="empty">' + esc(t('editorLoading')) + '</div></div>' : '') +
       (mode === 'source' ? '<textarea id="editor" aria-label="Markdown">' + esc(d.markdown) + '</textarea>' : '') +
       (mode === 'reading' ? '<div id="preview"></div>' : '') +
     '</div>' +
@@ -932,7 +971,7 @@ async function initVditor(){
       mode: 'ir',
       cache: { enable: false },
       cdn: '/pkw/assets/vditor/3.11.3',
-      height: '56vh',
+      height: 'calc(100vh - 180px)',
       value: state.editor.body || '',
       toolbar: vditorToolbar(),
       hint: {
@@ -1015,6 +1054,7 @@ function slashMenu(){
 }
 function uploadVditorFiles(files, asImage){
   for (const file of files) {
+    showActivity(t('uploadProgress') + ' · ' + esc(file.name))
     const reader = new FileReader()
     reader.onload = () => {
       const base64 = String(reader.result).split(',')[1]
@@ -1027,8 +1067,10 @@ function uploadVditorFiles(files, asImage){
         const md = asImage === false ? '[' + up.filename + '](' + ref + ')' : '![](' + ref + ')'
         if (vditor) vditor.insertValue(md)
         refreshHeader()
-      }).catch(e => toast(t('uploadFailed') + ': ' + e.message, 'err'))
+        clearActivity()
+      }).catch(e => { clearActivity(); toast(t('uploadFailed') + ': ' + e.message, 'err') })
     }
+    reader.onerror = () => { clearActivity(); toast(t('uploadFailed'), 'err') }
     reader.readAsDataURL(file)
   }
 }
@@ -1278,14 +1320,35 @@ async function newNote(){
     await openNote(r.noteId); refreshHeader()
   } catch (e) { toast(t('genericError') + ': ' + e.message, 'err') }
 }
-async function renameNote(noteId){
+function inlineRenameTitle(targetEl, noteId){
+  if (!targetEl) return
+  const current = (targetEl.textContent || '').trim()
+  const input = document.createElement('input')
+  input.className = 'inline-rename-input'
+  input.value = current
+  targetEl.replaceWith(input)
+  input.focus(); input.select()
+  let done = false
+  const finish = () => {
+    if (done) return; done = true
+    const v = input.value.trim()
+    if (!v || v === current) { input.replaceWith(targetEl); return }
+    api('renameNoteTitle', { noteId, title: v }).then(() => {
+      toast(t('localSaved'), 'ok'); refreshHeader()
+      if (state.selectedNoteId === noteId) openNote(noteId)
+      else { renderTree(); renderNotesExplorer() }
+    }).catch(e => { toast(t('genericError') + ': ' + e.message, 'err'); if (input.isConnected) input.replaceWith(targetEl) })
+  }
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); finish() } else if (e.key === 'Escape') { done = true; input.replaceWith(targetEl) } })
+  input.addEventListener('blur', finish)
+}
+function renameNote(noteId){
   const id = noteId || state.selectedNoteId
-  if (id === null) return
-  const cur = await api('getNote', { noteId: id })
-  const rel = prompt(t('renamePrompt'), cur.note.relativePath)
-  if (!rel || rel === cur.note.relativePath) return
-  try { await api('moveNote', { noteId: id, relativePath: rel }); await renderTree(); if (state.selectedNoteId === id) await openNote(id) }
-  catch (e) { toast(t('genericError') + ': ' + e.message, 'err') }
+  if (id === null || id === undefined) return
+  const target = (state.selectedNoteId === id)
+    ? document.querySelector('.editor-head .note-title')
+    : document.querySelector('.note-title[data-id="' + CSS.escape(id) + '"]')
+  inlineRenameTitle(target, id)
 }
 async function delNote(noteId){
   const id = noteId || state.selectedNoteId
@@ -1488,9 +1551,11 @@ async function renderAttachments(){
   } catch (e) { if (seq === viewSeq) $('#main').innerHTML = '<div class="empty">' + esc(t('genericError')) + '</div>' }
 }
 async function openAttachment(id){
+  const seq = viewSeq
   state.selectedAttachmentId = id
   try {
     const d = await api('getAttachment', { attachmentId: id })
+    if (seq !== viewSeq || state.view !== 'attachments') return
     const a = d.attachment, c = d.companionNote
     const owners = d.owners || []
     const summaryHtml = d.summary
@@ -1522,11 +1587,19 @@ async function openAttachment(id){
       '<h3>' + esc(t('details')) + '</h3><div class="kv"><b>' + esc(t('attachmentId')) + '</b> <span class="v mono">' + esc(a.attachmentId) + '</span></div>'
   } catch (e) { toast(t('genericError') + ': ' + e.message, 'err') }
 }
+function fileToBase64(file){
+  return new Promise((resolve, reject) => {
+    const r = new FileReader()
+    r.onload = () => resolve(String(r.result).split(',')[1] || '')
+    r.onerror = () => reject(new Error('read failed: ' + file.name))
+    r.readAsDataURL(file)
+  })
+}
 async function uploadFileBinary(file, indexable){
-  const buf = new Uint8Array(await file.arrayBuffer())
-  let bin = ''
-  for (let i = 0; i < buf.length; i++) bin += String.fromCharCode(buf[i])
-  return api('uploadAttachment', { filename: file.name, mimeType: file.type || 'application/octet-stream', contentBase64: btoa(bin), ...(indexable === false ? { indexable: false } : {}) })
+  // readAsDataURL → base64 directly (no O(n²) String.fromCharCode loop + btoa,
+  // which is slow/stack-overflow-prone for multi-MB PDFs/images).
+  const contentBase64 = await fileToBase64(file)
+  return api('uploadAttachment', { filename: file.name, mimeType: file.type || 'application/octet-stream', contentBase64, ...(indexable === false ? { indexable: false } : {}) })
 }
 // ── Companion Note (idempotent Host orchestration; local-first, never waits on WeKnora) ──
 async function ensureCompanionForAttachment(id, folder){
@@ -1580,8 +1653,10 @@ async function attBatchOp(op){
 // ── Direct Upload: explicit per-file result, no swallowed failures ────────────
 async function uploadFilesWithCompanion(files, withNote, folder, index){
   let attOk = 0, attFail = 0, noteOk = 0, noteFail = 0
+  showActivity(t('uploadProgress') + ' · ' + files.length)
   for (const file of files) {
     try {
+      showActivity(t('uploadProgress') + ' · ' + esc(file.name))
       const up = await uploadFileBinary(file, index)
       attOk++
       if (withNote) {
@@ -1590,6 +1665,7 @@ async function uploadFilesWithCompanion(files, withNote, folder, index){
       }
     } catch (e) { attFail++; console.error('[pkw.upload] attachment failed', file.name, e) }
   }
+  clearActivity()
   if (attOk === 0) { toast(t('uploadFailed'), 'err'); return }
   if (attFail > 0) toast(t('attUploadPartial', { a: attOk, t: files.length }), 'warn')
   else if (withNote && noteFail > 0) toast(t('attUploadResultNoNote', { a: attOk, f: noteFail }), 'warn')
@@ -2015,33 +2091,41 @@ async function renderKnowledgeBrowse(){
   }
 }
 async function renderWikiList(){
+  const seq = viewSeq
   $('#treeToolbar').innerHTML = ''; $('#detail').innerHTML = ''
   $('#main').innerHTML = '<div class="empty">' + esc(t('loading')) + '</div>'
   try {
     const r = await loadOnce('listWikiPages', { pageSize: 200, folderId: state.wikiFolder })
+    if (seq !== viewSeq) return
     const pages = (r && r.pages) || []
     if (!pages.length) { $('#main').innerHTML = '<div class="empty"><h3>' + esc(t('wikiEmpty')) + '</h3></div>'; return }
     $('#main').innerHTML = '<h2>' + esc(t('knowledgeWiki')) + '<span class="sub">' + ((r && r.total) || pages.length) + '</span></h2>' +
       '<input id="wikiSearch" placeholder="' + esc(t('wikiSearchPlaceholder')) + '" style="width:100%;margin-bottom:10px">' +
       pages.map(p => '<div class="tree-row" data-action="open-wiki-page" data-slug="' + esc(p.slug) + '"><span class="ic">📄</span><span class="nm">' + esc(p.title) + '</span>' + (p.page_type ? '<span class="badge">' + esc(p.page_type) + '</span>' : '') + '</div>').join('')
     $('#wikiSearch').addEventListener('keydown', (e) => { if (e.key === 'Enter') { const q = $('#wikiSearch').value.trim(); wikiSearch(q) } })
-  } catch (e) { $('#main').innerHTML = '<div class="empty"><h3>' + esc(t('wikiUnavailable')) + '</h3><p class="muted">' + esc(e.message || '') + '</p><button class="btn" data-action="knowledge-tab" data-tab="wiki">' + esc(t('retry')) + '</button></div>' }
+  } catch (e) { if (seq === viewSeq) $('#main').innerHTML = '<div class="empty"><h3>' + esc(t('wikiUnavailable')) + '</h3><p class="muted">' + esc(e.message || '') + '</p><button class="btn" data-action="knowledge-tab" data-tab="wiki">' + esc(t('retry')) + '</button></div>' }
 }
 async function wikiSearch(q){
+  const seq = viewSeq
   if (!q) { renderWikiList(); return }
   try {
     const r = await api('listWikiPages', { query: q, pageSize: 50 })
+    if (seq !== viewSeq) return
     const pages = (r && r.pages) || []
     $('#main').innerHTML = '<h2>' + esc(t('knowledgeWiki')) + '<span class="sub">' + esc(q) + '</span></h2>' +
       (pages.length ? pages.map(p => '<div class="tree-row" data-action="open-wiki-page" data-slug="' + esc(p.slug) + '"><span class="ic">📄</span><span class="nm">' + esc(p.title) + '</span>' + (p.page_type ? '<span class="badge">' + esc(p.page_type) + '</span>' : '') + '</div>').join('') : '<div class="empty">' + esc(t('noHits', { q })) + '</div>')
-  } catch (e) { toast(t('genericError') + ': ' + e.message, 'err') }
+  } catch (e) { if (seq === viewSeq) toast(t('genericError') + ': ' + e.message, 'err') }
 }
 async function openWikiPage(slug){
+  const seq = viewSeq
   try {
     const p = await api('getWikiPage', { slug })
+    if (seq !== viewSeq) return
     const md = p.content || p.summary || ''
     const html = await api('renderMarkdown', { markdown: md }).catch(() => esc(md))
+    if (seq !== viewSeq) return
     const tree = await api('getTree', { sortMode: 'manual' }).catch(() => ({ root: [] }))
+    if (seq !== viewSeq) return
     const found = findNoteByTitleOrPath(tree.root || [], p.title)
     $('#main').innerHTML = '<div class="toolbar"><button class="btn" data-action="back-wiki">← ' + esc(t('knowledgeWiki')) + '</button>' +
       (found ? '<button class="btn primary" data-action="open-note" data-id="' + esc(found.noteId) + '">' + esc(t('wikiOpenNote')) + '</button>' : '') +
@@ -2058,9 +2142,11 @@ function graphColor(type){
   return map[type] || 'var(--accent)'
 }
 function renderGraphView(){
+  const seq = viewSeq
   $('#treeToolbar').innerHTML = ''; $('#detail').innerHTML = ''
   $('#main').innerHTML = '<div class="empty">' + esc(t('loading')) + '</div>'
   api('getWikiGraph', { mode: 'overview', limit: 500, types: state.graphTypes.length ? state.graphTypes : undefined }).then(g => {
+    if (seq !== viewSeq) return
     const nodes = g.nodes || [], edges = g.edges || []
     if (!nodes.length) { $('#main').innerHTML = '<div class="empty"><h3>' + esc(t('graphEmpty')) + '</h3></div>'; return }
     $('#main').innerHTML = '<h2>' + esc(t('knowledgeGraph')) + '<span class="sub">' + (g.meta ? g.meta.total : nodes.length) + '</span></h2>' +
@@ -2068,7 +2154,7 @@ function renderGraphView(){
       '<canvas id="graphCanvas" style="width:100%;height:58vh;border:1px solid var(--border);border-radius:8px;background:var(--bg-surface)"></canvas>' +
       '<div class="muted small" style="margin-top:6px">' + ['summary', 'entity', 'concept', 'synthesis', 'comparison'].map(ty => '<span class="badge graph-legend-item' + (state.graphTypes.includes(ty) ? '' : ' dim') + '" data-action="graph-filter-type" data-type="' + ty + '" style="background:' + graphColor(ty) + ';color:#fff;margin-right:6px;cursor:pointer">' + esc(ty) + '</span>').join('') + '</div>'
     drawGraph(nodes, edges)
-  }).catch(e => { $('#main').innerHTML = '<div class="empty"><h3>' + esc(t('graphUnavailable')) + '</h3><p class="muted">' + esc((e && e.message) || '') + '</p><button class="btn" data-action="knowledge-tab" data-tab="graph">' + esc(t('retry')) + '</button></div>' })
+  }).catch(e => { if (seq === viewSeq) $('#main').innerHTML = '<div class="empty"><h3>' + esc(t('graphUnavailable')) + '</h3><p class="muted">' + esc((e && e.message) || '') + '</p><button class="btn" data-action="knowledge-tab" data-tab="graph">' + esc(t('retry')) + '</button></div>' })
 }
 function drawGraph(nodes, edges){
   const canvas = $('#graphCanvas'); if (!canvas) return
@@ -2125,7 +2211,7 @@ function renderSearchResults(q, results){
     }
     return knowledgeCardHtml({
       title,
-      snippet: (r.remote.content || '').slice(0, 220),
+      snippet: r.remote.snippet || (r.remote.content || '').slice(0, 220),
       reason,
       source: local && local.folder,
       badges: kindBadge,
@@ -2180,9 +2266,8 @@ document.addEventListener('paste', async (e) => {
     if (item.type.indexOf('image/') === 0) {
       const file = item.getAsFile()
       if (!file) continue
-      const buf = new Uint8Array(await file.arrayBuffer()); let bin = ''
-      for (let i = 0; i < buf.length; i++) bin += String.fromCharCode(buf[i])
-      const up = await api('uploadAttachment', { filename: 'paste-' + Date.now() + '.png', mimeType: file.type || 'image/png', contentBase64: btoa(bin), knowledgeMode: 'note-scoped', ownerNoteId: state.selectedNoteId })
+      const contentBase64 = await fileToBase64(file)
+      const up = await api('uploadAttachment', { filename: 'paste-' + Date.now() + '.png', mimeType: file.type || 'image/png', contentBase64, knowledgeMode: 'note-scoped', ownerNoteId: state.selectedNoteId })
       const el = $('#editor')
       if (el) {
         // Reference the STORED filename so the managed link resolves to the binary.
@@ -2799,7 +2884,14 @@ document.addEventListener('click', (e) => {
   else if (act === 'toggle-folder') { if (state.collapsed.has(path)) state.collapsed.delete(path); else state.collapsed.add(path); const c = document.querySelector('.tree-children[data-folder="' + CSS.escape(path) + '"]'); if (c) { c.style.display = state.collapsed.has(path) ? 'none' : ''; el.textContent = state.collapsed.has(path) ? '▸' : '▾' } }
   else if (act === 'save-note') saveNote()
   else if (act === 'set-mode') { state.editor.mode = mode; localStorage.setItem('pkw-editor-mode', mode); const d = state.editor.noteId; if (d) openNote(d) }
-  else if (act === 'rename-note') renameNote(id)
+  else if (act === 'rename-note') {
+    const nid = id || state.selectedNoteId
+    if (!nid) return
+    let target
+    if (state.selectedNoteId === nid) target = document.querySelector('.editor-head .note-title')
+    else { const row = el.closest('.tree-row'); target = row ? row.querySelector('.note-title') : document.querySelector('.note-title[data-id="' + CSS.escape(nid) + '"]') }
+    inlineRenameTitle(target, nid)
+  }
   else if (act === 'move-note') moveNote(id)
   else if (act === 'delete-note') delNote(id)
   else if (act === 'rescan-notes') { renderTree(); refreshHeader() }

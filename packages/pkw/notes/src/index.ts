@@ -249,7 +249,7 @@ export class NotesService extends Service {
   }
 
   async update(noteId: NoteId, markdown: string): Promise<NoteIndexRecord> {
-    const { parseFrontmatter, injectNoteId } = await import('./frontmatter.ts')
+    const { parseFrontmatter, injectNoteId, deriveTitle } = await import('./frontmatter.ts')
     const existing = this.requireTable().get(noteId)
     if (existing === undefined) throw new Error(`pkwNotes: unknown note '${noteId}'`)
     const parsed = parseFrontmatter(markdown)
@@ -274,7 +274,7 @@ export class NotesService extends Service {
       beforeStateFingerprint: noteFingerprint(this.config.workspaceId, String(noteId), existing.relativePath, existing.contentHash, false),
     }
     await this.commitEvent(NOTE_UPDATED, String(noteId), payload)
-    const record = { ...existing, contentHash: hash, observedRevision, updatedAt: new Date().toISOString(), fileSize: Buffer.byteLength(next, 'utf8') }
+    const record = { ...existing, title: deriveTitle(next, parsed.frontmatter.title, posix.basename(existing.relativePath)), contentHash: hash, observedRevision, updatedAt: new Date().toISOString(), fileSize: Buffer.byteLength(next, 'utf8') }
     await this.putRecord(record, existing.relativePath)
     return record
   }

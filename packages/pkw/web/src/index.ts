@@ -112,6 +112,52 @@ function markdownSnippet(markdown: string, max = 220): string {
 }
 
 /**
+ * Lightweight Markdown → readable plain-text snippet for a search hit (chunk
+ * content), reusing strip semantics without a full Markdown parser. Never
+ * depends on WeKnora.
+ */
+function plainTextSnippet(markdown: string, max = 220): string {
+  let text = String(markdown ?? '')
+  text = text
+    .replace(/^---[\s\S]*?---\s*/m, '')            // frontmatter
+    .replace(/```[\s\S]*?```/g, ' ')               // fenced code
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g, '$1')
+    .replace(/^\s{0,3}#{1,6}\s+/gm, '')
+    .replace(/^\s*>\s?/gm, '')
+    .replace(/^\s*[-*+]\s+/gm, '')
+    .replace(/^\s*\d+[.)]\s+/gm, '')
+    .replace(/\|/g, ' ')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/__([^_]+)__/g, '$1')
+    .replace(/(^|\s)[*_]([^*_]+)[*_](\s|$)/g, '$1$2$3')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (text.length > max) text = text.slice(0, max).replace(/\s+\S*$/, '') + '…'
+  return text
+}
+
+/**
+ * Rewrite a Note's displayed title (frontmatter `title:` when present, else the
+ * first `# heading`, else a new leading heading) while preserving NoteId, path,
+ * and the rest of the body. Used by inline rename (title-only, never path).
+ */
+function retitleMarkdown(markdown: string, title: string): string {
+  const { frontmatterRaw, body } = splitFrontmatter(markdown)
+  const trimmed = title.trim()
+  const titleRe = /^title:\s*[^\r\n]*$/m
+  if (frontmatterRaw !== '' && titleRe.test(frontmatterRaw)) {
+    return frontmatterRaw.replace(titleRe, 'title: ' + trimmed) + '\n' + body
+  }
+  if (/^#\s+[^\r\n]*/m.test(body)) {
+    return frontmatterRaw + (frontmatterRaw === '' ? '' : '\n') + body.replace(/^#\s+[^\r\n]*/m, '# ' + trimmed)
+  }
+  return frontmatterRaw + (frontmatterRaw === '' ? '' : '\n') + '# ' + trimmed + '\n' + body
+}
+
+/**
  * Pinned Vditor version. The served asset URLs embed it so the browser can
  * long-cache immutably; Vditor's own `cdn` base also uses it. Bump together
  * with the `vditor` dependency in the lockfile.
@@ -477,6 +523,16 @@ export class PkwWebService extends Service {
       case 'moveNote': {
         const rec = await this.notes.move(NoteId(String(args.noteId)), String(args.relativePath))
         return { noteId: String(rec.noteId), relativePath: rec.relativePath }
+      }
+      case 'renameNoteTitle': {
+        // Title-only inline rename: rewrite the displayed title, preserve NoteId
+        // and path. Move stays a separate action (moveNote / folder picker).
+        const noteId = NoteId(String(args.noteId))
+        const title = String(args.title).trim()
+        if (title === '') throw new Error('pkwWeb: empty title')
+        const doc = await this.notes.getDocument(noteId)
+        const rec = await this.notes.update(noteId, retitleMarkdown(doc.markdown, title))
+        return { noteId: String(rec.noteId), relativePath: rec.relativePath, title: rec.title }
       }
       case 'deleteNote': {
         await this.notes.delete(NoteId(String(args.noteId)))
@@ -886,8 +942,18 @@ export class PkwWebService extends Service {
   private enrichRetrievalResults(results: RetrievalResult[]): unknown[] {
     const out: unknown[] = []
     for (const r of results) {
-      const remote = { content: r.remote.content, title: r.remote.title, filename: r.remote.filename, score: r.remote.score }
+      const remote = { content: r.remote.content, snippet: plainTextSnippet(r.remote.content, 220), title: r.remote.title, filename: r.remote.filename, score: r.remote.score }
       if (r.local === undefined) { out.push({ remote }); continue }
+      // Stale-result guard: a remote hit whose local entity no longer exists (deleted
+      // or archived) must NOT surface as a Business Knowledge result. The async
+      // remote delete will eventually converge; until then, drop it here.
+      if (r.local.entityType === 'note') {
+        const n = this.notes.get(NoteId(r.local.entityId))
+        if (n === undefined || n.deletedAt !== undefined) continue
+      } else if (r.local.entityType === 'attachment') {
+        const a = this.attachments.get(AttachmentId(r.local.entityId))
+        if (a === undefined || a.deletedAt !== undefined) continue
+      }
       const local: Record<string, unknown> = {
         entityType: r.local.entityType,
         entityId: r.local.entityId,

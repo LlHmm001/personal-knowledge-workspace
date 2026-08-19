@@ -231,4 +231,17 @@ describe('PKW web UI (served page)', () => {
     expect(js).toContain('sourceFiles')
     expect(js).toContain('isolatedHint')
   })
+
+  it('ships navigation-epoch guards, Notes Explorer, inline rename, and base64 upload', () => {
+    const js = script()
+    expect(js).toContain('noteSeq')
+    expect(js).toContain('if (seq !== viewSeq) return')
+    expect(js).toContain('renderNotesExplorer')
+    expect(js).toContain('inlineRenameTitle')
+    expect(js).toContain('renameNoteTitle')
+    expect(js).toContain('fileToBase64')
+    expect(js).toContain('showActivity')
+    // No more O(n²) String.fromCharCode + btoa upload path.
+    expect(js).not.toContain('btoa(bin)')
+  })
 })

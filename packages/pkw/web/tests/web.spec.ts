@@ -469,4 +469,24 @@ describe('PKW Web Host Bridge (real Core integration)', () => {
     expect(Array.isArray(rel)).toBe(true)
     expect(rel).toHaveLength(0)
   })
+
+  it('search filters stale results whose local Note was deleted', async () => {
+    const { web, sync } = await boot()
+    const created = await web.call('createNote', { relativePath: 'gone.md', markdown: '# searchable gone\n' }) as { noteId: string }
+    await sync.syncNote(created.noteId as never)
+    await web.call('deleteNote', { noteId: created.noteId })
+    const results = await web.call('search', { query: 'searchable', limit: 5 }) as Array<{ local?: { entityId: string } }>
+    expect(results.some(r => r.local !== undefined && r.local.entityId === created.noteId)).toBe(false)
+  })
+
+  it('renameNoteTitle rewrites the title, preserving NoteId and path', async () => {
+    const { web } = await boot()
+    const created = await web.call('createNote', { relativePath: 'a.md', markdown: '# Old\nbody\n' }) as { noteId: string }
+    const r = await web.call('renameNoteTitle', { noteId: created.noteId, title: 'New' }) as { noteId: string; relativePath: string; title: string }
+    expect(r.noteId).toBe(created.noteId)
+    expect(r.relativePath).toBe('a.md')
+    expect(r.title).toBe('New')
+    const doc = await web.call('getNote', { noteId: created.noteId }) as { markdown: string }
+    expect(doc.markdown).toContain('# New')
+  })
 })
