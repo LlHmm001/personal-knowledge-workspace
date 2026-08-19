@@ -255,4 +255,25 @@ describe('PKW web UI (served page)', () => {
     expect(page).toContain('.launcher{display:grid')
     expect(page).toContain('@media(max-width:768px)')
   })
+
+  it('orders the Launcher (总览|待办 / 笔记|知识 / 来源|回收站) and drops the header global search', () => {
+    const page = renderPage()
+    const idx = (needle: string) => page.indexOf('data-view="' + needle + '"')
+    expect(idx('overview')).toBeLessThan(idx('tasks'))
+    expect(idx('tasks')).toBeLessThan(idx('notes'))
+    expect(idx('notes')).toBeLessThan(idx('knowledge'))
+    expect(idx('knowledge')).toBeLessThan(idx('attachments'))
+    expect(idx('attachments')).toBeLessThan(idx('trash'))
+    expect(page).not.toContain('id="search"')
+  })
+
+  it('ships mobile surface CSS (safe-area, no horizontal overflow, single-column) + sources revalidate', () => {
+    const page = renderPage()
+    const js = script()
+    expect(page).toContain('env(safe-area-inset-bottom)')
+    expect(page).toContain('overflow-x:hidden')
+    expect(page).toContain('.att-row{display:grid')
+    expect(js).toContain('refreshSourcesData')
+    expect(js).toContain('reconcileProcessing')
+  })
 })

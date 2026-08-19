@@ -20,7 +20,7 @@ import PkwWorkspaceService from '../../workspace/src/index.ts'
 import NotesService from '../../notes/src/index.ts'
 import AttachmentsService from '../../attachments/src/index.ts'
 import WeKnoraClient from '../../weknora/src/index.ts'
-import WeKnoraSyncService, { mapWeKnoraProcessingPhase } from '../src/index.ts'
+import WeKnoraSyncService, { mapWeKnoraProcessingPhase, weKnoraKnowledgePhase } from '../src/index.ts'
 import { classifyOutcome } from '../src/outcome.ts'
 
 const dirs: string[] = []
@@ -965,5 +965,12 @@ describe('mapWeKnoraProcessingPhase', () => {
     expect(mapWeKnoraProcessingPhase('queued')).toBe('waiting')
     expect(mapWeKnoraProcessingPhase('unknown-status')).toBe('processing')
     expect(mapWeKnoraProcessingPhase(undefined)).toBe('processing')
+  })
+  it('derives phase from parse + summary (optimizing summary while parse completed)', () => {
+    expect(weKnoraKnowledgePhase('completed', undefined)).toBe('ready')
+    expect(weKnoraKnowledgePhase('completed', 'none')).toBe('ready')
+    expect(weKnoraKnowledgePhase('completed', 'optimizing')).toBe('optimizing')
+    expect(weKnoraKnowledgePhase('processing', undefined)).toBe('processing')
+    expect(weKnoraKnowledgePhase('completed', 'failed')).toBe('failed')
   })
 })

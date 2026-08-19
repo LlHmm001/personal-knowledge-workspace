@@ -489,4 +489,10 @@ describe('PKW Web Host Bridge (real Core integration)', () => {
     const doc = await web.call('getNote', { noteId: created.noteId }) as { markdown: string }
     expect(doc.markdown).toContain('# New')
   })
+
+  it('reconcileProcessing RPC re-polls non-terminal attachments and returns a count', async () => {
+    const { web } = await boot()
+    const r = await web.call('reconcileProcessing', {}) as { reconciled: number }
+    expect(typeof r.reconciled).toBe('number')
+  })
 })

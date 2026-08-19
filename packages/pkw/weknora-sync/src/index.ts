@@ -91,6 +91,7 @@ const entityMappingSchema = z.object({
   localObservedRevision: z.number().int().nonnegative(),
   syncState: z.string(),
   remoteParseStatus: z.string().optional(),
+  remoteSummaryStatus: z.string().optional(),
   replacementKnowledgeId: z.string().optional(),
   replacementFingerprint: z.string().optional(),
   replacementState: z.string().optional(),
@@ -251,6 +252,19 @@ export function mapWeKnoraProcessingPhase(parseStatus?: string): 'waiting' | 'pr
   }
 }
 
+/**
+ * Derive a user-facing processing phase from WeKnora's parse AND summary status
+ * (a file can be parse-completed while its summary is still optimizing).
+ */
+export function weKnoraKnowledgePhase(parseStatus?: string, summaryStatus?: string): 'waiting' | 'processing' | 'optimizing' | 'ready' | 'failed' {
+  if (parseStatus === 'failed' || summaryStatus === 'failed') return 'failed'
+  if (parseStatus === 'completed' && (summaryStatus === undefined || summaryStatus === '' || summaryStatus === 'none' || summaryStatus === 'completed')) return 'ready'
+  if (summaryStatus === 'optimizing' || parseStatus === 'optimizing') return 'optimizing'
+  if (parseStatus === 'processing' || parseStatus === 'parsing' || summaryStatus === 'processing') return 'processing'
+  if (parseStatus === 'pending' || parseStatus === 'queued' || parseStatus === 'waiting' || parseStatus === undefined) return 'waiting'
+  return 'processing'
+}
+
 export interface ReconcileReport {
   /** Entities that need (re)sync (never-synced / changed / stale / restored / remote-missing). */
   markedDirty: number
@@ -282,6 +296,9 @@ export class WeKnoraSyncService extends Service {
 
   /** Per-entity in-process serialization: one remote mutation per entity at a time. */
   private readonly locks = new Map<string, Promise<void>>()
+
+  /** Throttle tick for the periodic standalone-attachment processing reconcile. */
+  private reconcileTick = 0
 
   constructor(ctx: Context, private readonly config: Config) {
     super(ctx, 'pkwWeKnoraSync')
@@ -321,6 +338,14 @@ export class WeKnoraSyncService extends Service {
         this.ctx.logger.warn('pkw note-scoped processing sweep failed')
         this.ctx.logger.warn(error)
       })
+      // Standalone attachment processing reconcile: throttled (every ~5s) to avoid
+      // hammering WeKnora, but keeps PKW following remote parse/summary status.
+      if (++this.reconcileTick % 5 === 0) {
+        void this.reconcileNonTerminalAttachments().catch((error: unknown) => {
+          this.ctx.logger.warn('pkw attachment processing reconcile failed')
+          this.ctx.logger.warn(error)
+        })
+      }
     }, this.config.pollMs)
 
     // Restart resume: actively recover dirty/pending/unknown/retryable state,
@@ -694,14 +719,14 @@ export class WeKnoraSyncService extends Service {
     if (rec !== undefined) {
       if (rec.state === 'derived-ready') return 'ready'
       if (rec.state === 'failed') return 'failed'
-      // in-flight ('parsing') → map from the captured remote parse status.
-      return mapWeKnoraProcessingPhase(rec.parseStatus)
+      // in-flight ('parsing') → map from the captured remote statuses.
+      return weKnoraKnowledgePhase(rec.parseStatus, rec.summaryStatus)
     }
     // Standalone attachment (Sources): the processing state lives on the mapping's
-    // remote parse status, NOT the note-scoped processing table.
+    // remote parse/summary status, NOT the note-scoped processing table.
     const mapping = this.getAttachmentMapping(attachmentId)
     if (mapping !== undefined && mapping.knowledgeId !== undefined) {
-      return mapWeKnoraProcessingPhase(mapping.remoteParseStatus)
+      return weKnoraKnowledgePhase(mapping.remoteParseStatus, mapping.remoteSummaryStatus)
     }
     return 'waiting'
   }
@@ -715,6 +740,32 @@ export class WeKnoraSyncService extends Service {
       if (rec.state === 'derived-ready' && rec.configFingerprint !== undefined && rec.configFingerprint !== current) out.push(attachmentId)
     }
     return out
+  }
+
+  /**
+   * Reconcile standalone attachment processing: re-poll WeKnora for any
+   * standalone attachment still in a non-terminal phase and patch the mapping.
+   * This is what closes the "WeKnora=optimizing but PKW=waiting" gap — the
+   * upload-time parse status is a snapshot, not a live status.
+   */
+  async reconcileNonTerminalAttachments(): Promise<number> {
+    const terminal = new Set(['completed', 'failed'])
+    let updated = 0
+    for (const [, mapping] of this.reqMappings().entries()) {
+      if (mapping.entityType !== ENTITY_ATTACHMENT || mapping.knowledgeId === undefined) continue
+      const phase = weKnoraKnowledgePhase(mapping.remoteParseStatus, mapping.remoteSummaryStatus)
+      if (phase === 'ready' || phase === 'failed') continue
+      try {
+        const k = await this.ctx.pkwWeKnora.getKnowledge(mapping.knowledgeId)
+        const nextParse = k.parse_status ?? mapping.remoteParseStatus
+        const nextSummary = k.summary_status ?? mapping.remoteSummaryStatus
+        if (nextParse !== mapping.remoteParseStatus || nextSummary !== mapping.remoteSummaryStatus) {
+          await this.putMapping(this.entityKey(ENTITY_ATTACHMENT, mapping.entityId), { ...mapping, remoteParseStatus: nextParse, remoteSummaryStatus: nextSummary, updatedAt: this.now() })
+          updated++
+        }
+      } catch { /* offline → retry next reconcile */ }
+    }
+    return updated
   }
 
   /** Read the note-scoped attachment refs a Note's canonical Markdown references. */

@@ -232,16 +232,45 @@ mark{background:var(--mark-bg);border-radius:2px;padding:0 2px}
   #app{grid-template-columns:1fr;grid-template-rows:52px 1fr 58px;height:100dvh}
   #app > aside:first-of-type{display:none}
   #app > aside.right{display:none}
-  main{padding:14px 14px 20px}
-  header #search{width:150px}
-  #bottomNav{display:flex;position:fixed;left:0;right:0;bottom:0;height:58px;background:var(--panel);border-top:1px solid var(--border);z-index:50}
+  main{padding:14px 14px calc(58px + env(safe-area-inset-bottom) + 16px)}
+  #bottomNav{display:flex;position:fixed;left:0;right:0;bottom:0;height:calc(58px + env(safe-area-inset-bottom));padding-bottom:env(safe-area-inset-bottom);background:var(--panel);border-top:1px solid var(--border);z-index:50}
   .launcher{grid-template-columns:1fr 1fr 1fr}
+  /* no horizontal overflow: containers clip, long tokens break instead of stretch */
+  body,main{overflow-x:hidden}
+  main h2{font-size:17px}
+  .toolbar{flex-wrap:wrap;gap:6px}
+  .toolbar #attSearch{flex:1 1 100%;min-width:0}
+  .toolbar .btn.small,.toolbar .btn{padding:8px 10px;min-height:36px}
+  /* Notes Explorer rows: title + two-line metadata, no truncation/vertical text */
+  .tree-row.note,.att-row{flex-wrap:wrap;padding:8px 6px}
+  .tree-row.note .nm,.att-row .nm{flex:1 1 100%;white-space:normal;word-break:break-word;font-size:14px}
+  .tree-row.note .muted.small,.att-row .muted.small{font-size:11px}
+  .tree-row.note .syncbadge,.att-row .badge{font-size:11px}
+  /* Sources: single-column cards */
+  .att-row{display:grid;grid-template-columns:32px 1fr auto;grid-template-areas:"ic name state" "ic meta owner";row-gap:2px;column-gap:8px;align-items:center}
+  .att-row .att-check{grid-area:ic}
+  .att-row .att-ic,.att-row .att-thumb{grid-area:ic;width:32px;height:32px}
+  .att-row .nm{grid-area:name}
+  .att-row .muted.small{grid-area:meta}
+  .att-row .badge{grid-area:state}
+  .att-row .btn.small{grid-area:owner}
+  .att-grid{grid-template-columns:repeat(auto-fill,minmax(120px,1fr))}
+  /* Task cards: allow title wrap + due/overdue visible */
+  .task-card{flex-wrap:wrap}
+  .task-card .task-title{white-space:normal;word-break:break-word}
+  /* Knowledge cards already single-column */
+  .hit .ref{flex-wrap:wrap}
+  .hit .t{font-size:14px;word-break:break-word}
+  /* Editor: toolbar scrolls instead of stretching page */
+  #editorPane,.editor-head{overflow-x:auto}
+  .editor-head .title{word-break:break-word;white-space:normal}
+  .vditor-toolbar{overflow-x:auto;flex-wrap:nowrap}
 }
 @media(max-width:400px){
   header h1{font-size:13px}
-  header #search{width:110px;padding:6px 8px}
   #integBadge,#localBadge{display:none}
-  main{padding:10px 10px 16px}
+  main{padding:10px 10px calc(58px + env(safe-area-inset-bottom) + 12px)}
+  .bn-item{font-size:10px}
 }
 /* Vditor Live (IR) dark adaptation: the editor surface follows the tokens. */
 [data-theme="dark"] .vditor,[data-theme="dark"] .vditor-ir,[data-theme="dark"] .vditor-reset{background:var(--bg-surface);color:var(--text-primary)}
@@ -288,7 +317,6 @@ mark{background:var(--mark-bg);border-radius:2px;padding:0 2px}
   <header>
     <h1>PKW</h1>
     <span class="badge" id="wsBadge">…</span>
-    <input id="search" placeholder="搜索笔记与附件…" aria-label="Search" />
     <span class="spacer"></span>
     <span class="badge" id="integBadge">WeKnora: …</span>
     <span class="badge" id="localBadge">Local: …</span>
@@ -301,10 +329,10 @@ mark{background:var(--mark-bg);border-radius:2px;padding:0 2px}
       <div class="nav-group-label">Workspace</div>
       <div class="launcher">
         <button data-view="overview" class="launch-item"><span class="li-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg></span><span class="li-label">总览</span></button>
+        <button data-view="tasks" class="launch-item"><span class="li-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1.4"/><circle cx="4.5" cy="12" r="1.4"/><circle cx="4.5" cy="18" r="1.4"/></svg></span><span class="li-label">待办</span></button>
         <button data-view="notes" class="launch-item"><span class="li-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h8M8 17h5"/></svg></span><span class="li-label">笔记</span></button>
         <button data-view="knowledge" class="launch-item"><span class="li-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg></span><span class="li-label">知识</span></button>
         <button data-view="attachments" class="launch-item"><span class="li-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M13 2v7h7"/></svg></span><span class="li-label">来源</span></button>
-        <button data-view="tasks" class="launch-item"><span class="li-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1.4"/><circle cx="4.5" cy="12" r="1.4"/><circle cx="4.5" cy="18" r="1.4"/></svg></span><span class="li-label">待办</span></button>
         <button data-view="trash" class="launch-item"><span class="li-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg></span><span class="li-label">回收站</span></button>
       </div>
     </div>
@@ -543,7 +571,7 @@ function toast(msg, kind){ const el = $('#toast'); el.innerHTML = '<div class="t
 // can't show byte progress. Not a job system — just an indeterminate spinner.
 function showActivity(msg){ const el = $('#activity'); if (!el) return; el.innerHTML = '<span class="spinner"></span>' + esc(msg); el.style.display = 'flex'; clearTimeout(showActivity._t) }
 function clearActivity(){ const el = $('#activity'); if (!el) return; clearTimeout(showActivity._t); showActivity._t = setTimeout(() => { el.style.display = 'none' }, 150) }
-function applyLang(){ document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en'; $('#search').placeholder = t('searchPlaceholder'); $('#langBtn').textContent = lang === 'zh' ? 'EN' : '中文'; document.querySelectorAll('.nav .launch-item').forEach(b => { const l = b.querySelector('.li-label'); if (l) l.textContent = b.dataset.view === 'attachments' ? t('sources') : t(b.dataset.view) }); document.querySelectorAll('#bottomNav .bn-item').forEach(b => { const l = b.querySelector('.bn-label'); if (l) l.textContent = b.dataset.view === 'attachments' ? t('sources') : t(b.dataset.view) }) }
+function applyLang(){ document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en'; $('#langBtn').textContent = lang === 'zh' ? 'EN' : '中文'; document.querySelectorAll('.nav .launch-item').forEach(b => { const l = b.querySelector('.li-label'); if (l) l.textContent = b.dataset.view === 'attachments' ? t('sources') : t(b.dataset.view) }); document.querySelectorAll('#bottomNav .bn-item').forEach(b => { const l = b.querySelector('.bn-label'); if (l) l.textContent = b.dataset.view === 'attachments' ? t('sources') : t(b.dataset.view) }) }
 // ── Theme (system / light / dark) — preference in localStorage, tokens in CSS ──
 function currentThemeMode(){ return localStorage.getItem('pkw-theme') || 'system' }
 function applyTheme(mode){
@@ -1578,6 +1606,7 @@ async function renderAttachments(){
   $('#detail').innerHTML = '<h3>' + esc(t('sources')) + '</h3><div class="kv muted">' + esc(t('attachmentDetailHint')) + '</div>'
   if (state.attachmentsCache.length) { renderAttachmentsFrom(state.attachmentsCache); viewMark('warm-paint', 'cache=hit') }
   else { $('#list').innerHTML = ''; $('#main').innerHTML = '<div class="empty">' + esc(t('loading')) + '</div>'; viewMark('shell', 'cache=miss') }
+  refreshSourcesData() // entry-time revalidate: reconcile non-terminal processing, patch status
   try {
     const list = await loadOnce('listAttachments', {})
     if (seq !== viewSeq) return
@@ -1586,6 +1615,21 @@ async function renderAttachments(){
     viewMark('data-ready')
     if (state.selectedAttachmentId !== null) await openAttachment(state.selectedAttachmentId)
   } catch (e) { if (seq === viewSeq) $('#main').innerHTML = '<div class="empty">' + esc(t('genericError')) + '</div>' }
+}
+let lastSourcesReconcile = 0
+async function refreshSourcesData(){
+  const now = Date.now()
+  if (now - lastSourcesReconcile < 4000) return
+  lastSourcesReconcile = now
+  try {
+    await api('reconcileProcessing')
+    invalidateLoad('listAttachments')
+    const list = await api('listAttachments', {})
+    if (state.view !== 'attachments') return
+    state.attachmentsCache = list
+    renderAttachmentsFrom(list)
+    if (state.selectedAttachmentId !== null) openAttachment(state.selectedAttachmentId)
+  } catch (e) { /* offline → background worker will retry */ }
 }
 async function openAttachment(id){
   const seq = viewSeq
@@ -2034,16 +2078,19 @@ async function renderTrash(){
 function renderKnowledgeView(){
   $('#list').innerHTML = '<div class="list-head">' + esc(t('knowledge')) + '</div><div class="list-section">' + esc(t('knowledgeBrowseTitle')) + '</div>'
   $('#treeToolbar').innerHTML = ''; $('#detail').innerHTML = ''
-  if (state.searchQuery) {
-    if (state.searchResults) {
-      $('#main').innerHTML = '<div class="toolbar"><button class="btn" data-action="kb-clear-search">← ' + esc(t('knowledgeBrowse')) + '</button></div>'
-      renderSearchResults(state.searchQuery, state.searchResults)
-    } else {
-      $('#main').innerHTML = '<div class="empty">' + esc(t('searching')) + '</div>'
-    }
+  const q = state.searchQuery || ''
+  $('#main').innerHTML = '<h2>' + esc(t('knowledgeBrowseTitle')) + '</h2>' +
+    '<div class="toolbar"><input id="kbSearch" placeholder="' + esc(t('searchPlaceholder')) + '" value="' + esc(q) + '" style="flex:1;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--panel);color:var(--text-primary)">' +
+    (q ? '<button class="btn" data-action="kb-clear-search">' + esc(t('cancel')) + '</button>' : '') +
+    '</div><div id="kbBody"></div>'
+  const input = $('#kbSearch')
+  if (input) input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { const v = input.value.trim(); if (v) runSearch(v) } })
+  if (q) {
+    if (state.searchResults) { const html = searchCardsHtml(state.searchResults); $('#kbBody').innerHTML = html || '<div class="empty">' + esc(t('noHits', { q })) + '</div>' }
+    else $('#kbBody').innerHTML = '<div class="empty">' + esc(t('searching')) + '</div>'
     return
   }
-  renderKnowledgeBrowse()
+  renderKnowledgeBrowseInto()
 }
 // Unified knowledge card: shared by Knowledge Discovery browse + Search results
 // so "finding knowledge" reads identically regardless of entry point. Exposes
@@ -2064,21 +2111,13 @@ function knowledgeCardHtml(c){
     '<div class="ref"><span class="meta">' + meta.join(' · ') + '</span><span class="spacer"></span>' + openBtn + '</div>' +
     '</div>'
 }
-async function renderKnowledgeBrowse(){
+async function renderKnowledgeBrowseInto(){
   const seq = viewSeq
-  $('#treeToolbar').innerHTML = ''; $('#detail').innerHTML = ''
-  $('#main').innerHTML = '<h2>' + esc(t('knowledgeBrowseTitle')) + '</h2><p class="kb-section-hint">' + esc(t('knowledgeBrowse')) + '</p>' +
-    '<input id="kbFilter" placeholder="' + esc(t('knowledgeFilterPlaceholder')) + '" style="width:100%;margin-bottom:12px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--panel);color:var(--text-primary)">' +
-    '<div id="kbList"></div>'
-  const input = $('#kbFilter')
+  const box = $('#kbBody')
+  if (!box) return
   const draw = () => {
-    const q = (input ? input.value : '').trim().toLowerCase()
-    const items = (state.knowledgeCache || []).filter(it => {
-      if (!q) return true
-      return (it.title || '').toLowerCase().includes(q) || (it.summary || '').toLowerCase().includes(q) || (it.folder || '').toLowerCase().includes(q)
-    })
-    const box = $('#kbList'); if (!box) return
-    if (!items.length) { box.innerHTML = '<div class="empty">' + (q ? esc(t('noHits', { q })) : esc(t('knowledgeEmpty'))) + '</div>'; return }
+    const items = state.knowledgeCache || []
+    if (!items.length) { box.innerHTML = '<div class="empty">' + esc(t('knowledgeEmpty')) + '</div>'; return }
     box.innerHTML = items.map(it => {
       const badges = (it.attachmentCount ? '<span class="badge">' + esc(t('attachmentsN', { n: it.attachmentCount })) + '</span>' : '') +
         (it.indexed ? '<span class="badge ok">' + esc(t('knowledgeIndexed')) + '</span>' : (it.pending ? '<span class="badge warn">' + esc(t('knowledgePending')) + '</span>' : ''))
@@ -2092,9 +2131,8 @@ async function renderKnowledgeBrowse(){
       })
     }).join('')
   }
-  if (input) input.addEventListener('input', draw)
   if (state.knowledgeCache) { draw(); viewMark('warm-paint', 'cache=hit') }
-  else { $('#kbList').innerHTML = '<div class="empty">' + esc(t('loading')) + '</div>'; viewMark('shell', 'cache=miss') }
+  else { box.innerHTML = '<div class="empty">' + esc(t('loading')) + '</div>'; viewMark('shell', 'cache=miss') }
   try {
     const list = await api('listKnowledge', {})
     if (seq !== viewSeq) return
@@ -2103,7 +2141,6 @@ async function renderKnowledgeBrowse(){
     viewMark('data-ready')
   } catch (e) {
     if (seq !== viewSeq) return
-    const box = $('#kbList')
     if (box) box.innerHTML = '<div class="empty">' + esc(t('knowledgeOffline')) + '</div><div class="empty"><button class="btn" data-action="knowledge-tab" data-tab="browse">' + esc(t('retry')) + '</button></div>'
   }
 }
@@ -2201,9 +2238,8 @@ function drawGraph(nodes, edges){
   canvas._fit = () => { panX = 0; panY = 0; scale = 1; render() }
   canvas._toggleRel = () => { showRel = !showRel; const b = document.querySelector('[data-action="graph-toggle-rel"]'); if (b) b.textContent = showRel ? t('graphHideRelations') : t('graphShowRelations'); render() }
 }
-function renderSearchResults(q, results){
-  if (!results || !results.length) { $('#main').innerHTML = '<div class="empty">' + t('noHits', { q: esc(q) }) + '</div>'; return }
-  $('#main').innerHTML = '<h2>' + esc(t('search')) + '<span class="sub">' + esc(q) + '</span></h2>' + results.map(r => {
+function searchCardsHtml(results){
+  return results.map(r => {
     const local = r.local
     const title = r.remote.title || r.remote.filename || (local && local.title) || (local && local.entityId) || t('untitled')
     const attName = r.remote.filename || (local && local.matchedAttachmentId) || ''
@@ -2237,14 +2273,21 @@ function renderSearchResults(q, results){
     })
   }).join('')
 }
+function renderSearchResults(q, results){
+  if (!results || !results.length) { $('#main').innerHTML = '<div class="empty">' + t('noHits', { q: esc(q) }) + '</div>'; return }
+  $('#main').innerHTML = '<h2>' + esc(t('search')) + '<span class="sub">' + esc(q) + '</span></h2>' + searchCardsHtml(results)
+}
 async function runSearch(q){
   state.searchQuery = q
-  $('#main').innerHTML = '<div class="empty">' + esc(t('searching')) + '</div>'
+  const box = $('#kbBody')
+  if (box) box.innerHTML = '<div class="empty">' + esc(t('searching')) + '</div>'
+  else $('#main').innerHTML = '<div class="empty">' + esc(t('searching')) + '</div>'
   try {
     const results = await api('search', { query: q, limit: 10 })
     state.searchResults = results
-    renderSearchResults(q, results)
-  } catch (e) { state.searchResults = null; $('#main').innerHTML = '<div class="empty">' + esc(t('knowledgeOffline')) + '</div><div class="empty muted">' + esc(e.message || '') + '</div>' }
+    if (box) box.innerHTML = searchCardsHtml(results) || '<div class="empty">' + esc(t('noHits', { q })) + '</div>'
+    else renderSearchResults(q, results)
+  } catch (e) { state.searchResults = null; const msg = '<div class="empty">' + esc(t('knowledgeOffline')) + '</div><div class="empty muted">' + esc(e.message || '') + '</div>'; if (box) box.innerHTML = msg; else $('#main').innerHTML = msg }
 }
 async function syncNow(){ toast(t('syncingAll'), 'warn'); try { await api('syncNow'); toast(t('ok'), 'ok'); await render() } catch (e) { toast(t('genericError') + ': ' + e.message, 'err') } }
 async function syncEntity(et, id){ try { await api('syncEntity', { entityType: et, entityId: id }); toast(t('ok'), 'ok'); if (et === 'note' && state.selectedNoteId === id) await openNote(id); else await renderTree() } catch (e) { toast(t('genericError') + ': ' + e.message, 'err') } }
@@ -3367,7 +3410,7 @@ function quickTaskDialog(matrixId, sourceRefs, prefill){
     $('#tkTitle').focus()
   }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
 }
-$('#search').addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.value.trim()) { state.view = 'knowledge'; render(); runSearch(e.target.value.trim()) } })
+// Header global search removed (Search is now the unified Knowledge entry).
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') { if (taskDetailRequestClose) { taskDetailRequestClose(); return } dismissContextMenu(); dismissSelButton(); dismissWikiSuggest(); return }
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') { e.preventDefault(); if (state.view === 'notes' && state.selectedNoteId !== null) saveNote() }

@@ -759,6 +759,7 @@ export class PkwWebService extends Service {
         return { synced: true }
       }
       case 'syncNow': return this.sync.drain().then(() => ({ drained: true }))
+      case 'reconcileProcessing': return this.sync.reconcileNonTerminalAttachments().then(n => ({ reconciled: n }))
       case 'reconcile': {
         const notesRep = await this.notes.reconcile()
         const attRep = await this.attachments.reconcile()
