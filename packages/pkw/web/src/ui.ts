@@ -272,6 +272,32 @@ mark{background:var(--mark-bg);border-radius:2px;padding:0 2px}
   main{padding:10px 10px calc(58px + env(safe-area-inset-bottom) + 12px)}
   .bn-item{font-size:10px}
 }
+/* Mobile surface cards + bottom sheet (rendered only on mobile) */
+.hit-clickable{cursor:pointer}.hit-clickable:hover{border-color:var(--accent)}
+.hit .chev{float:right;color:var(--muted);font-size:16px;margin-left:6px}
+.mnote,.msrc,.mtask{display:flex;align-items:flex-start;gap:10px;padding:12px 10px;border:1px solid var(--border);border-radius:12px;margin-bottom:8px;background:var(--panel)}
+.mnote-main,.msrc-main,.mtask-main{flex:1 1 auto;min-width:0}
+.mnote-title,.msrc-name,.mtask-title{font-size:15px;font-weight:600;line-height:1.3;word-break:break-word}
+.mnote-folder,.msrc-meta,.mtask-cat,.mtask-due{font-size:12px;color:var(--muted);margin-top:2px}
+.mnote-meta{font-size:11px;color:var(--muted);margin-top:4px}
+.mnote-more{flex:0 0 auto;border:0;background:none;font-size:18px;color:var(--muted);padding:0 4px;min-width:32px;min-height:36px;cursor:pointer}
+.msrc-thumbwrap{flex:0 0 auto;width:44px;height:44px;border-radius:8px;overflow:hidden;background:var(--bg-hover);display:flex;align-items:center;justify-content:center;border:1px solid var(--border)}
+.msrc-thumb{width:100%;height:100%;object-fit:cover}.msrc-ic{font-size:22px}
+.msrc-badges{margin-top:4px;display:flex;gap:4px;flex-wrap:wrap}
+.msrc-summary{font-size:12px;color:var(--muted);margin-top:6px;line-height:1.4}
+.mtask-check{flex:0 0 auto;font-size:20px;padding:0 4px;min-width:32px;min-height:36px;display:flex;align-items:flex-start;justify-content:center;cursor:pointer;border:0;background:none}
+.mtask-due{font-weight:600;color:var(--warning)}
+.mobile-sheet-overlay{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:90;display:flex;align-items:flex-end;justify-content:center}
+.mobile-sheet{width:100%;max-width:520px;background:var(--panel);border-radius:16px 16px 0 0;padding:10px 12px calc(10px + env(safe-area-inset-bottom));box-shadow:0 -6px 30px rgba(0,0,0,.25)}
+.ms-title{font-size:12px;color:var(--muted);padding:6px 8px 8px;font-weight:650;letter-spacing:.03em}
+.ms-item,.ms-cancel{display:block;width:100%;text-align:left;padding:13px 10px;border:0;background:none;border-radius:10px;font-size:15px;color:var(--ink);cursor:pointer}
+.ms-item:hover,.ms-cancel:hover{background:var(--bg-hover)}
+.ms-item.danger{color:var(--danger)}
+.ms-cancel{margin-top:6px;border-top:1px solid var(--border);border-radius:0;font-weight:600;color:var(--text-secondary)}
+.mobile-detail{position:fixed;inset:0;background:var(--bg-app);z-index:88;display:flex;flex-direction:column}
+.mobile-detail .md-head{display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--border);background:var(--panel)}
+.mobile-detail .md-title{font-weight:650;font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mobile-detail .md-body{flex:1;overflow:auto;padding:14px;padding-bottom:calc(58px + env(safe-area-inset-bottom) + 20px)}
 /* Vditor Live (IR) dark adaptation: the editor surface follows the tokens. */
 [data-theme="dark"] .vditor,[data-theme="dark"] .vditor-ir,[data-theme="dark"] .vditor-reset{background:var(--bg-surface);color:var(--text-primary)}
 [data-theme="dark"] .vditor-toolbar{background:var(--bg-sidebar);border-bottom-color:var(--border)}
@@ -373,7 +399,7 @@ const STR = {
     themeSystem:'跟随系统', themeLight:'浅色', themeDark:'深色',
     knowledge:'知识', knowledgeIndexed:'已索引', knowledgePending:'待索引', knowledgeNotIndexed:'未索引', knowledgeParseFailed:'解析失败', relatedNotes:'相关笔记', relatedKnowledge:'相关知识', refAttachments:'引用附件', mime:'类型', attWaiting:'等待解析', attProcessing:'解析中', attOptimizing:'优化索引中', attReady:'已解析', attFailed:'解析失败', attachments:'附件', businessKnowledge:'知识',
     knowledgeBrowse:'浏览', knowledgeBrowseTitle:'知识发现', knowledgeEmpty:'还没有可发现的知识。', knowledgeOffline:'知识检索暂不可用', sourceLabel:'来源', attachmentsN:'附件 ×{n}', knowledgeFilterPlaceholder:'筛选知识（标题 / 摘要 / 来源）…',
-    sources:'来源', sourcesDesc:'你上传的知识资料来源文件。', usedIn:'用于', usedByN:'{n} 篇笔记使用', isolated:'未关联笔记', isolatedHint:'该文件还没有被任何笔记引用。', hasSummary:'有摘要', refresh:'刷新', sourceFiles:'来源文件',
+    sources:'来源', sourcesDesc:'你上传的知识资料来源文件。', usedIn:'用于', usedByN:'{n} 篇笔记使用', isolated:'未关联笔记', isolatedHint:'该文件还没有被任何笔记引用。', hasSummary:'有摘要', refresh:'刷新', sourceFiles:'来源文件', mobileMore:'更多', back:'返回',
     parseStatus:'解析状态', summary:'摘要', reparse:'重新解析', reparseStarted:'已提交重新解析',
     noteMissing:'笔记文件已不存在', noteMissingBody:'笔记“{id}”的 Markdown 文件在工作区中找不到，可能已被外部删除或移动。', rescan:'重新扫描', removeFromWorkspace:'从工作区移除', removeMissingConfirm:'从工作区移除“{id}”？该笔记文件已不存在。此操作将清理 PKW 中的残留记录和知识库投影，无法从回收站恢复该文件。',
     missingSource:'源文件已不存在',
@@ -436,7 +462,7 @@ const STR = {
     themeSystem:'Follow system', themeLight:'Light', themeDark:'Dark',
     knowledge:'Knowledge', knowledgeIndexed:'Indexed', knowledgePending:'Pending', knowledgeNotIndexed:'Not indexed', knowledgeParseFailed:'Parse failed', relatedNotes:'Related notes', relatedKnowledge:'Related knowledge', refAttachments:'Referenced attachments', mime:'Type', attWaiting:'Waiting', attProcessing:'Processing', attOptimizing:'Optimizing index', attReady:'Parsed', attFailed:'Parse failed', attachments:'Attachments', businessKnowledge:'Knowledge',
     knowledgeBrowse:'Browse', knowledgeBrowseTitle:'Knowledge Discovery', knowledgeEmpty:'No discoverable knowledge yet.', knowledgeOffline:'Knowledge search unavailable', sourceLabel:'Source', attachmentsN:'{n} attachments', knowledgeFilterPlaceholder:'Filter knowledge (title / summary / source)…',
-    sources:'Sources', sourcesDesc:'The source files that make up your knowledge.', usedIn:'Used in', usedByN:'{n} notes use this', isolated:'Not linked to a note', isolatedHint:'This file is not referenced by any note yet.', hasSummary:'Has summary', refresh:'Refresh', sourceFiles:'Source files',
+    sources:'Sources', sourcesDesc:'The source files that make up your knowledge.', usedIn:'Used in', usedByN:'{n} notes use this', isolated:'Not linked to a note', isolatedHint:'This file is not referenced by any note yet.', hasSummary:'Has summary', refresh:'Refresh', sourceFiles:'Source files', mobileMore:'More', back:'Back',
     parseStatus:'Parse status', summary:'Summary', reparse:'Reparse', reparseStarted:'Reparse submitted',
     noteMissing:'Note file is missing', noteMissingBody:'The Markdown file for note "{id}" cannot be found in the workspace. It may have been deleted or moved externally.', rescan:'Rescan', removeFromWorkspace:'Remove from workspace', removeMissingConfirm:'Remove "{id}" from the workspace? Its file is already missing. This will clean up the leftover PKW records and knowledge projection, and the file cannot be restored from Trash.',
     missingSource:'Source file missing',
@@ -741,7 +767,7 @@ function renderNotesExplorer(){
   $('#main').innerHTML = '<h2>' + esc(t('notes')) + '</h2>' +
     '<div class="toolbar"><button class="btn primary" data-action="new-note">+ ' + esc(t('newNote')) + '</button><button class="btn" data-action="new-folder">+ ' + esc(t('newFolder')) + '</button></div>' +
     (notes.length
-      ? '<div>' + notes.map(explorerNoteRow).join('') + '</div>'
+      ? '<div>' + notes.map(n => isMobile() ? mobileNoteRow(n) : explorerNoteRow(n)).join('') + '</div>'
       : '<div class="empty"><h3>' + esc(t('emptyNotes')) + '</h3><div class="cta"><button class="btn primary" data-action="new-note">+ ' + esc(t('emptyNotesCta')) + '</button></div></div>')
 }
 
@@ -890,6 +916,21 @@ function renderEditorShell(d){
   const mode = state.editor.mode
   const fm = parseFrontmatterClient(d.markdown)
   const modeBtn = (m, key) => '<button class="btn mode ' + (mode === m ? 'active' : '') + '" data-action="set-mode" data-mode="' + m + '">' + esc(t(key)) + '</button>'
+  if (isMobile()) {
+    return '<div class="toolbar">' +
+      '<button class="btn small" data-action="mobile-back-notes">← ' + esc(t('notes')) + '</button>' +
+      '<span id="saveStatus" class="saved">✓ ' + esc(t('saved')) + '</span>' +
+      '<span class="spacer"></span>' + modeBtn('reading', 'modeReading') + modeBtn('live', 'modeLive') + modeBtn('source', 'modeSource') +
+      '<button class="btn small" data-action="mobile-editor-menu">⋯</button>' +
+      '</div>' +
+      '<div class="editor-head"><span class="title note-title" data-id="' + esc(state.selectedNoteId) + '">' + esc(fm.title || d.note.title || '') + '</span></div>' +
+      '<div id="editorPane">' +
+        (mode === 'live' ? '<div id="vditor" style="min-height:calc(100vh - 180px)"><div class="empty">' + esc(t('editorLoading')) + '</div></div>' : '') +
+        (mode === 'source' ? '<textarea id="editor" aria-label="Markdown">' + esc(d.markdown) + '</textarea>' : '') +
+        (mode === 'reading' ? '<div id="preview"></div>' : '') +
+      '</div>' +
+      '<div id="bkAttachments"></div><div id="relatedKnowledge"></div>'
+  }
   return '<div class="toolbar">' +
     '<button class="btn primary" data-action="save-note">' + esc(t('save')) + '</button>' +
     '<button class="btn" data-action="rename-note">' + esc(t('renameTitle')) + '</button>' +
@@ -1585,7 +1626,7 @@ function attBatchBarHtml(){
 function attListHtml(list){
   if (!list.length) return '<div class="empty"><h3>' + esc(t('emptyAttachments')) + '</h3><p class="muted">' + esc(t('sourcesDesc')) + '</p><div class="cta"><button class="btn primary" data-action="upload-attachment">+ ' + esc(t('upload')) + '</button></div></div>'
   if (state.attMode === 'grid') return '<div class="att-grid">' + list.map(attCardHtml).join('') + '</div>'
-  return list.map(attRowHtml).join('')
+  return list.map(a => isMobile() ? mobileSourceCard(a) : attRowHtml(a)).join('')
 }
 function renderAttachmentsFrom(list){
   state.attachmentsCache = list || []
@@ -1651,7 +1692,7 @@ async function openAttachment(id){
     const reparseBtn = (d.processingState === 'failed' || d.processingState === 'ready')
       ? ' <button class="btn small" data-action="reparse-attachment" data-id="' + esc(id) + '">' + esc(t('reparse')) + '</button>'
       : ''
-    $('#detail').innerHTML = '<h3>' + esc(t('sources')) + '</h3>' + procStateBadge(d.processingState) +
+    const html = '<h3>' + esc(t('sources')) + '</h3>' + procStateBadge(d.processingState) +
       '<div class="kv"><b>' + esc(t('mime')) + '</b> <span class="v mono">' + esc(a.mimeType) + '</span></div>' +
       '<div class="kv"><b>' + esc(t('size')) + '</b> <span class="v">' + fmtSize(a.sizeBytes) + '</span></div>' +
       '<div class="kv"><b>' + esc(t('updated')) + '</b> <span class="v">' + esc(fmtStamp(a.createdAt)) + '</span></div>' +
@@ -1666,6 +1707,8 @@ async function openAttachment(id){
       ' <button class="btn small" data-action="att-copy-ref" data-id="' + esc(id) + '">' + esc(t('attCopyRef')) + '</button>' +
       ' <button class="btn small danger" data-action="delete-attachment" data-id="' + esc(id) + '">' + esc(t('del')) + '</button>' +
       '<h3>' + esc(t('details')) + '</h3><div class="kv"><b>' + esc(t('attachmentId')) + '</b> <span class="v mono">' + esc(a.attachmentId) + '</span></div>'
+    if (isMobile()) mobileDetail(a.filename, html)
+    else $('#detail').innerHTML = html
   } catch (e) { toast(t('genericError') + ': ' + e.message, 'err') }
 }
 function fileToBase64(file){
@@ -1812,6 +1855,7 @@ function dueLabel(iso){
   return (d.getMonth() + 1) + '/' + d.getDate()
 }
 function taskRow(x, matrices, inMatrix){
+  if (isMobile()) return mobileTaskCard(x, matrices, inMatrix)
   const due = x.dueAt ? '<span class="muted mono">' + esc(dueLabel(x.dueAt)) + '</span>' : ''
   const badge = (inMatrix ? '' : (x.matrixId ? '<span class="badge">' + esc(matrixName(matrices, x.matrixId)) + '</span>' : ''))
   const src = x.sourceRefs && x.sourceRefs[0] && x.sourceRefs[0].noteId
@@ -2105,6 +2149,13 @@ function knowledgeCardHtml(c){
     : ''
   const snippets = (c.snippets && c.snippets.length) ? c.snippets : (c.snippet ? [c.snippet] : [])
   const snippetHtml = snippets.slice(0, 2).map(s => '<div class="snippet">' + esc(s) + '</div>').join('')
+  if (isMobile() && c.open) {
+    return '<div class="hit hit-clickable" data-action="' + esc(c.open.action) + '" data-id="' + esc(c.open.id) + '"' + (c.reasonAttrs || '') + '>' +
+      '<div class="t">' + esc(c.title) + (c.badges || '') + '<span class="chev">›</span></div>' +
+      snippetHtml +
+      '<div class="ref"><span class="meta">' + meta.join(' · ') + '</span></div>' +
+      '</div>'
+  }
   return '<div class="hit">' +
     '<div class="t">' + esc(c.title) + (c.badges || '') + '</div>' +
     snippetHtml +
@@ -2364,6 +2415,62 @@ function showContextMenu(x, y, items){
     return '<div class="ctx-item' + (it.danger ? ' danger' : '') + '" data-action="' + esc(it.action) + '"' + attrs + '>' + esc(it.label) + '</div>'
   }).join('')
   document.body.appendChild(menu)
+}
+// ── Mobile presentation layer (390px): distinct surface renderers, same data/actions ──
+function isMobile(){ return window.innerWidth <= 768 }
+let lastWasMobile = null
+window.addEventListener('resize', () => { const m = isMobile(); if (m !== lastWasMobile) { lastWasMobile = m; render() } })
+function mobileActionSheet(title, items){
+  document.querySelectorAll('.mobile-sheet-overlay').forEach(o => o.remove())
+  const ov = document.createElement('div')
+  ov.className = 'mobile-sheet-overlay'
+  ov.innerHTML = '<div class="mobile-sheet"><div class="ms-title">' + esc(title) + '</div>' +
+    items.map(it => {
+      let attrs = ''
+      if (it.id !== undefined) attrs += ' data-id="' + esc(it.id) + '"'
+      if (it.path !== undefined) attrs += ' data-path="' + esc(it.path) + '"'
+      return '<button class="ms-item' + (it.danger ? ' danger' : '') + '" data-action="' + esc(it.action) + '"' + attrs + '>' + esc(it.label) + '</button>'
+    }).join('') +
+    '<button class="ms-cancel">' + esc(t('cancel')) + '</button></div>'
+  document.body.appendChild(ov)
+  ov.addEventListener('click', (e) => { if (e.target === ov || e.target.closest('.ms-item') || e.target.closest('.ms-cancel')) ov.remove() })
+}
+function mobileNoteRow(n){
+  const folder = (n.relativePath || '').includes('/') ? (n.relativePath).slice(0, (n.relativePath).lastIndexOf('/')) : ''
+  return '<div class="mnote" data-action="open-note" data-id="' + esc(n.noteId) + '">' +
+    '<div class="mnote-main"><div class="mnote-title">' + esc(n.title || n.relativePath) + '</div>' +
+    (folder ? '<div class="mnote-folder">' + esc(folder) + '</div>' : '') +
+    '<div class="mnote-meta">' + esc(fmtStamp(n.updatedAt)) + ' · ' + syncBadgeHtml(n.sync) + '</div></div>' +
+    '<button class="mnote-more" data-action="mobile-note-menu" data-id="' + esc(n.noteId) + '">⋯</button></div>'
+}
+function mobileSourceCard(a){
+  const isImage = (a.mimeType || '').indexOf('image/') === 0
+  const thumb = isImage ? '<img class="msrc-thumb" src="/pkw/attachment/' + esc(a.attachmentId) + '" alt="" loading="lazy">' : '<span class="msrc-ic">📄</span>'
+  const summary = a.summary ? '<div class="msrc-summary">' + esc(String(a.summary).slice(0, 120)) + '</div>' : ''
+  return '<div class="msrc" data-action="open-attachment" data-id="' + esc(a.attachmentId) + '">' +
+    '<div class="msrc-thumbwrap">' + thumb + '</div>' +
+    '<div class="msrc-main"><div class="msrc-name">' + esc(a.filename) + '</div>' +
+    '<div class="msrc-meta">' + esc(attTypeOf(a.mimeType)) + ' · ' + fmtSize(a.sizeBytes) + '</div>' +
+    '<div class="msrc-badges">' + procStateBadge(a.processingState) + (a.ownerCount ? '<span class="badge">' + esc(t('usedByN', { n: a.ownerCount })) + '</span>' : '<span class="badge warn">' + esc(t('isolated')) + '</span>') + '</div>' +
+    summary + '</div>' +
+    '<button class="mnote-more" data-action="mobile-source-menu" data-id="' + esc(a.attachmentId) + '">⋯</button></div>'
+}
+function mobileTaskCard(x, matrices, inMatrix){
+  const badge = (inMatrix ? '' : (x.matrixId ? '<div class="mtask-cat">' + esc(matrixName(matrices, x.matrixId)) + '</div>' : ''))
+  const due = x.dueAt ? '<div class="mtask-due">' + esc(dueLabel(x.dueAt)) + '</div>' : ''
+  return '<div class="mtask" data-action="open-task-detail" data-id="' + esc(x.taskId) + '">' +
+    '<span class="mtask-check" data-action="toggle-task" data-completed="' + (x.status === 'completed' ? '1' : '0') + '" data-id="' + esc(x.taskId) + '">' + (x.status === 'completed' ? '☑' : '☐') + '</span>' +
+    '<div class="mtask-main"><div class="mtask-title">' + esc(x.title) + '</div>' + badge + due + '</div>' +
+    '<button class="mnote-more" data-action="mobile-task-menu" data-id="' + esc(x.taskId) + '">⋯</button></div>'
+}
+// Full-screen mobile detail (replaces the hidden desktop Inspector on mobile).
+function mobileDetail(title, bodyHtml){
+  document.querySelectorAll('.mobile-detail').forEach(o => o.remove())
+  const ov = document.createElement('div')
+  ov.className = 'mobile-detail'
+  ov.innerHTML = '<div class="md-head"><button class="btn small" data-action="mobile-detail-back">← ' + esc(t('back')) + '</button><span class="md-title">' + esc(title) + '</span></div><div class="md-body">' + bodyHtml + '</div>'
+  document.body.appendChild(ov)
+  ov.addEventListener('click', (e) => { if (e.target === ov) ov.remove() })
 }
 function showNoteContextMenu(x, y, noteId){
   showContextMenu(x, y, [
@@ -3025,14 +3132,58 @@ document.addEventListener('click', (e) => {
   else if (act === 'knowledge-tab') { state.knowledgeTab = el.dataset.tab || 'wiki'; renderKnowledgeView() }
   else if (act === 'kb-clear-search') { state.searchQuery = ''; state.searchResults = null; renderKnowledgeView() }
   else if (act === 'mobile-more') {
-    const r = el.getBoundingClientRect()
-    showContextMenu(r.left + r.width / 2 - 80, r.top - 100, [
+    mobileActionSheet(t('mobileMore'), [
       { label: t('overview'), action: 'go-overview' },
       { label: t('trash'), action: 'go-trash' },
+      { label: t('themeSystem'), action: 'theme-system' },
+      { label: t('themeLight'), action: 'theme-light' },
+      { label: t('themeDark'), action: 'theme-dark' },
     ])
   }
   else if (act === 'go-overview') { dismissContextMenu(); setView('overview') }
   else if (act === 'go-trash') { dismissContextMenu(); setView('trash') }
+  else if (act === 'mobile-note-menu') {
+    const nid = id
+    mobileActionSheet(t('renameMove'), [
+      { label: t('openNote'), action: 'open-note', id: nid },
+      { label: t('renameTitle'), action: 'rename-note', id: nid },
+      { label: t('moveNoteTo'), action: 'move-note', id: nid },
+      { label: t('trashFolder'), action: 'delete-note', id: nid, danger: true },
+    ])
+  }
+  else if (act === 'mobile-source-menu') {
+    const aid = id
+    mobileActionSheet(t('sources'), [
+      { label: t('attPreview'), action: 'att-preview', id: aid },
+      { label: t('download'), action: 'download-attachment', id: aid },
+      { label: t('attOpenCompanion'), action: 'att-open-companion', id: aid },
+      { label: t('attCreateCompanion'), action: 'att-create-companion', id: aid },
+      { label: t('reparse'), action: 'reparse-attachment', id: aid },
+      { label: t('del'), action: 'delete-attachment', id: aid, danger: true },
+    ])
+  }
+  else if (act === 'mobile-task-menu') {
+    const tid = id
+    mobileActionSheet(t('tasks'), [
+      { label: t('moveUp'), action: 'task-up', id: tid },
+      { label: t('moveDown'), action: 'task-down', id: tid },
+      { label: t('taskDuplicate'), action: 'task-duplicate', id: tid },
+      { label: t('taskDelete'), action: 'task-delete', id: tid, danger: true },
+    ])
+  }
+  else if (act === 'mobile-detail-back') { document.querySelectorAll('.mobile-detail').forEach(o => o.remove()) }
+  else if (act === 'mobile-back-notes') { state.selectedNoteId = null; state.selectedFolder = null; destroyVditor(); render() }
+  else if (act === 'mobile-editor-menu') {
+    const nid = state.selectedNoteId
+    if (!nid) return
+    mobileActionSheet(t('notes'), [
+      { label: t('save'), action: 'save-note', id: nid },
+      { label: t('renameTitle'), action: 'rename-note', id: nid },
+      { label: t('moveNoteTo'), action: 'move-note', id: nid },
+      { label: t('syncNow'), action: 'sync-note', id: nid },
+      { label: t('del'), action: 'delete-note', id: nid, danger: true },
+    ])
+  }
   else if (act === 'wiki-folder') { state.wikiFolder = el.dataset.folder || ''; renderKnowledgeView() }
   else if (act === 'open-wiki-page') openWikiPage(el.dataset.slug)
   else if (act === 'back-wiki') renderWikiList()

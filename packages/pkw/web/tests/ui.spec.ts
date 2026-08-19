@@ -276,4 +276,33 @@ describe('PKW web UI (served page)', () => {
     expect(js).toContain('refreshSourcesData')
     expect(js).toContain('reconcileProcessing')
   })
+
+  it('ships distinct mobile surface renderers + action sheet (not just CSS)', () => {
+    const js = script()
+    const page = renderPage()
+    // Mobile renderers
+    expect(js).toContain('function isMobile()')
+    expect(js).toContain('function mobileNoteRow')
+    expect(js).toContain('function mobileSourceCard')
+    expect(js).toContain('function mobileTaskCard')
+    expect(js).toContain('function mobileActionSheet')
+    expect(js).toContain('function mobileDetail')
+    // ⋯ menus + editor mobile shell + back navigation
+    expect(js).toContain('mobile-note-menu')
+    expect(js).toContain('mobile-source-menu')
+    expect(js).toContain('mobile-task-menu')
+    expect(js).toContain('mobile-editor-menu')
+    expect(js).toContain('mobile-back-notes')
+    expect(js).toContain('mobile-detail-back')
+    // Desktop renderers remain intact
+    expect(js).toContain('function explorerNoteRow')
+    expect(js).toContain('function attRowHtml')
+    expect(js).toContain('function taskRow')
+    // Mobile card/sheet CSS surface present
+    expect(page).toContain('.mobile-sheet-overlay')
+    expect(page).toContain('.mnote')
+    expect(page).toContain('.msrc')
+    expect(page).toContain('.mtask')
+    expect(page).toContain('.mobile-detail')
+  })
 })
