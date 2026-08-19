@@ -662,6 +662,15 @@ export class WeKnoraSyncService extends Service {
     return { summary: rec.summary, chunks: rec.chunks }
   }
 
+  /** User-facing processing state for an attachment (no remote identity exposed). */
+  getAttachmentProcessingState(attachmentId: AttachmentIdT): 'waiting' | 'processing' | 'ready' | 'failed' {
+    const rec = this.reqProcessing().get(String(attachmentId))
+    if (rec === undefined) return 'waiting'
+    if (rec.state === 'derived-ready') return 'ready'
+    if (rec.state === 'failed') return 'failed'
+    return 'processing'
+  }
+
   /** AttachmentIds whose captured config fingerprint differs from the current one (needs reparse). */
   listNeedsReparse(): string[] {
     const current = this.reqProcessingKb().get(this.config.workspaceId)?.configFingerprint

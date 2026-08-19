@@ -230,6 +230,15 @@ mark{background:var(--mark-bg);border-radius:2px;padding:0 2px}
 .att-card-name{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:4px}
 .check-row.inline{display:inline-flex;align-items:center;gap:5px;margin:0 4px;font-size:13px}
 #attSearch{width:170px;padding:5px 8px;border:1px solid var(--border);border-radius:6px;background:var(--panel);color:var(--text-primary)}
+/* Business Knowledge Viewer attachments */
+#bkAttachments{margin-top:10px;padding:10px 16px}
+#bkAttachments h3{font-size:.95em;margin:.4em 0 .6em;color:var(--text-secondary)}
+.bk-att{display:flex;align-items:flex-start;gap:12px;padding:10px 12px;border:1px solid var(--border);border-radius:10px;margin-bottom:8px;background:var(--bg-surface)}
+.bk-thumb{width:72px;height:72px;object-fit:cover;border-radius:8px;flex:0 0 auto;border:1px solid var(--border)}
+.bk-ic{flex:0 0 auto;width:72px;height:72px;display:flex;align-items:center;justify-content:center;font-size:30px;border-radius:8px;background:var(--bg-hover)}
+.bk-att-main{flex:1 1 auto;min-width:0}
+.bk-att-name{font-weight:600;margin-bottom:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bk-summary{margin-top:6px;font-size:13px;line-height:1.5}
 </style>
 </head>
 <body>
@@ -282,7 +291,7 @@ const STR = {
     matrixTasksCount:'该四象限中共有 {n} 项任务。', matrixMoveToInbox:'移动到 Inbox', matrixMoveToInboxHint:'保留任务，只移除四象限归属', matrixDeleteTasks:'删除这些任务', matrixDeleteTasksHint:'删除四象限时同时删除其中任务（删除后无法恢复）', matrixDeletingTasks:'正在删除 {n} 项任务，然后删除四象限…', matrixDeletedTasks:'已删除 {n} 项任务和该四象限。',
     batchComplete:'标记完成', batchReopen:'重新打开', batchDelete:'删除 {n} 项任务', batchDeleteConfirm:'删除 {n} 项任务？', batchDeleteHint:'这些任务删除后无法恢复。', batchDone:'已处理 {n} 项', batchPartial:'已处理 {n} 项，{m} 项失败',
     themeSystem:'跟随系统', themeLight:'浅色', themeDark:'深色',
-    knowledge:'知识库', knowledgeIndexed:'已索引', knowledgePending:'待索引', knowledgeNotIndexed:'未索引', knowledgeParseFailed:'解析失败', relatedNotes:'相关笔记', refAttachments:'引用附件', mime:'类型',
+    knowledge:'知识库', knowledgeIndexed:'已索引', knowledgePending:'待索引', knowledgeNotIndexed:'未索引', knowledgeParseFailed:'解析失败', relatedNotes:'相关笔记', refAttachments:'引用附件', mime:'类型', attWaiting:'等待解析', attProcessing:'解析中', attReady:'已解析', attFailed:'解析失败', attachments:'附件', businessKnowledge:'知识',
     parseStatus:'解析状态', summary:'摘要', reparse:'重新解析', reparseStarted:'已提交重新解析',
     noteMissing:'笔记文件已不存在', noteMissingBody:'笔记“{id}”的 Markdown 文件在工作区中找不到，可能已被外部删除或移动。', rescan:'重新扫描', removeFromWorkspace:'从工作区移除', removeMissingConfirm:'从工作区移除“{id}”？该笔记文件已不存在。此操作将清理 PKW 中的残留记录和知识库投影，无法从回收站恢复该文件。',
     missingSource:'源文件已不存在',
@@ -343,7 +352,7 @@ const STR = {
     matrixTasksCount:'This matrix has {n} tasks.', matrixMoveToInbox:'Move to Inbox', matrixMoveToInboxHint:'Keep tasks, only remove the matrix', matrixDeleteTasks:'Delete these tasks', matrixDeleteTasksHint:'Delete the tasks together with the matrix (cannot be undone)', matrixDeletingTasks:'Deleting {n} tasks, then deleting this matrix…', matrixDeletedTasks:'Deleted {n} tasks and the matrix.',
     batchComplete:'Mark complete', batchReopen:'Reopen', batchDelete:'Delete {n} tasks', batchDeleteConfirm:'Delete {n} tasks?', batchDeleteHint:'These tasks cannot be restored after deletion.', batchDone:'Processed {n} items', batchPartial:'Processed {n} items, {m} failed',
     themeSystem:'Follow system', themeLight:'Light', themeDark:'Dark',
-    knowledge:'Knowledge', knowledgeIndexed:'Indexed', knowledgePending:'Pending', knowledgeNotIndexed:'Not indexed', knowledgeParseFailed:'Parse failed', relatedNotes:'Related notes', refAttachments:'Referenced attachments', mime:'Type',
+    knowledge:'Knowledge', knowledgeIndexed:'Indexed', knowledgePending:'Pending', knowledgeNotIndexed:'Not indexed', knowledgeParseFailed:'Parse failed', relatedNotes:'Related notes', refAttachments:'Referenced attachments', mime:'Type', attWaiting:'Waiting', attProcessing:'Processing', attReady:'Parsed', attFailed:'Parse failed', attachments:'Attachments', businessKnowledge:'Knowledge',
     parseStatus:'Parse status', summary:'Summary', reparse:'Reparse', reparseStarted:'Reparse submitted',
     noteMissing:'Note file is missing', noteMissingBody:'The Markdown file for note "{id}" cannot be found in the workspace. It may have been deleted or moved externally.', rescan:'Rescan', removeFromWorkspace:'Remove from workspace', removeMissingConfirm:'Remove "{id}" from the workspace? Its file is already missing. This will clean up the leftover PKW records and knowledge projection, and the file cannot be restored from Trash.',
     missingSource:'Source file missing',
@@ -721,6 +730,7 @@ async function openNote(noteId){
     bindEditor()
     $('#detail').innerHTML = detailNote(d)
     renderNoteAttachmentKnowledge(d)
+    renderBusinessKnowledgeAttachments(d)
     await renderTree()
     kickSyncPoll(d.sync)
   } catch (e) {
@@ -751,7 +761,10 @@ function renderEditorShell(d){
       (mode === 'live' ? '<div id="vditor" style="min-height:56vh"><div class="empty">' + esc(t('editorLoading')) + '</div></div>' : '') +
       (mode === 'source' ? '<textarea id="editor" aria-label="Markdown">' + esc(d.markdown) + '</textarea>' : '') +
       (mode === 'reading' ? '<div id="preview"></div>' : '') +
-    '</div>'
+    '</div>' +
+    // Business Knowledge Viewer: aggregated attachments (images + files) below the
+    // Reading body, with user-facing processing state and summary when available.
+    '<div id="bkAttachments"></div>'
 }
 function bindEditor(){
   if (state.editor.mode === 'live') initVditor()
@@ -1072,6 +1085,31 @@ function renderNoteAttachmentKnowledge(d){
     if (!box || state.selectedNoteId !== d.note.noteId) return
     const rows = sums.filter(s => s.description || s.summaryStatus).map(s => '<div class="kv"><b>' + esc(s.filename || s.attachmentId) + '</b> <span class="v">' + (s.description ? esc(s.description) : (s.summaryStatus === 'completed' ? esc(t('knowledgeIndexed')) : esc(t('knowledgePending')))) + '</span></div>').join('')
     if (rows) box.innerHTML = '<h3>' + esc(t('summary')) + '</h3>' + rows
+  }).catch(() => {})
+}
+function procStateBadge(state){
+  if (state === 'ready') return '<span class="badge ok">' + esc(t('attReady')) + '</span>'
+  if (state === 'failed') return '<span class="badge err">' + esc(t('attFailed')) + '</span>'
+  if (state === 'processing') return '<span class="badge warn">' + esc(t('attProcessing')) + '</span>'
+  return '<span class="badge">' + esc(t('attWaiting')) + '</span>'
+}
+function renderBusinessKnowledgeAttachments(d){
+  if (!d.attachments || !d.attachments.length) return
+  api('noteAttachmentSummaries', { noteId: d.note.noteId }).then(sums => {
+    const box = $('#bkAttachments')
+    if (!box || state.selectedNoteId !== d.note.noteId) return
+    const rows = (sums || []).map(s => {
+      const isImage = (s.mimeType || '').indexOf('image/') === 0
+      const thumb = isImage ? '<img class="bk-thumb" src="/pkw/attachment/' + esc(s.attachmentId) + '" alt="" loading="lazy">' : '<span class="bk-ic">📄</span>'
+      const summary = s.description ? '<div class="bk-summary muted">' + esc(s.description) + '</div>' : ''
+      return '<div class="bk-att">' + thumb +
+        '<div class="bk-att-main"><div class="bk-att-name">' + esc(s.filename) + '</div>' +
+        '<div class="muted small">' + esc(s.mimeType || '') + (s.sizeBytes != null ? ' · ' + fmtSize(s.sizeBytes) : '') + '</div>' +
+        summary + '</div>' +
+        '<div>' + procStateBadge(s.processingState) + '</div>' +
+        '</div>'
+    }).join('')
+    if (rows) box.innerHTML = '<h3>' + esc(t('attachments')) + '</h3>' + rows
   }).catch(() => {})
 }
 function outlineHtml(md){

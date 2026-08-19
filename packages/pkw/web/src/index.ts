@@ -522,19 +522,23 @@ export class PkwWebService extends Service {
         return { reparse: true }
       }
       case 'noteAttachmentSummaries': {
-        // For a Note's referenced attachments, surface each Attachment Knowledge summary
-        // (a remote projection — never written back into the Note Markdown).
+        // Business Knowledge Viewer aggregation: for a Note's referenced
+        // attachments, surface filename/mime/size + processing state + summary
+        // (when available). No remote identity is exposed to the user.
         const doc = await this.notes.getDocument(NoteId(String(args.noteId)))
-        const out: Array<{ attachmentId: string; filename: string; knowledgeId?: string; description?: string; summaryStatus?: string }> = []
+        const out: Array<{ attachmentId: string; filename: string; mimeType?: string; sizeBytes?: number; processingState?: string; description?: string; summaryStatus?: string }> = []
         for (const ref of doc.attachments) {
           const rec = this.attachments.get(ref.attachmentId)
-          const mapping = this.sync.getAttachmentMapping(ref.attachmentId)
-          let description: string | undefined
-          let summaryStatus: string | undefined
-          if (mapping !== undefined && mapping.knowledgeId !== undefined) {
-            try { const k = await this.weknora.getKnowledge(mapping.knowledgeId); description = k.description; summaryStatus = k.summary_status } catch { /* offline */ }
-          }
-          out.push({ attachmentId: String(ref.attachmentId), filename: rec?.filename ?? '', knowledgeId: mapping?.knowledgeId, description, summaryStatus })
+          const derived = this.sync.getDerivedContent(ref.attachmentId)
+          out.push({
+            attachmentId: String(ref.attachmentId),
+            filename: rec?.filename ?? '',
+            mimeType: rec?.mimeType,
+            sizeBytes: rec?.sizeBytes,
+            processingState: this.sync.getAttachmentProcessingState(ref.attachmentId),
+            description: derived?.summary,
+            summaryStatus: derived !== undefined ? 'completed' : undefined,
+          })
         }
         return out
       }
