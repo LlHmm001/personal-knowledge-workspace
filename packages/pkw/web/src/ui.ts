@@ -1100,10 +1100,10 @@ function renderBusinessKnowledgeAttachments(d){
     if (!box || state.selectedNoteId !== d.note.noteId) return
     const rows = (sums || []).map(s => {
       const isImage = (s.mimeType || '').indexOf('image/') === 0
-      const thumb = isImage ? '<img class="bk-thumb" src="/pkw/attachment/' + esc(s.attachmentId) + '" alt="" loading="lazy">' : '<span class="bk-ic">📄</span>'
+      const thumb = isImage ? '<img class="bk-thumb" src="/pkw/attachment/' + esc(s.attachmentId) + '" alt="" loading="lazy" data-action="att-preview" data-id="' + esc(s.attachmentId) + '">' : '<span class="bk-ic" data-action="att-preview" data-id="' + esc(s.attachmentId) + '">📄</span>'
       const summary = s.description ? '<div class="bk-summary muted">' + esc(s.description) + '</div>' : ''
       return '<div class="bk-att">' + thumb +
-        '<div class="bk-att-main"><div class="bk-att-name">' + esc(s.filename) + '</div>' +
+        '<div class="bk-att-main"><div class="bk-att-name" data-action="att-preview" data-id="' + esc(s.attachmentId) + '">' + esc(s.filename) + '</div>' +
         '<div class="muted small">' + esc(s.mimeType || '') + (s.sizeBytes != null ? ' · ' + fmtSize(s.sizeBytes) : '') + '</div>' +
         summary + '</div>' +
         '<div>' + procStateBadge(s.processingState) + '</div>' +
