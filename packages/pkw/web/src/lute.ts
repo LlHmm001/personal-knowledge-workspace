@@ -14,7 +14,7 @@
 import { readFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { createContext, runInContext } from 'node:vm'
-import { protectWikiLinks, restoreWikiLinks, rewriteAttachmentUrls } from '@deepseek-ai/dsh-pkw-domain'
+import { protectWikiLinks, restoreWikiLinks, rewriteAttachmentUrls, stripManagedSummaryMarkers } from '@deepseek-ai/dsh-pkw-domain'
 
 interface LuteGlobal {
   New: () => LuteEngine
@@ -67,7 +67,9 @@ async function loadLute(): Promise<LuteGlobal> {
  */
 export async function renderMarkdownToHtml(markdown: string): Promise<string> {
   const Lute = await loadLute()
-  const { text, tokens } = protectWikiLinks(markdown)
+  // Display projection: hide machine-managed summary markers (canonical untouched).
+  const text = stripManagedSummaryMarkers(markdown)
+  const { text: protectedText, tokens } = protectWikiLinks(text)
   const lute = Lute.New()
   lute.SetCallout(true)
   lute.SetGFMAutoLink(true)
@@ -76,7 +78,7 @@ export async function renderMarkdownToHtml(markdown: string): Promise<string> {
   lute.SetMark(true)
   lute.SetAutoSpace(false)
   lute.SetFixTermTypo(false)
-  const html = lute.Md2HTML(text)
+  const html = lute.Md2HTML(protectedText)
   const restored = restoreWikiLinks(html, tokens)
   // Managed attachments (`attachments/<id>/<file>`) → served byte URL.
   return rewriteAttachmentUrls(restored, (id, _filename) => '/pkw/attachment/' + encodeURIComponent(id))

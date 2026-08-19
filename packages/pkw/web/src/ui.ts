@@ -298,6 +298,16 @@ mark{background:var(--mark-bg);border-radius:2px;padding:0 2px}
 .mobile-detail .md-head{display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--border);background:var(--panel)}
 .mobile-detail .md-title{font-weight:650;font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .mobile-detail .md-body{flex:1;overflow:auto;padding:14px;padding-bottom:calc(58px + env(safe-area-inset-bottom) + 20px)}
+/* Mobile Tasks: board + 2×2 quadrant overview */
+.mboard{display:flex;gap:6px;overflow-x:auto;padding-bottom:8px;margin-bottom:8px}
+.mboard .btn.small{white-space:nowrap;flex:0 0 auto}
+.mquad{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}
+.mquad-cell{border:1px solid var(--border);border-radius:12px;padding:12px 10px;background:var(--panel);cursor:pointer}
+.mquad-cell.active{border-color:var(--accent);background:var(--accent-soft)}
+.mq-n{font-size:15px;font-weight:700;color:var(--accent)}
+.mq-l{font-size:12px;color:var(--muted);margin-top:2px}
+.mq-c{font-size:20px;font-weight:700;margin-top:4px}
+.mq-heading{font-size:14px;margin:8px 0}
 /* Vditor Live (IR) dark adaptation: the editor surface follows the tokens. */
 [data-theme="dark"] .vditor,[data-theme="dark"] .vditor-ir,[data-theme="dark"] .vditor-reset{background:var(--bg-surface);color:var(--text-primary)}
 [data-theme="dark"] .vditor-toolbar{background:var(--bg-sidebar);border-bottom-color:var(--border)}
@@ -334,6 +344,14 @@ mark{background:var(--mark-bg);border-radius:2px;padding:0 2px}
 .bk-att-name{font-weight:600;margin-bottom:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bk-summary{margin-top:6px;font-size:13px;line-height:1.5}
 .bk-att-side{flex:0 0 auto;display:flex;flex-direction:column;align-items:flex-end;gap:6px}
+/* Managed source block (Reading-mode file projection) */
+.src-block{display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--border);border-radius:10px;background:var(--bg-elevated);margin:8px 0}
+.src-ic{flex:0 0 auto;font-size:20px}
+.src-meta{flex:1 1 auto;min-width:0}
+.src-name{font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.src-sub{font-size:11px;color:var(--muted)}
+.src-act{flex:0 0 auto;font-size:12px;color:var(--accent);text-decoration:none;padding:3px 8px;border:1px solid var(--border);border-radius:6px}
+.src-act:hover{background:var(--bg-hover)}
 /* Search → Viewer navigation context */
 .search-context-banner{display:inline-block;margin:2px 0 4px;padding:3px 10px;border-radius:999px;font-size:12px;background:var(--bg-hover);color:var(--text-secondary);border:1px solid var(--border)}
 </style>
@@ -529,6 +547,8 @@ const state = {
   collapsed: new Set(),
   editor: { noteId: null, persistedMarkdown: '', dirty: false, saving: false, mode: localStorage.getItem('pkw-editor-mode') || 'live' },
   taskView: localStorage.getItem('pkw-task-view') || 'all',
+  mobileTaskBoard: 'inbox',
+  mobileTaskQ: 1,
   highlightText: '',
   tasksCache: [],
   matricesCache: [],
@@ -802,6 +822,7 @@ function renderMarkdown(body){
   while (i < lines.length) {
     const line = lines[i]
     if (/^\\s*$/.test(line)) { i++; continue }
+    if (/^\\s*<!-- pkw:attachment-summary:(?:start|end)[^>]*-->\\s*$/.test(line)) { i++; continue }
     const h = /^(#{1,6})\\s+(.*)$/.exec(line)
     if (h) { const lv = h[1].length; html.push('<h' + lv + '>' + renderInline(h[2]) + '</h' + lv + '>'); i++; continue }
     if (/^\\s*([-*_])\\s*(\\1\\s*){2,}$/.test(line)) { html.push('<hr />'); i++; continue }
@@ -1226,7 +1247,7 @@ function renderPreview(){
   // Host Lute render replaces it. On Lute failure the fallback stays.
   pv.innerHTML = renderMarkdown(body) || '<span class="muted">' + esc(t('emptyPreview')) + '</span>'
   if (!body.trim()) { finish(); return }
-  api('renderMarkdown', { markdown: body }).then(html => {
+  api('renderMarkdown', { markdown: body, noteId: state.editor.noteId }).then(html => {
     if (!pv.isConnected) return
     pv.innerHTML = html || '<span class="muted">' + esc(t('emptyPreview')) + '</span>'
     finish()
@@ -1906,14 +1927,14 @@ function renderTasksFrom(matrices, all){
 async function renderTasks(){
   const seq = viewSeq
   $('#detail').innerHTML = ''
-  if (state.tasksCache.length && state.matricesCache.length) { renderTasksFrom(state.matricesCache, state.tasksCache); viewMark('warm-paint', 'cache=hit') }
+  if (state.tasksCache.length && state.matricesCache.length) { if (isMobile()) renderMobileTasks(); else renderTasksFrom(state.matricesCache, state.tasksCache); viewMark('warm-paint', 'cache=hit') }
   else { $('#list').innerHTML = ''; $('#treeToolbar').innerHTML = ''; $('#main').innerHTML = '<div class="empty">' + esc(t('loading')) + '</div>'; viewMark('shell', 'cache=miss') }
   try {
     const matrices = await loadOnce('listMatrices', {})
     const all = await loadOnce('listTasks', {})
     if (seq !== viewSeq) return // stale navigation guard
     state.tasksCache = all; state.matricesCache = matrices
-    renderTasksFrom(matrices, all)
+    if (isMobile()) renderMobileTasks(); else renderTasksFrom(matrices, all)
     viewMark('data-ready')
   } catch (e) { if (seq === viewSeq) $('#main').innerHTML = '<div class="empty">' + esc(t('genericError')) + ': ' + esc(e.message) + '</div>' }
 }
@@ -1925,6 +1946,23 @@ function filterTaskList(all, filter){
   if (filter === 'today') return roots.filter(x => x.status === 'open' && (x.dueAt || x.scheduledAt) && (isToday(x.dueAt || x.scheduledAt) || new Date(x.dueAt || x.scheduledAt) < new Date()))
   if (filter === 'upcoming') return roots.filter(x => x.status === 'open' && (x.dueAt || x.scheduledAt) && new Date(x.dueAt || x.scheduledAt) > new Date())
   return roots.filter(x => x.status === 'open')
+}
+function renderMobileTasks(){
+  const matrices = state.matricesCache || []
+  const all = state.tasksCache || []
+  const board = state.mobileTaskBoard
+  const q = state.mobileTaskQ
+  const inBoard = x => board === 'inbox' ? (x.matrixId === null || x.matrixId === undefined) : x.matrixId === board
+  const qCounts = { 1: 0, 2: 0, 3: 0, 4: 0 }
+  for (const x of all) if (x.status === 'open' && inBoard(x)) qCounts[quadrantOf(x)]++
+  const selTasks = all.filter(x => x.status === 'open' && inBoard(x) && quadrantOf(x) === q)
+  const boardChips = ['inbox', ...matrices.map(m => m.matrixId)].map(b => '<button class="btn small' + (board === b ? ' primary' : '') + '" data-action="mobile-board" data-board="' + esc(b) + '">' + esc(b === 'inbox' ? t('taskInbox') : (matrixName(matrices, b) || b)) + '</button>').join('')
+  $('#main').innerHTML = '<h2>' + esc(t('tasks')) + '</h2>' +
+    '<div class="toolbar"><button class="btn primary" data-action="new-task-mobile">+ ' + esc(t('taskQuickAdd')) + '</button><button class="btn" data-action="new-matrix">+ ' + esc(t('newMatrix')) + '</button></div>' +
+    '<div class="mboard">' + boardChips + '</div>' +
+    '<div class="mquad">' + [1, 2, 3, 4].map(qn => '<div class="mquad-cell' + (qn === q ? ' active' : '') + '" data-action="mobile-q" data-q="' + qn + '"><div class="mq-n">Q' + qn + '</div><div class="mq-l">' + esc(t('q' + qn)) + '</div><div class="mq-c">' + qCounts[qn] + '</div></div>').join('') + '</div>' +
+    '<h3 class="mq-heading">' + esc(t('q' + q)) + '</h3>' +
+    (selTasks.length ? selTasks.map(x => mobileTaskCard(x, matrices, board !== 'inbox')).join('') : '<div class="empty">' + esc(t('taskNoTasks')) + '</div>')
 }
 function renderTaskList(matrices, all, filter){
   const list = filterTaskList(all, filter)
@@ -3090,6 +3128,9 @@ document.addEventListener('click', (e) => {
   else if (act === 'go-attachments') setView('attachments')
   else if (act === 'new-task') quickTaskDialog(null, null)
   else if (act === 'new-task-matrix') quickTaskDialog(id || null, null)
+  else if (act === 'new-task-mobile') quickTaskDialog(state.mobileTaskBoard === 'inbox' ? null : state.mobileTaskBoard, null, {}, state.mobileTaskQ)
+  else if (act === 'mobile-q') { state.mobileTaskQ = Number(el.dataset.q) || 1; renderMobileTasks() }
+  else if (act === 'mobile-board') { state.mobileTaskBoard = el.dataset.board || 'inbox'; renderMobileTasks() }
   else if (act === 'new-matrix') { const name = prompt(t('createFolderPrompt'), ''); if (name && name.trim()) api('createMatrix', { name: name.trim() }).then(() => refreshTasks()) }
   else if (act === 'task-view') setTaskView(el.dataset.view)
   else if (act === 'note-to-task') {
@@ -3517,9 +3558,10 @@ function taskDetailDialog(taskId){
     }).catch(() => {})
     refreshSubtasks().catch(() => {})
 }
-function quickTaskDialog(matrixId, sourceRefs, prefill){
+function quickTaskDialog(matrixId, sourceRefs, prefill, defaultQuad){
   const lastMatrix = localStorage.getItem('pkw-task-last-matrix') || ''
   const pre = prefill || {}
+  const defQ = defaultQuad || 1
   api('listMatrices').then(matrices => {
     const opts = '<option value="">' + esc(t('taskInbox')) + '</option>' + matrices.map(m => '<option value="' + esc(m.matrixId) + '"' + (m.matrixId === (matrixId || lastMatrix) ? ' selected' : '') + '>' + esc(m.name) + '</option>').join('')
     const srcNote = sourceRefs && sourceRefs[0] ? '<div class="form"><label>' + esc(t('noteLabel')) + '</label><span class="v mono">' + esc(sourceRefs[0].noteId) + '</span></div>' : ''
@@ -3536,6 +3578,7 @@ function quickTaskDialog(matrixId, sourceRefs, prefill){
       '<div class="toolbar"><button class="btn primary" id="tkSave">' + esc(t('taskSave')) + '</button><button class="btn" id="tkCancel">' + esc(t('taskCancel')) + '</button></div></div></div>'
     )
     const modal = $('#taskModal')
+    $('#tkQuad').value = String(defQ)
     $('#tkCancel').addEventListener('click', () => modal.remove())
     $('#tkSave').addEventListener('click', () => {
       const title = $('#tkTitle').value.trim()

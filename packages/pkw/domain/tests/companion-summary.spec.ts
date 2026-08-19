@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { companionUserContent, extractAttachmentSummary, hasCompanionUserContent, insertAttachmentSummary } from '../src/index.ts'
+import { companionUserContent, extractAttachmentSummary, hasCompanionUserContent, insertAttachmentSummary, stripManagedSummaryMarkers, managedSourceProjection } from '../src/index.ts'
 
 describe('companion attachment-summary materialization', () => {
   it('inserts a new managed block at the end', () => {
@@ -41,5 +41,23 @@ describe('companion attachment-summary materialization', () => {
     expect(companionUserContent(withNote)).toContain('这是我的补充笔记。')
     expect(companionUserContent(withNote)).not.toContain('att_x')
     expect(companionUserContent(withNote)).not.toContain('附件解析摘要')
+  })
+
+  it('stripManagedSummaryMarkers hides markers but keeps heading + summary (display projection)', () => {
+    const md = '# 海报\n\n![](attachments/att_x/海报.png)\n\n' + insertAttachmentSummary('', 'att_x', '自动摘要正文')
+    const stripped = stripManagedSummaryMarkers(md)
+    expect(stripped).not.toContain('pkw:attachment-summary:start')
+    expect(stripped).not.toContain('pkw:attachment-summary:end')
+    expect(stripped).toContain('附件解析摘要')
+    expect(stripped).toContain('自动摘要正文')
+  })
+
+  it('managedSourceProjection returns stable AttachmentIds by kind (never path)', () => {
+    const md = '# 笔记\n\n![](attachments/att_aaa/img.png)\n\n[file.pdf](attachments/att_bbb/file.pdf)\n\n[txt](attachments/att_ccc/note.txt)\n'
+    const proj = managedSourceProjection(md)
+    expect(proj).toHaveLength(3)
+    expect(proj.find(p => p.attachmentId === 'att_aaa')!.kind).toBe('image')
+    expect(proj.find(p => p.attachmentId === 'att_bbb')!.kind).toBe('file')
+    expect(proj.find(p => p.attachmentId === 'att_ccc')!.kind).toBe('file')
   })
 })

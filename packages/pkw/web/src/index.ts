@@ -433,7 +433,9 @@ export class PkwWebService extends Service {
       }
       case 'renderMarkdown': {
         // Reading-mode HTML via the shared Lute engine (callout/table/code/wiki).
-        return renderMarkdownToHtml(String(args.markdown ?? ''))
+        const md = String(args.markdown ?? '')
+        if (args.noteId !== undefined && args.noteId !== null && args.noteId !== '') return this.renderNoteMarkdown(md, String(args.noteId))
+        return renderMarkdownToHtml(md)
       }
       case 'tableMutation': {
         // Canonical GFM table edit: browser resolves the cell (tableIndex, header,
@@ -1094,6 +1096,39 @@ export class PkwWebService extends Service {
       }
     }
     return map
+  }
+
+  /**
+   * Reading-mode Markdown with Managed Source projection: Lute-render, then
+   * transform managed file links (`attachments/<id>/<file>`) into rich source
+   * blocks (icon + filename + type · size · processing state + preview).
+   * Images stay inline (already resolved to /pkw/attachment/<id>). Canonical
+   * Markdown is never mutated.
+   */
+  private async renderNoteMarkdown(markdown: string, noteId: string): Promise<string> {
+    const html = await renderMarkdownToHtml(markdown)
+    const doc = await this.notes.getDocument(NoteId(noteId)).catch(() => undefined)
+    if (doc === undefined) return html
+    const esc = (s: string) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string))
+    const stateLabel: Record<string, string> = { waiting: '等待解析', processing: '解析中', optimizing: '优化索引中', ready: '已解析', failed: '解析失败' }
+    let out = html
+    for (const ref of doc.attachments) {
+      const rec = this.attachments.get(ref.attachmentId)
+      if (rec === undefined || (rec.mimeType ?? '').indexOf('image/') === 0) continue
+      const id = String(ref.attachmentId)
+      const href = '/pkw/attachment/' + encodeURIComponent(id)
+      const re = new RegExp('<a[^>]*href="' + href.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '"[^>]*>[^<]*</a>', 'g')
+      const parts: string[] = []
+      parts.push((rec.mimeType ?? '').split('/').pop() ?? '')
+      if (rec.sizeBytes !== undefined) parts.push(rec.sizeBytes < 1024 ? rec.sizeBytes + ' B' : rec.sizeBytes < 1024 * 1024 ? (rec.sizeBytes / 1024).toFixed(1) + ' KB' : (rec.sizeBytes / 1024 / 1024).toFixed(1) + ' MB')
+      parts.push(stateLabel[this.sync.getAttachmentProcessingState(ref.attachmentId)] ?? '')
+      const sub = parts.filter(Boolean).join(' · ')
+      const block = '<span class="src-block"><span class="src-ic">📄</span><span class="src-meta"><span class="src-name">' + esc(rec.filename) + '</span>' +
+        (sub !== '' ? '<span class="src-sub">' + esc(sub) + '</span>' : '') +
+        '</span><a class="src-act" href="' + href + '" target="_blank" rel="noopener">预览</a><a class="src-act" href="' + href + '" download>下载</a></span>'
+      out = out.replace(re, block)
+    }
+    return out
   }
 
   private async summary(): Promise<unknown> {

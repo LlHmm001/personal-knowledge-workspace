@@ -305,4 +305,22 @@ describe('PKW web UI (served page)', () => {
     expect(page).toContain('.mtask')
     expect(page).toContain('.mobile-detail')
   })
+
+  it('ships managed source projection + mobile Task Board→Q1-Q4 IA', () => {
+    const js = script()
+    const page = renderPage()
+    // Managed source: browser strips summary markers + passes noteId for source blocks
+    expect(js).toContain('pkw:attachment-summary:')
+    expect(js).toContain('noteId: state.editor.noteId')
+    expect(page).toContain('.src-block')
+    // Mobile Tasks: board + Q1-Q4 overview + selected quadrant
+    expect(js).toContain('renderMobileTasks')
+    expect(js).toContain('mobile-q')
+    expect(js).toContain('mobile-board')
+    expect(js).toContain('new-task-mobile')
+    expect(js).toContain('mobileTaskBoard')
+    expect(js).toContain('mobileTaskQ')
+    expect(page).toContain('.mquad')
+    expect(page).toContain('.mquad-cell')
+  })
 })
