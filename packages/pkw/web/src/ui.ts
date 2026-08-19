@@ -132,6 +132,12 @@ aside.right h3:first-child{margin-top:0}
 .outline a:hover{color:var(--accent)}.outline a.lv2{padding-left:20px}.outline a.lv3{padding-left:32px}
 .hit{border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:10px;background:var(--panel)}
 .hit .t{font-weight:600}.hit .snippet{font-size:12px;color:var(--muted);margin:4px 0}
+.hit .ref{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);margin-top:6px;flex-wrap:wrap}
+.hit .ref .meta{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap}
+.hit .ref .spacer{flex:1 1 auto}
+.hit .t .badge{margin-left:6px;vertical-align:1px}
+.hit .reason{color:var(--text-secondary)}
+.kb-section-hint{font-size:12px;color:var(--muted);margin:0 0 12px}
 .empty{color:var(--muted);padding:28px;text-align:center}.empty .cta{margin-top:10px}
 .spinner{width:16px;height:16px;border:2px solid var(--border-strong);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite;display:inline-block;vertical-align:-3px}
 @keyframes spin{to{transform:rotate(360deg)}}
@@ -249,7 +255,7 @@ mark{background:var(--mark-bg);border-radius:2px;padding:0 2px}
   <header>
     <h1>PKW</h1>
     <span class="badge" id="wsBadge">…</span>
-    <input id="search" placeholder="搜索知识库 (hybrid search)…" aria-label="Search" />
+    <input id="search" placeholder="搜索笔记与附件…" aria-label="Search" />
     <span class="spacer"></span>
     <span class="badge" id="integBadge">WeKnora: …</span>
     <span class="badge" id="localBadge">Local: …</span>
@@ -262,7 +268,7 @@ mark{background:var(--mark-bg);border-radius:2px;padding:0 2px}
       <div class="nav-group-label">Workspace</div>
       <button data-view="overview">总览</button>
       <button data-view="notes">笔记</button>
-      <button data-view="knowledge">知识库</button>
+      <button data-view="knowledge">知识</button>
       <button data-view="search">搜索</button>
       <button data-view="attachments">附件</button>
       <button data-view="tasks">待办</button>
@@ -279,7 +285,7 @@ mark{background:var(--mark-bg);border-radius:2px;padding:0 2px}
 const STR = {
   zh: {
     overview:'总览', notes:'笔记', attachments:'附件库', tasks:'待办', trash:'回收站', search:'搜索',
-    searchPlaceholder:'搜索知识库 (hybrid search)…', workspaceLabel:'工作区', localSummary:'本地: {n} 笔记 · {m} 文件',
+    searchPlaceholder:'搜索笔记与附件…', workspaceLabel:'工作区', localSummary:'本地: {n} 笔记 · {m} 文件',
     connected:'已连接', unavailable:'不可用', notConfigured:'未配置', error:'错误',
     overviewTitle:'工作区概览', overviewNotes:'笔记', overviewAttachments:'附件', overviewMappings:'已同步对象', overviewPendingSync:'待同步', overviewSyncErrors:'同步错误',
     overviewIntegration:'WeKnora 集成', overviewRecent:'最近更新', overviewEmpty:'工作区为空。点击「新建笔记」开始。', recentNote:'笔记', recentAttachment:'附件', noRecent:'暂无最近更新',
@@ -295,7 +301,8 @@ const STR = {
     matrixTasksCount:'该四象限中共有 {n} 项任务。', matrixMoveToInbox:'移动到 Inbox', matrixMoveToInboxHint:'保留任务，只移除四象限归属', matrixDeleteTasks:'删除这些任务', matrixDeleteTasksHint:'删除四象限时同时删除其中任务（删除后无法恢复）', matrixDeletingTasks:'正在删除 {n} 项任务，然后删除四象限…', matrixDeletedTasks:'已删除 {n} 项任务和该四象限。',
     batchComplete:'标记完成', batchReopen:'重新打开', batchDelete:'删除 {n} 项任务', batchDeleteConfirm:'删除 {n} 项任务？', batchDeleteHint:'这些任务删除后无法恢复。', batchDone:'已处理 {n} 项', batchPartial:'已处理 {n} 项，{m} 项失败',
     themeSystem:'跟随系统', themeLight:'浅色', themeDark:'深色',
-    knowledge:'知识库', knowledgeIndexed:'已索引', knowledgePending:'待索引', knowledgeNotIndexed:'未索引', knowledgeParseFailed:'解析失败', relatedNotes:'相关笔记', refAttachments:'引用附件', mime:'类型', attWaiting:'等待解析', attProcessing:'解析中', attReady:'已解析', attFailed:'解析失败', attachments:'附件', businessKnowledge:'知识',
+    knowledge:'知识', knowledgeIndexed:'已索引', knowledgePending:'待索引', knowledgeNotIndexed:'未索引', knowledgeParseFailed:'解析失败', relatedNotes:'相关笔记', relatedKnowledge:'相关知识', refAttachments:'引用附件', mime:'类型', attWaiting:'等待解析', attProcessing:'解析中', attReady:'已解析', attFailed:'解析失败', attachments:'附件', businessKnowledge:'知识',
+    knowledgeBrowse:'浏览', knowledgeBrowseTitle:'知识发现', knowledgeEmpty:'还没有可发现的知识。', knowledgeOffline:'知识检索暂不可用', sourceLabel:'来源', attachmentsN:'附件 ×{n}', knowledgeFilterPlaceholder:'筛选知识（标题 / 摘要 / 来源）…',
     parseStatus:'解析状态', summary:'摘要', reparse:'重新解析', reparseStarted:'已提交重新解析',
     noteMissing:'笔记文件已不存在', noteMissingBody:'笔记“{id}”的 Markdown 文件在工作区中找不到，可能已被外部删除或移动。', rescan:'重新扫描', removeFromWorkspace:'从工作区移除', removeMissingConfirm:'从工作区移除“{id}”？该笔记文件已不存在。此操作将清理 PKW 中的残留记录和知识库投影，无法从回收站恢复该文件。',
     missingSource:'源文件已不存在',
@@ -304,8 +311,8 @@ const STR = {
     attGridView:'网格视图', attListView:'列表视图', attSearchPlaceholder:'搜索文件名…', attTypeAll:'全部', attTypeImage:'图片', attTypeDocument:'文档', attTypeOther:'其它', attSort:'排序', attSortRecent:'最近', attSortName:'名称', attSortSize:'大小',
     attSelectAll:'全选', attSelected:'已选择 {n} 项', attBatchTrash:'移入回收站', attBatchReparse:'重新解析', attBatchIndex:'重新索引', attClearSelection:'取消选择',
     attCompanion:'伴随笔记', attCreateCompanion:'创建伴随笔记', attOpenCompanion:'打开伴随笔记', attPreview:'预览', attCopyRef:'复制引用', attNoCompanion:'未建伴随笔记', attCopied:'已复制引用', attUploadResult:'上传完成：附件 {a} · 伴随笔记 {n} · 失败 {f}', attUploadResultNoNote:'上传完成：附件 {a} 成功，伴随笔记失败 {f}', attUploadPartial:'部分上传失败：{a}/{t} 成功', attCreatedNote:'已创建伴随笔记', attOpenedExisting:'该附件已有伴随笔记，已打开', attBatchNoSelection:'请先选择附件', companionUpgrade:'将伴随笔记作为独立知识同步', companionUpgraded:'已作为独立知识同步', attachmentBacked:'附件驱动（不独立同步）',
-    uploadProgress:'上传中…', uploadSuccess:'已上传', uploadFailed:'上传失败', searching:'搜索中…', noHits:'没有命中「{q}」。', searchHint:'输入关键词搜索本地笔记与附件（经 WeKnora hybrid search）。',
-    score:'得分', openNote:'打开笔记', openAttachment:'打开附件', externalWeKnora:'WeKnora 外部', noteLabel:'笔记', attachmentLabel:'附件', noteBodyMatch:'正文命中', attMatch:'附件命中',
+    uploadProgress:'上传中…', uploadSuccess:'已上传', uploadFailed:'上传失败', searching:'搜索中…', noHits:'没有命中「{q}」。', searchHint:'输入关键词搜索笔记与附件。',
+    score:'得分', openNote:'打开笔记', openAttachment:'打开附件', noteLabel:'笔记', attachmentLabel:'附件', noteBodyMatch:'正文命中', attMatch:'附件命中',
     details:'详情', noteId:'NoteId', attachmentId:'AttachmentId', path:'路径', revision:'版本', updated:'更新时间', lastError:'最近错误', maintenance:'维护', advanced:'高级',
     workspaceSummary:'工作区摘要', kb:'知识库', state:'状态', parse:'解析', syncSection:'WeKnora 同步', noSyncInfo:'尚未同步。',
     reconcileDone:'重建完成', reconcileResult:'笔记修复 {a} · 附件修复 {b} · 待同步 {c} · 已删 {d}', syncingAll:'正在同步…', genericError:'操作失败', ok:'完成', emptyPreview:'（空）', searchFailed:'搜索失败',
@@ -340,7 +347,7 @@ const STR = {
   },
   en: {
     overview:'Overview', notes:'Notes', attachments:'Attachment library', tasks:'Tasks', trash:'Trash', search:'Search',
-    searchPlaceholder:'Search knowledge base (hybrid search)…', workspaceLabel:'Workspace', localSummary:'Local: {n} notes · {m} files',
+    searchPlaceholder:'Search notes & attachments…', workspaceLabel:'Workspace', localSummary:'Local: {n} notes · {m} files',
     connected:'Connected', unavailable:'Unavailable', notConfigured:'Not configured', error:'error',
     overviewTitle:'Workspace Overview', overviewNotes:'Notes', overviewAttachments:'Attachments', overviewMappings:'Synced objects', overviewPendingSync:'Pending sync', overviewSyncErrors:'Sync errors',
     overviewIntegration:'WeKnora integration', overviewRecent:'Recent', overviewEmpty:'Workspace is empty. Click 「New Note」 to start.', recentNote:'Note', recentAttachment:'Attachment', noRecent:'No recent changes',
@@ -356,7 +363,8 @@ const STR = {
     matrixTasksCount:'This matrix has {n} tasks.', matrixMoveToInbox:'Move to Inbox', matrixMoveToInboxHint:'Keep tasks, only remove the matrix', matrixDeleteTasks:'Delete these tasks', matrixDeleteTasksHint:'Delete the tasks together with the matrix (cannot be undone)', matrixDeletingTasks:'Deleting {n} tasks, then deleting this matrix…', matrixDeletedTasks:'Deleted {n} tasks and the matrix.',
     batchComplete:'Mark complete', batchReopen:'Reopen', batchDelete:'Delete {n} tasks', batchDeleteConfirm:'Delete {n} tasks?', batchDeleteHint:'These tasks cannot be restored after deletion.', batchDone:'Processed {n} items', batchPartial:'Processed {n} items, {m} failed',
     themeSystem:'Follow system', themeLight:'Light', themeDark:'Dark',
-    knowledge:'Knowledge', knowledgeIndexed:'Indexed', knowledgePending:'Pending', knowledgeNotIndexed:'Not indexed', knowledgeParseFailed:'Parse failed', relatedNotes:'Related notes', refAttachments:'Referenced attachments', mime:'Type', attWaiting:'Waiting', attProcessing:'Processing', attReady:'Parsed', attFailed:'Parse failed', attachments:'Attachments', businessKnowledge:'Knowledge',
+    knowledge:'Knowledge', knowledgeIndexed:'Indexed', knowledgePending:'Pending', knowledgeNotIndexed:'Not indexed', knowledgeParseFailed:'Parse failed', relatedNotes:'Related notes', relatedKnowledge:'Related knowledge', refAttachments:'Referenced attachments', mime:'Type', attWaiting:'Waiting', attProcessing:'Processing', attReady:'Parsed', attFailed:'Parse failed', attachments:'Attachments', businessKnowledge:'Knowledge',
+    knowledgeBrowse:'Browse', knowledgeBrowseTitle:'Knowledge Discovery', knowledgeEmpty:'No discoverable knowledge yet.', knowledgeOffline:'Knowledge search unavailable', sourceLabel:'Source', attachmentsN:'{n} attachments', knowledgeFilterPlaceholder:'Filter knowledge (title / summary / source)…',
     parseStatus:'Parse status', summary:'Summary', reparse:'Reparse', reparseStarted:'Reparse submitted',
     noteMissing:'Note file is missing', noteMissingBody:'The Markdown file for note "{id}" cannot be found in the workspace. It may have been deleted or moved externally.', rescan:'Rescan', removeFromWorkspace:'Remove from workspace', removeMissingConfirm:'Remove "{id}" from the workspace? Its file is already missing. This will clean up the leftover PKW records and knowledge projection, and the file cannot be restored from Trash.',
     missingSource:'Source file missing',
@@ -365,8 +373,8 @@ const STR = {
     attGridView:'Grid view', attListView:'List view', attSearchPlaceholder:'Search filename…', attTypeAll:'All', attTypeImage:'Images', attTypeDocument:'Documents', attTypeOther:'Other', attSort:'Sort', attSortRecent:'Recent', attSortName:'Name', attSortSize:'Size',
     attSelectAll:'Select all', attSelected:'{n} selected', attBatchTrash:'Trash', attBatchReparse:'Reparse', attBatchIndex:'Re-index', attClearSelection:'Clear selection',
     attCompanion:'Companion note', attCreateCompanion:'Create companion note', attOpenCompanion:'Open companion note', attPreview:'Preview', attCopyRef:'Copy reference', attNoCompanion:'No companion note', attCopied:'Reference copied', attUploadResult:'Upload done: {a} attachments · {n} companion notes · {f} failed', attUploadResultNoNote:'Upload done: {a} attachments, {f} companion notes failed', attUploadPartial:'Partial upload: {a}/{t} succeeded', attCreatedNote:'Companion note created', attOpenedExisting:'Companion note already exists — opened', attBatchNoSelection:'Select attachments first', companionUpgrade:'Sync companion note as independent knowledge', companionUpgraded:'Synced as independent knowledge', attachmentBacked:'Attachment-backed (not independently synced)',
-    uploadProgress:'Uploading…', uploadSuccess:'Uploaded', uploadFailed:'Upload failed', searching:'Searching…', noHits:'No hits for 「{q}」.', searchHint:'Type a query to search notes & attachments (via WeKnora hybrid search).',
-    score:'score', openNote:'Open note', openAttachment:'Open attachment', externalWeKnora:'external WeKnora', noteLabel:'Note', attachmentLabel:'Attachment', noteBodyMatch:'Body match', attMatch:'Attachment match',
+    uploadProgress:'Uploading…', uploadSuccess:'Uploaded', uploadFailed:'Upload failed', searching:'Searching…', noHits:'No hits for 「{q}」.', searchHint:'Type a query to search notes & attachments.',
+    score:'score', openNote:'Open note', openAttachment:'Open attachment', noteLabel:'Note', attachmentLabel:'Attachment', noteBodyMatch:'Body match', attMatch:'Attachment match',
     details:'Details', noteId:'NoteId', attachmentId:'AttachmentId', path:'Path', revision:'Revision', updated:'Updated', lastError:'Last error', maintenance:'Maintenance', advanced:'Advanced',
     workspaceSummary:'Workspace summary', kb:'KB', state:'State', parse:'Parse', syncSection:'WeKnora Sync', noSyncInfo:'Not synced yet.',
     reconcileDone:'Reconcile done', reconcileResult:'Notes repaired {a} · attachments repaired {b} · dirty {c} · deleted {d}', syncingAll:'Syncing…', genericError:'Operation failed', ok:'Done', emptyPreview:'(empty)', searchFailed:'Search failed',
@@ -443,7 +451,8 @@ const state = {
   trashBusy: false,
   inspectorCollapsed: false,
   selectedTaskIds: new Set(),
-  knowledgeTab: 'wiki',
+  knowledgeTab: 'browse',
+  knowledgeCache: null,
   wikiFolder: '',
   graphTypes: [],
 }
@@ -741,6 +750,7 @@ async function openNote(noteId){
     $('#detail').innerHTML = detailNote(d)
     renderNoteAttachmentKnowledge(d)
     renderBusinessKnowledgeAttachments(d)
+    renderRelatedKnowledge(d)
     await renderTree()
     kickSyncPoll(d.sync)
   } catch (e) {
@@ -789,7 +799,8 @@ function renderEditorShell(d){
     '</div>' +
     // Business Knowledge Viewer: aggregated attachments (images + files) below the
     // Reading body, with user-facing processing state and summary when available.
-    '<div id="bkAttachments"></div>'
+    '<div id="bkAttachments"></div>' +
+    '<div id="relatedKnowledge"></div>'
 }
 function bindEditor(){
   if (state.editor.mode === 'live') initVditor()
@@ -1135,6 +1146,20 @@ function renderBusinessKnowledgeAttachments(d){
         '</div>'
     }).join('')
     if (rows) box.innerHTML = '<h3>' + esc(t('attachments')) + '</h3>' + rows
+  }).catch(() => {})
+}
+// Related Knowledge (lightweight): reads existing WeKnora Wiki-graph relations and
+// maps them back to local Notes. Optional — renders nothing when there is no data
+// or WeKnora is offline, so it never blocks the Business Knowledge Viewer.
+function renderRelatedKnowledge(d){
+  const box = $('#relatedKnowledge')
+  if (!box) return
+  api('relatedKnowledge', { noteId: d.note.noteId }).then(rel => {
+    if (!box || state.selectedNoteId !== d.note.noteId) return
+    const list = (rel || []).filter(r => r && r.noteId)
+    if (!list.length) { box.innerHTML = ''; return }
+    box.innerHTML = '<h3>' + esc(t('relatedKnowledge')) + '</h3>' +
+      list.map(r => '<div class="tree-row" data-action="open-note" data-id="' + esc(r.noteId) + '"><span class="ic">📄</span><span class="nm">' + esc(r.title) + '</span></div>').join('')
   }).catch(() => {})
 }
 function outlineHtml(md){
@@ -1853,16 +1878,26 @@ async function renderTrash(){
 
 function renderSearchView(){
   $('#list').innerHTML = ''; $('#treeToolbar').innerHTML = ''; $('#detail').innerHTML = ''
+  renderSearchMain()
+}
+// Render the search surface into #main only (used by both the standalone Search
+// view and the Knowledge → Search tab, which keeps its sidebar tabs intact).
+function renderSearchMain(){
   // Restore the last search (query + results) so Search → Note → Back returns
   // to the same results instead of a blank search view.
   if (state.searchQuery && state.searchResults) renderSearchResults(state.searchQuery, state.searchResults)
   else $('#main').innerHTML = '<h2>' + esc(t('search')) + '</h2><p class="muted">' + esc(t('searchHint')) + '</p>'
 }
-// ── Knowledge view (Wiki / Graph / Search) — WeKnora-derived projection ──────
+// ── Knowledge view (Knowledge Discovery / Wiki / Graph) — user-facing ───────
 function renderKnowledgeView(){
-  const tabs = [['search', t('knowledgeSearchTab')], ['wiki', t('knowledgeWiki')], ['graph', t('knowledgeGraph')]]
-  let listHtml = '<div class="list-head">' + esc(t('knowledge')) + '</div><div class="list-section">' + esc(t('knowledge')) + '</div>' +
-    tabs.map(([v, label]) => '<div class="tree-row' + (state.knowledgeTab === v ? ' active' : '') + '" data-action="knowledge-tab" data-tab="' + v + '"><span class="ic">' + (v === 'search' ? '🔍' : v === 'wiki' ? '📖' : '🕸') + '</span><span class="nm">' + esc(label) + '</span></div>').join('')
+  const tabs = [
+    ['browse', t('knowledgeBrowse'), '🗂'],
+    ['search', t('knowledgeSearchTab'), '🔍'],
+    ['wiki', t('knowledgeWiki'), '📖'],
+    ['graph', t('knowledgeGraph'), '🕸'],
+  ]
+  let listHtml = '<div class="list-head">' + esc(t('knowledge')) + '</div><div class="list-section">' + esc(t('knowledgeBrowseTitle')) + '</div>' +
+    tabs.map(([v, label, ic]) => '<div class="tree-row' + (state.knowledgeTab === v ? ' active' : '') + '" data-action="knowledge-tab" data-tab="' + v + '"><span class="ic">' + ic + '</span><span class="nm">' + esc(label) + '</span></div>').join('')
   if (state.knowledgeTab === 'wiki') {
     listHtml += '<div class="list-section">' + esc(t('folder')) + '</div>' +
       '<div class="tree-row' + (state.wikiFolder === '' ? ' active' : '') + '" data-action="wiki-folder" data-folder=""><span class="ic">🗂</span><span class="nm">' + esc(t('trashAll')) + '</span></div>' +
@@ -1874,9 +1909,70 @@ function renderKnowledgeView(){
     }).catch(() => {})
   }
   $('#list').innerHTML = listHtml
-  if (state.knowledgeTab === 'search') { renderSearchView(); return }
+  if (state.knowledgeTab === 'browse') { renderKnowledgeBrowse(); return }
+  if (state.knowledgeTab === 'search') { $('#treeToolbar').innerHTML = ''; $('#detail').innerHTML = ''; renderSearchMain(); return }
   if (state.knowledgeTab === 'wiki') { renderWikiList(); return }
   renderGraphView()
+}
+// Unified knowledge card: shared by Knowledge Discovery browse + Search results
+// so "finding knowledge" reads identically regardless of entry point. Exposes
+// only user concepts (title / summary / match reason / source / updated / type).
+function knowledgeCardHtml(c){
+  const meta = []
+  if (c.reason) meta.push('<span class="reason">' + c.reason + '</span>')
+  if (c.source) meta.push('<span>' + esc(t('sourceLabel')) + ': ' + esc(c.source) + '</span>')
+  if (c.updatedAt) meta.push('<span>' + esc(t('updated')) + ': ' + esc(String(c.updatedAt).slice(0, 16).replace('T', ' ')) + '</span>')
+  const openBtn = c.open
+    ? '<button class="btn small" data-action="' + esc(c.open.action) + '" data-id="' + esc(c.open.id) + '"' + (c.reasonAttrs || '') + '>' + esc(c.open.label) + '</button>'
+    : ''
+  return '<div class="hit">' +
+    '<div class="t">' + esc(c.title) + (c.badges || '') + '</div>' +
+    (c.snippet ? '<div class="snippet">' + esc(c.snippet) + '</div>' : '') +
+    '<div class="ref"><span class="meta">' + meta.join(' · ') + '</span><span class="spacer"></span>' + openBtn + '</div>' +
+    '</div>'
+}
+async function renderKnowledgeBrowse(){
+  const seq = viewSeq
+  $('#treeToolbar').innerHTML = ''; $('#detail').innerHTML = ''
+  $('#main').innerHTML = '<h2>' + esc(t('knowledgeBrowseTitle')) + '</h2><p class="kb-section-hint">' + esc(t('knowledgeBrowse')) + '</p>' +
+    '<input id="kbFilter" placeholder="' + esc(t('knowledgeFilterPlaceholder')) + '" style="width:100%;margin-bottom:12px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--panel);color:var(--text-primary)">' +
+    '<div id="kbList"></div>'
+  const input = $('#kbFilter')
+  const draw = () => {
+    const q = (input ? input.value : '').trim().toLowerCase()
+    const items = (state.knowledgeCache || []).filter(it => {
+      if (!q) return true
+      return (it.title || '').toLowerCase().includes(q) || (it.summary || '').toLowerCase().includes(q) || (it.folder || '').toLowerCase().includes(q)
+    })
+    const box = $('#kbList'); if (!box) return
+    if (!items.length) { box.innerHTML = '<div class="empty">' + (q ? esc(t('noHits', { q })) : esc(t('knowledgeEmpty'))) + '</div>'; return }
+    box.innerHTML = items.map(it => {
+      const badges = (it.attachmentCount ? '<span class="badge">' + esc(t('attachmentsN', { n: it.attachmentCount })) + '</span>' : '') +
+        (it.indexed ? '<span class="badge ok">' + esc(t('knowledgeIndexed')) + '</span>' : (it.pending ? '<span class="badge warn">' + esc(t('knowledgePending')) + '</span>' : ''))
+      return knowledgeCardHtml({
+        title: it.title || it.relativePath || '',
+        snippet: it.summary,
+        source: it.folder,
+        updatedAt: it.updatedAt,
+        badges,
+        open: { action: 'open-note', id: it.noteId, label: t('openNote') },
+      })
+    }).join('')
+  }
+  if (input) input.addEventListener('input', draw)
+  if (state.knowledgeCache) { draw(); viewMark('warm-paint', 'cache=hit') }
+  else { $('#kbList').innerHTML = '<div class="empty">' + esc(t('loading')) + '</div>'; viewMark('shell', 'cache=miss') }
+  try {
+    const list = await api('listKnowledge', {})
+    if (seq !== viewSeq) return
+    state.knowledgeCache = list
+    draw()
+    viewMark('data-ready')
+  } catch (e) {
+    if (seq !== viewSeq) return
+    const box = $('#kbList')
+    if (box) box.innerHTML = '<div class="empty">' + esc(t('knowledgeOffline')) + '</div><div class="empty"><button class="btn" data-action="knowledge-tab" data-tab="browse">' + esc(t('retry')) + '</button></div>'
+  }
 }
 async function renderWikiList(){
   $('#treeToolbar').innerHTML = ''; $('#detail').innerHTML = ''
@@ -1908,12 +2004,13 @@ async function openWikiPage(slug){
     const tree = await api('getTree', { sortMode: 'manual' }).catch(() => ({ root: [] }))
     const found = findNoteByTitleOrPath(tree.root || [], p.title)
     $('#main').innerHTML = '<div class="toolbar"><button class="btn" data-action="back-wiki">← ' + esc(t('knowledgeWiki')) + '</button>' +
-      (found ? '<button class="btn" data-action="open-note" data-id="' + esc(found.noteId) + '">' + esc(t('wikiOpenNote')) + '</button>' : '') +
+      (found ? '<button class="btn primary" data-action="open-note" data-id="' + esc(found.noteId) + '">' + esc(t('wikiOpenNote')) + '</button>' : '') +
       '<span class="muted small">' + esc(t('wikiGenerated')) + '</span></div>' +
       '<h2>' + esc(p.title) + (p.page_type ? ' <span class="badge">' + esc(p.page_type) + '</span>' : '') + '</h2>' +
       (p.summary && p.summary !== p.content ? '<p class="muted">' + esc(p.summary) + '</p>' : '') +
       '<div id="preview" style="min-height:40vh">' + html + '</div>'
-    $('#detail').innerHTML = '<h3>' + esc(t('knowledge')) + '</h3><div class="kv"><b>slug</b> <span class="v mono">' + esc(p.slug) + '</span></div><div class="kv"><b>' + esc(t('knowledgeId')) + '</b> <span class="v">—</span></div>'
+    $('#detail').innerHTML = '<h3>' + esc(t('knowledge')) + '</h3><div class="kv"><b>' + esc(t('wikiGenerated')) + '</b> <span class="v muted">' + esc(t('knowledgeWiki')) + '</span></div>' +
+      (found ? '<div class="kv"><b>' + esc(t('noteLabel')) + '</b> <span class="v"><a href="#" data-action="open-note" data-id="' + esc(found.noteId) + '">' + esc(found.title) + '</a></span></div>' : '')
   } catch (e) { toast(t('genericError') + ': ' + e.message, 'err') }
 }
 function graphColor(type){
@@ -1965,26 +2062,36 @@ function renderSearchResults(q, results){
   if (!results || !results.length) { $('#main').innerHTML = '<div class="empty">' + t('noHits', { q: esc(q) }) + '</div>'; return }
   $('#main').innerHTML = '<h2>' + esc(t('search')) + '<span class="sub">' + esc(q) + '</span></h2>' + results.map(r => {
     const local = r.local
-    const title = r.remote.title || r.remote.filename || r.remote.knowledgeId
-    const kind = local ? (local.entityType === 'note' ? t('noteLabel') : t('attachmentLabel')) : t('externalWeKnora')
-    const openTarget = local && local.entityType === 'attachment' && local.companionNoteId
-      ? { action: 'open-note', id: local.companionNoteId, label: t('openNote') }
-      : local ? (local.entityType === 'note' ? { action: 'open-note', id: local.entityId, label: t('openNote') } : { action: 'open-attachment', id: local.entityId, label: t('openAttachment') }) : null
-    const openBtn = openTarget
-      ? '<button data-action="' + openTarget.action + '" data-id="' + esc(openTarget.id) + '"' +
-        (local && local.entityType === 'note'
-          ? ' data-reason="' + esc(local.matchReason || 'note') + '" data-attname="' + esc(local.matchedAttachmentId ? (r.remote.filename || local.matchedAttachmentId) : '') + '"'
-          : '') +
-        '>' + esc(openTarget.label) + '</button>'
-      : ''
-    let provenance = ''
-    if (local && local.entityType === 'note') {
-      const attName = r.remote.filename || local.matchedAttachmentId || ''
-      if (local.matchReason === 'both') provenance = t('noteBodyMatch') + ' · ' + t('attMatch') + ' · ' + esc(attName)
-      else if (local.matchReason === 'attachment' || local.matchedAttachmentId) provenance = t('attMatch') + ' · ' + esc(attName)
-      else provenance = t('noteBodyMatch')
+    const title = r.remote.title || r.remote.filename || (local && local.title) || (local && local.entityId) || t('untitled')
+    const attName = r.remote.filename || (local && local.matchedAttachmentId) || ''
+    let reason = ''
+    let reasonValue = 'note'
+    if (local) {
+      if (local.matchReason === 'both') { reason = t('noteBodyMatch') + ' · ' + t('attMatch') + ' · ' + esc(attName); reasonValue = 'both' }
+      else if (local.matchReason === 'attachment' || local.matchedAttachmentId) { reason = t('attMatch') + ' · ' + esc(attName); reasonValue = 'attachment' }
+      else if (local.entityType === 'attachment') { reason = t('attMatch') + ' · ' + esc(attName); reasonValue = 'attachment' }
+      else reason = t('noteBodyMatch')
     }
-    return '<div class="hit"><div class="t">' + esc(title) + '</div><div class="snippet">' + esc((r.remote.content || '').slice(0, 220)) + '</div><div class="ref">' + esc(t('score')) + ' ' + (r.remote.score != null ? r.remote.score.toFixed(3) : '—') + ' · ' + esc(kind) + (provenance ? ' · ' + provenance : '') + openBtn + '</div></div>'
+    const kindBadge = local
+      ? (local.entityType === 'note' ? '<span class="badge">' + esc(t('noteLabel')) + '</span>' : '<span class="badge">' + esc(t('attachmentLabel')) + '</span>')
+      : ''
+    let open = null
+    let reasonAttrs = ''
+    if (local) {
+      if (local.companionNoteId) { open = { action: 'open-note', id: local.companionNoteId, label: t('openNote') } }
+      else if (local.entityType === 'note') { open = { action: 'open-note', id: local.entityId, label: t('openNote') } }
+      else { open = { action: 'open-attachment', id: local.entityId, label: t('openAttachment') } }
+      if (open.action === 'open-note') reasonAttrs = ' data-reason="' + esc(reasonValue) + '" data-attname="' + esc(attName) + '"'
+    }
+    return knowledgeCardHtml({
+      title,
+      snippet: (r.remote.content || '').slice(0, 220),
+      reason,
+      source: local && local.folder,
+      badges: kindBadge,
+      open,
+      reasonAttrs,
+    })
   }).join('')
 }
 async function runSearch(q){
@@ -1994,7 +2101,7 @@ async function runSearch(q){
     const results = await api('search', { query: q, limit: 10 })
     state.searchResults = results
     renderSearchResults(q, results)
-  } catch (e) { state.searchResults = null; $('#main').innerHTML = '<div class="empty">' + esc(t('searchFailed')) + ': ' + esc(e.message) + '</div>' }
+  } catch (e) { state.searchResults = null; $('#main').innerHTML = '<div class="empty">' + esc(t('knowledgeOffline')) + '</div><div class="empty muted">' + esc(e.message || '') + '</div>' }
 }
 async function syncNow(){ toast(t('syncingAll'), 'warn'); try { await api('syncNow'); toast(t('ok'), 'ok'); await render() } catch (e) { toast(t('genericError') + ': ' + e.message, 'err') } }
 async function syncEntity(et, id){ try { await api('syncEntity', { entityType: et, entityId: id }); toast(t('ok'), 'ok'); if (et === 'note' && state.selectedNoteId === id) await openNote(id); else await renderTree() } catch (e) { toast(t('genericError') + ': ' + e.message, 'err') } }

@@ -205,4 +205,20 @@ describe('PKW web UI (served page)', () => {
     expect(js).toContain("id=\"tdTitle\"")
     expect(renderPage()).toContain('.td-title-input{width:100%')
   })
+
+  it('ships the Knowledge Discovery surface (browse/search/wiki/graph) with a unified card', () => {
+    const js = script()
+    expect(js).toContain('renderKnowledgeBrowse')
+    expect(js).toContain('knowledgeCardHtml')
+    expect(js).toContain('renderRelatedKnowledge')
+    expect(js).toContain("api('listKnowledge'")
+    expect(js).toContain("api('relatedKnowledge'")
+    expect(js).toContain('knowledgeBrowseTitle')
+  })
+
+  it('never renders WeKnora internal ids in search results', () => {
+    const js = script()
+    expect(js).not.toContain('remote.knowledgeId')
+    expect(js).not.toContain('externalWeKnora')
+  })
 })

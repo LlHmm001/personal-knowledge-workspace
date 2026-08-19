@@ -403,4 +403,46 @@ describe('PKW Web Host Bridge (real Core integration)', () => {
     expect(c).not.toBeNull()
     expect(c!.noteId).toBe(note.noteId) // Companion relation still resolves to the SAME NoteId
   })
+
+  it('listKnowledge exposes user-facing knowledge only (no WeKnora ids) with a body snippet', async () => {
+    const { web } = await boot()
+    await web.call('createNote', { relativePath: 'sub/plan.md', markdown: '# 计划\n\n这是第一段正文内容。\n\n第二段。\n' })
+    const list = await web.call('listKnowledge', {}) as Array<Record<string, unknown>>
+    expect(list).toHaveLength(1)
+    const item = list[0]!
+    expect(item.noteId).toBeDefined()
+    expect(item.folder).toBe('sub')
+    expect(item.title).toBe('计划')
+    expect(item.attachmentCount).toBe(0)
+    expect(item.summary).toContain('这是第一段正文内容。')
+    expect(item.summary).not.toContain('#')
+    expect(item.summary).not.toContain('计划') // heading stripped, not the summary
+    expect(item).not.toHaveProperty('knowledgeId')
+    expect(item).not.toHaveProperty('kbId')
+    expect(item).not.toHaveProperty('chunkId')
+  })
+
+  it('search enrichment strips WeKnora ids and adds stable Note identity (folder)', async () => {
+    const { web, sync } = await boot()
+    const created = await web.call('createNote', { relativePath: 'sub/s.md', markdown: '# searchable note\n' }) as { noteId: string }
+    await sync.syncNote(created.noteId as never)
+    const results = await web.call('search', { query: 'searchable', limit: 5 }) as Array<{ local?: Record<string, unknown>; remote: Record<string, unknown> }>
+    expect(results.length).toBeGreaterThan(0)
+    const hit = results.find(r => r.local !== undefined)!
+    expect(hit).toBeDefined()
+    expect(hit.remote).not.toHaveProperty('knowledgeId')
+    expect(hit.remote).not.toHaveProperty('kbId')
+    expect(hit.remote).not.toHaveProperty('chunkId')
+    expect(hit.local!.entityId).toBe(created.noteId)
+    expect(hit.local!.folder).toBe('sub')
+    expect(hit.local!.relativePath).toBe('sub/s.md')
+  })
+
+  it('relatedKnowledge degrades to [] when the Wiki graph is unavailable (offline)', async () => {
+    const { web } = await boot()
+    const note = await web.call('createNote', { relativePath: 'a.md', markdown: '# a\n' }) as { noteId: string }
+    const rel = await web.call('relatedKnowledge', { noteId: note.noteId }) as unknown[]
+    expect(Array.isArray(rel)).toBe(true)
+    expect(rel).toHaveLength(0)
+  })
 })

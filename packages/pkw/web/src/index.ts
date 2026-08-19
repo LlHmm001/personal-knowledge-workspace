@@ -30,7 +30,7 @@ import NotesService, { splitFrontmatter } from '@deepseek-ai/dsh-pkw-notes'
 import AttachmentsService from '@deepseek-ai/dsh-pkw-attachments'
 import TasksService from '@deepseek-ai/dsh-pkw-tasks'
 import WeKnoraClient from '@deepseek-ai/dsh-pkw-weknora'
-import WeKnoraSyncService from '@deepseek-ai/dsh-pkw-weknora-sync'
+import WeKnoraSyncService, { type RetrievalResult } from '@deepseek-ai/dsh-pkw-weknora-sync'
 import { renderPage } from './ui.ts'
 import { renderMarkdownToHtml } from './lute.ts'
 
@@ -73,6 +73,42 @@ async function readJsonBody(req: IncomingMessage): Promise<Json> {
 function folderOf(relativePath: string): string {
   const idx = relativePath.lastIndexOf('/')
   return idx === -1 ? '' : relativePath.slice(0, idx)
+}
+
+/**
+ * Derive a plain-text summary snippet from canonical Markdown (body only, after
+ * stripping PKW frontmatter). Never depends on WeKnora — the Knowledge Discovery
+ * list stays readable while the remote engine is offline.
+ */
+function markdownSnippet(markdown: string, max = 220): string {
+  const { body } = splitFrontmatter(markdown)
+  let inFence = false
+  const parts: string[] = []
+  for (const raw of body.split('\n')) {
+    const line = raw.trim()
+    if (line === '') continue
+    if (line.startsWith('```') || line.startsWith('~~~')) { inFence = !inFence; continue }
+    if (inFence) continue
+    if (/^(#{1,6})\s/.test(line)) continue          // headings
+    if (/^\|.*\|$/.test(line)) continue             // GFM tables
+    if (/^!\[/.test(line) || /^</.test(line)) continue // images / raw html
+    if (/^\s*[-*+]\s+\[[ xX]\]/.test(line)) continue // task-list rows
+    let text = line
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, '')            // image
+      .replace(/\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g, '$1') // wiki link
+      .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')        // markdown link
+      .replace(/`([^`]+)`/g, '$1')                    // inline code
+      .replace(/\*\*([^*]+)\*\*/g, '$1')              // bold
+      .replace(/__([^_]+)__/g, '$1')
+      .replace(/(^|\s)[*_]([^*_]+)[*_](\s|$)/g, '$1$2$3') // italic
+      .replace(/^\s*(?:[-*+]\s+|\d+[.)]\s+|>\s?)/, '') // bullet / ordered / quote marker
+      .trim()
+    if (text) parts.push(text)
+    if (parts.join(' ').length >= max) break
+  }
+  let snippet = parts.join(' ')
+  if (snippet.length > max) snippet = snippet.slice(0, max).replace(/\s+\S*$/, '') + '…'
+  return snippet
 }
 
 /**
@@ -629,8 +665,11 @@ export class PkwWebService extends Service {
         return { purged: true }
       }
       case 'search': {
-        return this.sync.search(String(args.query), { limit: typeof args.limit === 'number' ? args.limit : 10 })
+        const results = await this.sync.search(String(args.query), { limit: typeof args.limit === 'number' ? args.limit : 10 })
+        return this.enrichRetrievalResults(results)
       }
+      case 'listKnowledge': return this.listKnowledge()
+      case 'relatedKnowledge': return this.relatedKnowledge(String(args.noteId))
       case 'syncEntity': {
         const entityType = String(args.entityType)
         if (entityType === 'note') {
@@ -817,6 +856,120 @@ export class PkwWebService extends Service {
       pending: snap.dirty.has(key) || intent !== undefined,
       error: intent?.lastError,
     }
+  }
+
+  /**
+   * User-facing retrieval projection: keep only the leaf fields the UI needs and
+   * enrich local hits with stable PKW identity (title / path / folder). Internal
+   * WeKnora ids (kbId / knowledgeId / chunkId) never cross the RPC boundary.
+   */
+  private enrichRetrievalResults(results: RetrievalResult[]): unknown[] {
+    const out: unknown[] = []
+    for (const r of results) {
+      const remote = { content: r.remote.content, title: r.remote.title, filename: r.remote.filename, score: r.remote.score }
+      if (r.local === undefined) { out.push({ remote }); continue }
+      const local: Record<string, unknown> = {
+        entityType: r.local.entityType,
+        entityId: r.local.entityId,
+        matchReason: r.local.matchReason,
+        matchedAttachmentId: r.local.matchedAttachmentId,
+        companionNoteId: r.local.companionNoteId,
+      }
+      if (r.local.entityType === 'note') {
+        const n = this.notes.get(NoteId(r.local.entityId))
+        if (n !== undefined) { local.title = n.title; local.relativePath = n.relativePath; local.folder = folderOf(n.relativePath) }
+      } else if (r.local.entityType === 'attachment') {
+        const a = this.attachments.get(AttachmentId(r.local.entityId))
+        if (a !== undefined) local.title = a.filename
+        if (r.local.companionNoteId !== undefined) {
+          const cn = this.notes.get(NoteId(r.local.companionNoteId))
+          if (cn !== undefined) { local.title = cn.title; local.relativePath = cn.relativePath; local.folder = folderOf(cn.relativePath) }
+        }
+      }
+      out.push({ remote, local })
+    }
+    return out
+  }
+
+  /**
+   * Knowledge Discovery list: one discoverable Business Knowledge object per
+   * local Note, with a real summary (attachment-derived when available, else a
+   * body snippet) and user-facing fields only. Fully offline-safe (no WeKnora).
+   */
+  private async listKnowledge(): Promise<unknown[]> {
+    const snap = this.syncSnapshot()
+    const out: unknown[] = []
+    for (const n of this.notes.list()) {
+      const doc = await this.notes.getDocument(n.noteId)
+      let summary: string | undefined
+      for (const ref of doc.attachments) {
+        const derived = this.sync.getDerivedContent(ref.attachmentId)
+        if (derived?.summary !== undefined && derived.summary.trim() !== '') { summary = derived.summary; break }
+      }
+      const mapping = this.sync.getMapping(n.noteId)
+      const intent = snap.intents.get(`note:${String(n.noteId)}`)
+      out.push({
+        noteId: String(n.noteId),
+        title: n.title,
+        relativePath: n.relativePath,
+        folder: folderOf(n.relativePath),
+        tags: n.tags,
+        updatedAt: n.updatedAt,
+        attachmentBacked: n.attachmentBacked === true,
+        attachmentCount: doc.attachments.length,
+        summary: summary ?? markdownSnippet(doc.markdown),
+        indexed: mapping !== undefined && mapping.knowledgeId !== undefined && mapping.syncState === 'synced',
+        pending: snap.dirty.has(`note:${String(n.noteId)}`) || intent !== undefined,
+        error: intent?.lastError,
+      })
+    }
+    return out
+  }
+
+  /**
+   * Related Knowledge (lightweight, reads existing WeKnora Wiki graph relations —
+   * no new recommendation system). Maps graph neighbors back to local Notes by
+   * title. Gracefully degrades to [] when the graph is empty or WeKnora offline.
+   */
+  private async relatedKnowledge(noteId: string): Promise<unknown[]> {
+    const note = this.notes.get(NoteId(noteId))
+    if (note === undefined) return []
+    let graph: { nodes: Array<{ slug: string; title: string }>; edges: Array<{ source: string; target: string }> }
+    try {
+      graph = await this.weknora.getWikiGraph(this.config.kbId, { mode: 'overview', limit: 500 })
+    } catch {
+      return [] // WeKnora offline: related knowledge is optional, never blocks the Note.
+    }
+    const nodes = graph.nodes ?? []
+    const edges = graph.edges ?? []
+    if (nodes.length === 0 || edges.length === 0) return []
+    const byTitle = new Map<string, string>() // normalized title → slug
+    for (const node of nodes) byTitle.set(node.title.trim().toLowerCase(), node.slug)
+    const norm = (s: string) => s.trim().toLowerCase()
+    const selfSlug = byTitle.get(norm(note.title)) ?? nodes.find(node => node.title === note.title)?.slug
+    if (selfSlug === undefined) return []
+    const neighborTitles = new Set<string>()
+    for (const e of edges) {
+      if (e.source === selfSlug) neighborTitles.add(e.target)
+      else if (e.target === selfSlug) neighborTitles.add(e.source)
+    }
+    // Resolve neighbor slugs → wiki titles → local notes (title match, stable NoteId).
+    const slugTitle = new Map<string, string>()
+    for (const node of nodes) slugTitle.set(node.slug, node.title)
+    const byLocalTitle = new Map<string, { noteId: string; title: string }>()
+    for (const n of this.notes.list()) byLocalTitle.set(n.title.trim().toLowerCase(), { noteId: String(n.noteId), title: n.title })
+    const out: Array<{ noteId: string; title: string }> = []
+    const seen = new Set<string>()
+    for (const slug of neighborTitles) {
+      const title = slugTitle.get(slug)
+      if (title === undefined) continue
+      const local = byLocalTitle.get(norm(title))
+      if (local === undefined || local.noteId === noteId || seen.has(local.noteId)) continue
+      seen.add(local.noteId)
+      out.push(local)
+      if (out.length >= 5) break
+    }
+    return out
   }
 
   private async summary(): Promise<unknown> {
