@@ -323,4 +323,25 @@ describe('PKW web UI (served page)', () => {
     expect(page).toContain('.mquad')
     expect(page).toContain('.mquad-cell')
   })
+
+  it('orders bottom nav Tasks-first + minimal mobile header + full board selector', () => {
+    const js = script()
+    const page = renderPage()
+    // Bottom nav: tasks first, then notes/knowledge/sources/more.
+    const bn = page.slice(page.indexOf('id="bottomNav"'))
+    expect(bn.indexOf('data-view="tasks"')).toBeLessThan(bn.indexOf('data-view="notes"'))
+    expect(bn.indexOf('data-view="notes"')).toBeLessThan(bn.indexOf('data-view="knowledge"'))
+    expect(bn.indexOf('data-view="knowledge"')).toBeLessThan(bn.indexOf('data-view="attachments"'))
+    expect(bn.indexOf('data-view="attachments"')).toBeLessThan(bn.indexOf('data-action="mobile-more"'))
+    // Mobile header: page title + more btn; desktop badges hidden via CSS.
+    expect(page).toContain('id="pageTitle"')
+    expect(page).toContain('id="mobileMoreBtn"')
+    expect(page).toContain('#wsBadge,#integBadge,#localBadge,#langBtn,#themeBtn,#inspectorToggle{display:none}')
+    // Tasks board selector: full matrix list via sheet, not clipped chips.
+    expect(js).toContain('mobile-board-sheet')
+    expect(js).toContain('mboard-select')
+    // PDF preview: preview route, not SPA fallback.
+    expect(js).toContain("'/preview'")
+    expect(js).toContain("a[href*=\"attachments/\"]")
+  })
 })

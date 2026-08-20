@@ -268,6 +268,27 @@ describe('PKW Web Host Bridge (real Core integration)', () => {
     expect(captured.body).toEqual(png)
   })
 
+  it('serves /pkw/attachment/<id>/preview with inline PDF (Preview contract)', async () => {
+    const { web, routes } = await boot()
+    const pdf = Buffer.from('%PDF-1.4 test')
+    const up = await web.call('uploadAttachment', { filename: 'a.pdf', mimeType: 'application/pdf', contentBase64: pdf.toString('base64') }) as { attachmentId: string }
+    const route = routes.find(r => r.path === '/pkw/attachment')
+    expect(route).toBeDefined()
+    const captured: { status: number; headers: Record<string, string>; body: Buffer } = { status: 0, headers: {}, body: Buffer.alloc(0) }
+    let resolveEnd!: () => void
+    const ended = new Promise<void>(r => { resolveEnd = r })
+    const res = {
+      writeHead: (s: number, h: Record<string, string>) => { captured.status = s; captured.headers = h },
+      end: (b: unknown) => { captured.body = Buffer.from((b as Buffer) ?? Buffer.alloc(0)); resolveEnd() },
+    }
+    route!.handler({ url: '/pkw/attachment/' + up.attachmentId + '/preview', method: 'GET' }, res)
+    await ended
+    expect(captured.status).toBe(200)
+    expect(captured.headers['Content-Type']).toBe('application/pdf')
+    expect(captured.headers['Content-Disposition']).toBe('inline')
+    expect(captured.body).toEqual(pdf)
+  })
+
   it('registers prefix routes with NO trailing slash (WebServer matcher contract)', async () => {
     const { routes } = await boot()
     const prefixes = routes.filter(r => r.kind === 'prefix')

@@ -227,6 +227,7 @@ mark{background:var(--mark-bg);border-radius:2px;padding:0 2px}
 .bn-item .bn-ic{display:flex;align-items:center;justify-content:center;width:24px;height:24px}
 .bn-item.active{color:var(--accent)}
 .bn-item.active .bn-ic,.bn-item:hover .bn-ic{color:var(--accent)}
+#mobileMoreBtn{display:none}
 /* Mobile / small tablet: single-column workspace + bottom primary nav. */
 @media(max-width:768px){
   #app{grid-template-columns:1fr;grid-template-rows:52px 1fr 58px;height:100dvh}
@@ -234,6 +235,9 @@ mark{background:var(--mark-bg);border-radius:2px;padding:0 2px}
   #app > aside.right{display:none}
   main{padding:14px 14px calc(58px + env(safe-area-inset-bottom) + 16px)}
   #bottomNav{display:flex;position:fixed;left:0;right:0;bottom:0;height:calc(58px + env(safe-area-inset-bottom));padding-bottom:env(safe-area-inset-bottom);background:var(--panel);border-top:1px solid var(--border);z-index:50}
+  #wsBadge,#integBadge,#localBadge,#langBtn,#themeBtn,#inspectorToggle{display:none}
+  #mobileMoreBtn{display:inline-flex}
+  header h1{flex:1;font-size:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .launcher{grid-template-columns:1fr 1fr 1fr}
   /* no horizontal overflow: containers clip, long tokens break instead of stretch */
   body,main{overflow-x:hidden}
@@ -263,6 +267,13 @@ mark{background:var(--mark-bg);border-radius:2px;padding:0 2px}
   .hit .t{font-size:14px;word-break:break-word}
   /* Editor: toolbar scrolls instead of stretching page */
   #editorPane,.editor-head{overflow-x:auto}
+  /* Knowledge: clamp long summaries */
+  .hit .snippet{display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
+  .hit .t{font-size:14px}
+  /* Sources: drop desktop-only grid/sort/all-select on mobile (default card view) */
+  #attSelectAll{display:none}
+  .toolbar [data-action="att-mode"],.toolbar [data-action="att-sort"]{display:none}
+  .toolbar [data-action="att-type"]{flex:0 0 auto;white-space:nowrap}
   .editor-head .title{word-break:break-word;white-space:normal}
   .vditor-toolbar{overflow-x:auto;flex-wrap:nowrap}
 }
@@ -302,6 +313,7 @@ mark{background:var(--mark-bg);border-radius:2px;padding:0 2px}
 .mboard{display:flex;gap:6px;overflow-x:auto;padding-bottom:8px;margin-bottom:8px}
 .mboard .btn.small{white-space:nowrap;flex:0 0 auto}
 .mquad{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}
+.mboard-select{width:100%;text-align:left;padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:var(--panel);color:var(--ink);font-size:14px;font-weight:600;margin-bottom:10px;cursor:pointer}
 .mquad-cell{border:1px solid var(--border);border-radius:12px;padding:12px 10px;background:var(--panel);cursor:pointer}
 .mquad-cell.active{border-color:var(--accent);background:var(--accent-soft)}
 .mq-n{font-size:15px;font-weight:700;color:var(--accent)}
@@ -359,7 +371,7 @@ mark{background:var(--mark-bg);border-radius:2px;padding:0 2px}
 <body>
 <div id="app">
   <header>
-    <h1>PKW</h1>
+    <h1 id="pageTitle">PKW</h1>
     <span class="badge" id="wsBadge">…</span>
     <span class="spacer"></span>
     <span class="badge" id="integBadge">WeKnora: …</span>
@@ -367,6 +379,7 @@ mark{background:var(--mark-bg);border-radius:2px;padding:0 2px}
     <button id="langBtn" class="langbtn" title="Switch language / 切换语言">EN</button>
     <button id="themeBtn" class="langbtn" title="Appearance / 外观">◐</button>
     <button id="inspectorToggle" class="langbtn" title="Toggle inspector / 收起侧栏">⟩</button>
+    <button id="mobileMoreBtn" class="langbtn" title="More / 更多">⋯</button>
   </header>
   <aside>
     <div class="nav">
@@ -387,10 +400,10 @@ mark{background:var(--mark-bg);border-radius:2px;padding:0 2px}
   <aside class="right" id="detail"></aside>
 </div>
 <nav id="bottomNav" aria-label="Workspace">
+  <button data-view="tasks" class="bn-item"><span class="bn-ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1.4"/><circle cx="4.5" cy="12" r="1.4"/><circle cx="4.5" cy="18" r="1.4"/></svg></span><span class="bn-label">待办</span></button>
   <button data-view="notes" class="bn-item"><span class="bn-ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h8M8 17h5"/></svg></span><span class="bn-label">笔记</span></button>
   <button data-view="knowledge" class="bn-item"><span class="bn-ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg></span><span class="bn-label">知识</span></button>
   <button data-view="attachments" class="bn-item"><span class="bn-ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M13 2v7h7"/></svg></span><span class="bn-label">来源</span></button>
-  <button data-view="tasks" class="bn-item"><span class="bn-ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1.4"/><circle cx="4.5" cy="12" r="1.4"/><circle cx="4.5" cy="18" r="1.4"/></svg></span><span class="bn-label">待办</span></button>
   <button data-action="mobile-more" class="bn-item"><span class="bn-ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg></span><span class="bn-label">更多</span></button>
 </nav>
 <div id="toast"></div>
@@ -682,6 +695,8 @@ function render(){
   applyLang()
   document.querySelectorAll('.nav button').forEach(b => b.classList.toggle('active', b.dataset.view === state.view))
   document.querySelectorAll('#bottomNav .bn-item').forEach(b => b.classList.toggle('active', b.dataset.view === state.view))
+  const pageTitle = $('#pageTitle')
+  if (pageTitle) pageTitle.textContent = isMobile() ? (state.view === 'attachments' ? t('sources') : t(state.view)) : 'PKW'
   refreshHeader()
   if (state.view === 'overview') renderOverview()
   else if (state.view === 'notes') { renderTreeToolbar(); renderTree(); renderDetail(); if (state.selectedNoteId === null) { if (state.selectedFolder !== null) renderFolderMain(state.selectedFolder); else renderNotesExplorer() } ensureVditorLoaded().catch(() => {}) }
@@ -1075,6 +1090,20 @@ function rewriteLiveAttachmentImgs(root){
       }
     }
   }
+  // Managed FILE links: rewrite attachments/<id>/... hrefs to the preview route so
+  // clicking a PDF/source in Live opens the preview, never the SPA fallback.
+  const links = root.querySelectorAll('a[href*="attachments/"]')
+  for (let i = 0; i < links.length; i++) {
+    const a = links[i]
+    const href = a.getAttribute('href') || ''
+    if (href.indexOf('/pkw/attachment/') === 0) continue
+    const resolved = managedAttachmentUrl(href)
+    if (resolved) {
+      a.setAttribute('href', resolved + '/preview')
+      a.setAttribute('target', '_blank')
+      a.setAttribute('rel', 'noopener')
+    }
+  }
 }
 function setupLiveAttachmentRewrite(v){
   if (!v || !v.vditor || !v.vditor.ir || !v.vditor.ir.element) return
@@ -1084,7 +1113,7 @@ function setupLiveAttachmentRewrite(v){
   rewriteLiveAttachmentImgs(el)
   if (setupLiveAttachmentRewrite._obs) setupLiveAttachmentRewrite._obs.disconnect()
   setupLiveAttachmentRewrite._obs = new MutationObserver(() => rewriteLiveAttachmentImgs(el))
-  setupLiveAttachmentRewrite._obs.observe(el, { childList: true, subtree: true, attributes: true, attributeFilter: ['src', 'data-src'] })
+  setupLiveAttachmentRewrite._obs.observe(el, { childList: true, subtree: true, attributes: true, attributeFilter: ['src', 'data-src', 'href'] })
 }
 async function initVditor(){
   const el = $('#vditor')
@@ -1760,7 +1789,7 @@ async function openCompanionForAttachment(id){
   if (c && c.noteId) { setView('notes'); openNote(c.noteId) }
   else toast(t('attNoCompanion'), 'warn')
 }
-async function previewAttachment(id){ window.open('/pkw/attachment/' + id, '_blank') }
+async function previewAttachment(id){ window.open('/pkw/attachment/' + id + '/preview', '_blank') }
 async function copyAttachmentRef(id){
   const ref = 'attachments/' + id
   try { await navigator.clipboard.writeText(ref); toast(t('attCopied'), 'ok') }
@@ -1957,11 +1986,12 @@ function renderMobileTasks(){
   for (const x of all) if (x.status === 'open' && inBoard(x)) qCounts[quadrantOf(x)]++
   const selTasks = all.filter(x => x.status === 'open' && inBoard(x) && quadrantOf(x) === q)
   const boardChips = ['inbox', ...matrices.map(m => m.matrixId)].map(b => '<button class="btn small' + (board === b ? ' primary' : '') + '" data-action="mobile-board" data-board="' + esc(b) + '">' + esc(b === 'inbox' ? t('taskInbox') : (matrixName(matrices, b) || b)) + '</button>').join('')
+  const boardLabel = board === 'inbox' ? t('taskInbox') : (matrixName(matrices, board) || board)
   $('#main').innerHTML = '<h2>' + esc(t('tasks')) + '</h2>' +
-    '<div class="toolbar"><button class="btn primary" data-action="new-task-mobile">+ ' + esc(t('taskQuickAdd')) + '</button><button class="btn" data-action="new-matrix">+ ' + esc(t('newMatrix')) + '</button></div>' +
-    '<div class="mboard">' + boardChips + '</div>' +
+    '<div class="toolbar"><button class="btn primary" data-action="new-task-mobile">+ ' + esc(t('taskQuickAdd')) + '</button></div>' +
+    '<button class="mboard-select" data-action="mobile-board-sheet">' + esc(t('matrices')) + '：' + esc(boardLabel) + ' ▼</button>' +
     '<div class="mquad">' + [1, 2, 3, 4].map(qn => '<div class="mquad-cell' + (qn === q ? ' active' : '') + '" data-action="mobile-q" data-q="' + qn + '"><div class="mq-n">Q' + qn + '</div><div class="mq-l">' + esc(t('q' + qn)) + '</div><div class="mq-c">' + qCounts[qn] + '</div></div>').join('') + '</div>' +
-    '<h3 class="mq-heading">' + esc(t('q' + q)) + '</h3>' +
+    '<h3 class="mq-heading">Q' + q + ' · ' + esc(t('q' + q)) + '</h3>' +
     (selTasks.length ? selTasks.map(x => mobileTaskCard(x, matrices, board !== 'inbox')).join('') : '<div class="empty">' + esc(t('taskNoTasks')) + '</div>')
 }
 function renderTaskList(matrices, all, filter){
@@ -3130,7 +3160,14 @@ document.addEventListener('click', (e) => {
   else if (act === 'new-task-matrix') quickTaskDialog(id || null, null)
   else if (act === 'new-task-mobile') quickTaskDialog(state.mobileTaskBoard === 'inbox' ? null : state.mobileTaskBoard, null, {}, state.mobileTaskQ)
   else if (act === 'mobile-q') { state.mobileTaskQ = Number(el.dataset.q) || 1; renderMobileTasks() }
-  else if (act === 'mobile-board') { state.mobileTaskBoard = el.dataset.board || 'inbox'; renderMobileTasks() }
+  else if (act === 'mobile-board') { state.mobileTaskBoard = el.dataset.id || el.dataset.board || 'inbox'; renderMobileTasks() }
+  else if (act === 'mobile-board-sheet') {
+    const mats = state.matricesCache || []
+    const items = [{ label: t('taskInbox'), action: 'mobile-board', id: 'inbox' }]
+    for (const m of mats) items.push({ label: m.name, action: 'mobile-board', id: m.matrixId })
+    items.push({ label: '+ ' + t('newMatrix'), action: 'new-matrix' })
+    mobileActionSheet(t('matrices'), items)
+  }
   else if (act === 'new-matrix') { const name = prompt(t('createFolderPrompt'), ''); if (name && name.trim()) api('createMatrix', { name: name.trim() }).then(() => refreshTasks()) }
   else if (act === 'task-view') setTaskView(el.dataset.view)
   else if (act === 'note-to-task') {
@@ -3183,6 +3220,7 @@ document.addEventListener('click', (e) => {
   }
   else if (act === 'go-overview') { dismissContextMenu(); setView('overview') }
   else if (act === 'go-trash') { dismissContextMenu(); setView('trash') }
+  else if (act === 'go-lang') { lang = lang === 'zh' ? 'en' : 'zh'; localStorage.setItem('pkw-lang', lang); render() }
   else if (act === 'mobile-note-menu') {
     const nid = id
     mobileActionSheet(t('renameMove'), [
@@ -3615,6 +3653,14 @@ document.addEventListener('keydown', (e) => {
 $('#langBtn').addEventListener('click', () => { lang = lang === 'zh' ? 'en' : 'zh'; localStorage.setItem('pkw-lang', lang); render() })
 $('#themeBtn').addEventListener('click', (e) => { e.stopPropagation(); const r = e.target.getBoundingClientRect(); showAppearanceMenu(r.left, r.bottom + 4) })
 $('#inspectorToggle').addEventListener('click', () => toggleInspector())
+$('#mobileMoreBtn').addEventListener('click', () => { mobileActionSheet(t('mobileMore'), [
+  { label: t('overview'), action: 'go-overview' },
+  { label: t('trash'), action: 'go-trash' },
+  { label: lang === 'zh' ? 'English' : '中文', action: 'go-lang' },
+  { label: t('themeSystem'), action: 'theme-system' },
+  { label: t('themeLight'), action: 'theme-light' },
+  { label: t('themeDark'), action: 'theme-dark' },
+]) })
 window.addEventListener('beforeunload', (e) => { if (state.editor.dirty && state.selectedNoteId !== null) { e.preventDefault(); e.returnValue = '' } })
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { refreshHeader(); if (state.view === 'notes') { renderTree(); if (state.selectedNoteId) kickSyncPoll({ pending: true }) } } })
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (currentThemeMode() === 'system') applyTheme('system') })

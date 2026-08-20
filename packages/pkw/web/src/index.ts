@@ -326,7 +326,11 @@ export class PkwWebService extends Service {
       // The byte route identity is the stable AttachmentId ONLY. The trailing
       // `<filename>` segment (if any) is never used for lookup — filename is
       // display/reference metadata, not route identity (CJK/spaces/rename safe).
-      const id = decodeURIComponent(url.pathname.slice('/pkw/attachment/'.length)).replace(/^\/+|\/+$/g, '')
+      let raw = decodeURIComponent(url.pathname.slice('/pkw/attachment/'.length)).replace(/^\/+|\/+$/g, '')
+      // Preview contract: `/pkw/attachment/<id>/preview` → force inline (PDF/image/txt).
+      const isPreview = raw.endsWith('/preview')
+      if (isPreview) raw = raw.slice(0, -'/preview'.length).replace(/\/+$/g, '')
+      const id = raw
       if (!/^att_[0-9a-f]{12}$/.test(id)) {
         res.writeHead(404, { 'Content-Type': 'text/plain' })
         res.end('not found')
@@ -341,7 +345,9 @@ export class PkwWebService extends Service {
       const bytes = await this.attachments.open(AttachmentId(id))
       const mime = rec.mimeType || 'application/octet-stream'
       const safeName = (rec.filename ?? 'attachment').replace(/["\r\n\\]/g, '_')
-      const disposition = mime.startsWith('image/') || mime === 'application/pdf' ? 'inline' : `attachment; filename="${safeName}"`
+      const disposition = isPreview || mime.startsWith('image/') || mime === 'application/pdf'
+        ? 'inline'
+        : `attachment; filename="${safeName}"`
       res.writeHead(200, {
         'Content-Type': mime,
         'Content-Disposition': disposition,
@@ -1125,7 +1131,7 @@ export class PkwWebService extends Service {
       const sub = parts.filter(Boolean).join(' · ')
       const block = '<span class="src-block"><span class="src-ic">📄</span><span class="src-meta"><span class="src-name">' + esc(rec.filename) + '</span>' +
         (sub !== '' ? '<span class="src-sub">' + esc(sub) + '</span>' : '') +
-        '</span><a class="src-act" href="' + href + '" target="_blank" rel="noopener">预览</a><a class="src-act" href="' + href + '" download>下载</a></span>'
+        '</span><a class="src-act" href="' + href + '/preview" target="_blank" rel="noopener">预览</a><a class="src-act" href="' + href + '" download>下载</a></span>'
       out = out.replace(re, block)
     }
     return out
