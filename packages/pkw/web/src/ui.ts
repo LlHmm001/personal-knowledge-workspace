@@ -854,6 +854,7 @@ function renderMarkdown(body){
     const h = /^(#{1,6})\\s+(.*)$/.exec(line)
     if (h) { const lv = h[1].length; html.push('<h' + lv + '>' + renderInline(h[2]) + '</h' + lv + '>'); i++; continue }
     if (/^\\s*([-*_])\\s*(\\1\\s*){2,}$/.test(line)) { html.push('<hr />'); i++; continue }
+    if (/^\\s*~{3,}\\s*$/.test(line)) { html.push('<hr />'); i++; continue }
     if (/^>\\s?/.test(line)) {
       const q = []; let callout = null
       while (i < lines.length && /^>\\s?/.test(lines[i])) {

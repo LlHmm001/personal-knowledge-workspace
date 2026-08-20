@@ -67,8 +67,11 @@ async function loadLute(): Promise<LuteGlobal> {
  */
 export async function renderMarkdownToHtml(markdown: string): Promise<string> {
   const Lute = await loadLute()
-  // Display projection: hide machine-managed summary markers (canonical untouched).
-  const text = stripManagedSummaryMarkers(markdown)
+  // Display projection: hide machine-managed summary markers (canonical untouched),
+  // and normalize bare tilde-runs (~{3,}) to a horizontal rule. A bare 4-tilde line
+  // (e.g. after frontmatter) is an unclosed CommonMark fence that would otherwise
+  // swallow the whole body into a raw <pre><code> block in Reading.
+  const text = stripManagedSummaryMarkers(markdown).replace(/^[ \t]*~{3,}[ \t]*$/gm, '---')
   const { text: protectedText, tokens } = protectWikiLinks(text)
   const lute = Lute.New()
   lute.SetCallout(true)

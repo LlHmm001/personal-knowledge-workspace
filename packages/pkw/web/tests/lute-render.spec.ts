@@ -115,4 +115,14 @@ describe('lute markdown renderer (Host Reading)', () => {
     expect(html).not.toContain('[[Wiki')
     expect(html).not.toContain('attachments/abc/')
   })
+
+  it('normalizes a bare tilde-run (unclosed fence) to a horizontal rule, not raw code', async () => {
+    const md = '---\nid: note_x\n---\n~~~~\n\n# Title\n\n| A |\n| - |\n| 1 |\n\n```ts\nconst x = 1\n```\n'
+    const html = await renderMarkdownToHtml(md)
+    expect(html).toContain('<h1>Title</h1>')
+    expect(html).toContain('<table>')
+    expect(html).toContain('<code class="language-ts">')
+    // The body must NOT be swallowed into a single raw <pre><code> block.
+    expect(html).not.toContain('# Title')
+  })
 })
