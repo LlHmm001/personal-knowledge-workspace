@@ -320,8 +320,9 @@ describe('PKW web UI (served page)', () => {
     expect(js).toContain('new-task-mobile')
     expect(js).toContain('mobileTaskBoard')
     expect(js).toContain('mobileTaskQ')
-    expect(page).toContain('.mquad')
-    expect(page).toContain('.mquad-cell')
+    expect(js).toContain('mobile-q-toggle')
+    expect(page).toContain('.macc-head')
+    expect(page).toContain('.macc-body')
   })
 
   it('orders bottom nav Tasks-first + minimal mobile header + full board selector', () => {
@@ -368,7 +369,6 @@ describe('PKW web UI (served page)', () => {
     const page = renderPage()
     expect(page).toContain('main{padding:16px 16px calc(58px + env(safe-area-inset-bottom) + 16px)')
     expect(page).toContain('main > h2{display:none}')
-    expect(page).toContain('.mquad-cell{min-width:0')
     expect(page).toContain('.hit{width:100%;max-width:100%;box-sizing:border-box;min-width:0}')
     expect(page).toContain('.mnote,.msrc,.mtask{display:flex;align-items:flex-start;gap:10px;padding:12px 10px;border:1px solid var(--border);border-radius:12px;margin-bottom:8px;background:var(--panel);width:100%;max-width:100%;min-width:0;box-sizing:border-box}')
   })
@@ -382,6 +382,17 @@ describe('PKW web UI (served page)', () => {
     expect(page).toContain('#app.no-inspector{grid-template-columns:1fr}')
     // Targeted surface containers normalize to full width (no broad main > * rule).
     expect(page).toContain('main{width:100%;max-width:none;min-width:0;box-sizing:border-box}')
-    expect(page).toContain('#kbBody,#kbList,#attList,.mquad,.mboard,.mboard-select{width:100%;max-width:none;min-width:0;box-sizing:border-box}')
+    expect(page).toContain('#kbBody,#kbList,#attList,.macc,.mboard,.mboard-select{width:100%;max-width:none;min-width:0;box-sizing:border-box}')
+  })
+
+  it('mobile Tasks accordion: Q1-Q4 groups + completed, board selector reordered', () => {
+    const js = script()
+    const page = renderPage()
+    expect(js).toContain('mobile-q-toggle')
+    expect(js).toContain('mobileCompletedTaskRow')
+    expect(js).toContain('mobileOpenSections')
+    expect(js).toContain('macc')
+    expect(page).toContain('.macc-head')
+    expect(page).toContain('.macc-body')
   })
 })

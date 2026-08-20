@@ -276,12 +276,6 @@ mark{background:var(--mark-bg);border-radius:2px;padding:0 2px}
   .editor-head .title{word-break:break-word;white-space:normal}
   #editorPane,.editor-head{overflow-x:auto}
   .vditor-toolbar{overflow-x:auto;flex-wrap:nowrap}
-  /* Tasks 2×2 quadrant overview: shrink to fit 390px */
-  .mquad{grid-template-columns:1fr 1fr;gap:6px}
-  .mquad-cell{min-width:0;padding:10px 8px;box-sizing:border-box}
-  .mq-n{font-size:14px}
-  .mq-l{font-size:11px}
-  .mq-c{font-size:17px}
 }
 @media(max-width:400px){
   header h1{font-size:13px}
@@ -292,7 +286,7 @@ mark{background:var(--mark-bg);border-radius:2px;padding:0 2px}
 /* Mobile page-content width normalization (targeted surface containers only). */
 @media(max-width:600px){
   main{width:100%;max-width:none;min-width:0;box-sizing:border-box}
-  #kbBody,#kbList,#attList,.mquad,.mboard,.mboard-select{width:100%;max-width:none;min-width:0;box-sizing:border-box}
+  #kbBody,#kbList,#attList,.macc,.mboard,.mboard-select{width:100%;max-width:none;min-width:0;box-sizing:border-box}
 }
 /* Mobile surface cards + bottom sheet (rendered only on mobile) */
 .hit-clickable{cursor:pointer}.hit-clickable:hover{border-color:var(--accent)}
@@ -323,14 +317,15 @@ mark{background:var(--mark-bg);border-radius:2px;padding:0 2px}
 /* Mobile Tasks: board + 2×2 quadrant overview */
 .mboard{display:flex;gap:6px;overflow-x:auto;padding-bottom:8px;margin-bottom:8px}
 .mboard .btn.small{white-space:nowrap;flex:0 0 auto}
-.mquad{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}
 .mboard-select{width:100%;text-align:left;padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:var(--panel);color:var(--ink);font-size:14px;font-weight:600;margin-bottom:10px;cursor:pointer}
-.mquad-cell{border:1px solid var(--border);border-radius:12px;padding:12px 10px;background:var(--panel);cursor:pointer}
-.mquad-cell.active{border-color:var(--accent);background:var(--accent-soft)}
-.mq-n{font-size:15px;font-weight:700;color:var(--accent)}
-.mq-l{font-size:12px;color:var(--muted);margin-top:2px}
-.mq-c{font-size:20px;font-weight:700;margin-top:4px}
-.mq-heading{font-size:14px;margin:8px 0}
+/* Mobile Tasks accordion (Q1-Q4 + completed) */
+.macc{border:1px solid var(--border);border-radius:10px;margin-bottom:8px;background:var(--panel);overflow:hidden}
+.macc-head{display:flex;align-items:center;gap:8px;width:100%;text-align:left;padding:12px 12px;border:0;background:none;cursor:pointer;font-size:14px;color:var(--ink)}
+.macc-arrow{flex:0 0 auto;color:var(--muted);font-size:12px;width:14px}
+.macc-label{flex:1 1 auto;font-weight:600}
+.macc-count{flex:0 0 auto;font-size:12px;color:var(--muted);background:var(--bg-hover);padding:2px 9px;border-radius:999px}
+.macc-body{padding:4px 10px 10px;border-top:1px solid var(--border)}
+.mtask.done{opacity:.75}
 /* Vditor Live (IR) dark adaptation: the editor surface follows the tokens. */
 [data-theme="dark"] .vditor,[data-theme="dark"] .vditor-ir,[data-theme="dark"] .vditor-reset{background:var(--bg-surface);color:var(--text-primary)}
 [data-theme="dark"] .vditor-toolbar{background:var(--bg-sidebar);border-bottom-color:var(--border)}
@@ -584,6 +579,7 @@ const state = {
   taskView: localStorage.getItem('pkw-task-view') || 'all',
   mobileTaskBoard: 'inbox',
   mobileTaskQ: 1,
+  mobileOpenSections: new Set(),
   highlightText: '',
   tasksCache: [],
   matricesCache: [],
@@ -2068,17 +2064,38 @@ function renderMobileTasks(){
   const board = state.mobileTaskBoard
   const q = state.mobileTaskQ
   const inBoard = x => board === 'inbox' ? (x.matrixId === null || x.matrixId === undefined) : x.matrixId === board
+  const openInBoard = all.filter(x => x.status === 'open' && inBoard(x))
+  const doneInBoard = all.filter(x => x.status === 'completed' && inBoard(x))
   const qCounts = { 1: 0, 2: 0, 3: 0, 4: 0 }
-  for (const x of all) if (x.status === 'open' && inBoard(x)) qCounts[quadrantOf(x)]++
-  const selTasks = all.filter(x => x.status === 'open' && inBoard(x) && quadrantOf(x) === q)
-  const boardChips = ['inbox', ...matrices.map(m => m.matrixId)].map(b => '<button class="btn small' + (board === b ? ' primary' : '') + '" data-action="mobile-board" data-board="' + esc(b) + '">' + esc(b === 'inbox' ? t('taskInbox') : (matrixName(matrices, b) || b)) + '</button>').join('')
+  for (const x of openInBoard) qCounts[quadrantOf(x)]++
+  // Default-expand the current Q when nothing is open yet (or when switching board).
+  if (state.mobileOpenSections.size === 0) state.mobileOpenSections.add(String(q))
   const boardLabel = board === 'inbox' ? t('taskInbox') : (matrixName(matrices, board) || board)
+  const accordion = (key, label, count, bodyHtml) => {
+    const open = state.mobileOpenSections.has(key)
+    return '<div class="macc"><button class="macc-head" data-action="mobile-q-toggle" data-q="' + key + '">' +
+      '<span class="macc-arrow">' + (open ? '▼' : '▶') + '</span><span class="macc-label">' + esc(label) + '</span><span class="macc-count">' + count + '</span>' +
+      '</button>' + (open ? '<div class="macc-body">' + bodyHtml + '</div>' : '') + '</div>'
+  }
+  const qTasksHtml = qn => {
+    const tasks = openInBoard.filter(x => quadrantOf(x) === qn)
+    return tasks.length ? tasks.map(x => mobileTaskCard(x, matrices, board !== 'inbox')).join('') : '<div class="empty small">' + esc(t('taskNoTasks')) + '</div>'
+  }
+  const doneHtml = doneInBoard.length
+    ? doneInBoard.map(x => mobileCompletedTaskRow(x)).join('')
+    : '<div class="empty small">' + esc(t('taskNoTasks')) + '</div>'
   $('#main').innerHTML = '<h2>' + esc(t('tasks')) + '</h2>' +
     '<div class="toolbar"><button class="btn primary" data-action="new-task-mobile">+ ' + esc(t('taskQuickAdd')) + '</button></div>' +
     '<button class="mboard-select" data-action="mobile-board-sheet">' + esc(t('matrices')) + '：' + esc(boardLabel) + ' ▼</button>' +
-    '<div class="mquad">' + [1, 2, 3, 4].map(qn => '<div class="mquad-cell' + (qn === q ? ' active' : '') + '" data-action="mobile-q" data-q="' + qn + '"><div class="mq-n">Q' + qn + '</div><div class="mq-l">' + esc(t('q' + qn)) + '</div><div class="mq-c">' + qCounts[qn] + '</div></div>').join('') + '</div>' +
-    '<h3 class="mq-heading">Q' + q + ' · ' + esc(t('q' + q)) + '</h3>' +
-    (selTasks.length ? selTasks.map(x => mobileTaskCard(x, matrices, board !== 'inbox')).join('') : '<div class="empty">' + esc(t('taskNoTasks')) + '</div>')
+    [1, 2, 3, 4].map(qn => accordion(String(qn), 'Q' + qn + ' · ' + t('q' + qn), qCounts[qn], qTasksHtml(qn))).join('') +
+    accordion('done', t('taskCompleted'), doneInBoard.length, doneHtml)
+}
+function mobileCompletedTaskRow(x){
+  return '<div class="mtask done" data-action="open-task-detail" data-id="' + esc(x.taskId) + '">' +
+    '<span class="mtask-check">✓</span>' +
+    '<div class="mtask-main"><div class="mtask-title">' + esc(x.title) + '</div>' +
+    (x.completedAt ? '<div class="mtask-due muted">' + esc(fmtStamp(x.completedAt)) + '</div>' : '') + '</div>' +
+    '</div>'
 }
 function renderTaskList(matrices, all, filter){
   const list = filterTaskList(all, filter)
@@ -3252,11 +3269,19 @@ document.addEventListener('click', (e) => {
   else if (act === 'new-task-matrix') quickTaskDialog(id || null, null)
   else if (act === 'new-task-mobile') quickTaskDialog(state.mobileTaskBoard === 'inbox' ? null : state.mobileTaskBoard, null, {}, state.mobileTaskQ)
   else if (act === 'mobile-q') { state.mobileTaskQ = Number(el.dataset.q) || 1; renderMobileTasks() }
+  else if (act === 'mobile-q-toggle') {
+    const key = el.dataset.q || '1'
+    if (state.mobileOpenSections.has(key)) state.mobileOpenSections.delete(key)
+    else state.mobileOpenSections.add(key)
+    if (key !== 'done') state.mobileTaskQ = Number(key) || 1
+    renderMobileTasks()
+  }
   else if (act === 'mobile-board') { state.mobileTaskBoard = el.dataset.id || el.dataset.board || 'inbox'; renderMobileTasks() }
   else if (act === 'mobile-board-sheet') {
     const mats = state.matricesCache || []
-    const items = [{ label: t('taskInbox'), action: 'mobile-board', id: 'inbox' }]
+    const items = []
     for (const m of mats) items.push({ label: m.name, action: 'mobile-board', id: m.matrixId })
+    items.push({ label: t('taskInbox'), action: 'mobile-board', id: 'inbox' })
     items.push({ label: '+ ' + t('newMatrix'), action: 'new-matrix' })
     mobileActionSheet(t('matrices'), items)
   }
