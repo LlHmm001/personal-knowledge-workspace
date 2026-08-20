@@ -125,4 +125,19 @@ describe('lute markdown renderer (Host Reading)', () => {
     // The body must NOT be swallowed into a single raw <pre><code> block.
     expect(html).not.toContain('# Title')
   })
+
+  it('keeps a VALID bare tilde fence as a code block (never an <hr>)', async () => {
+    const md = '~~~\nabc\n~~~\n'
+    const html = await renderMarkdownToHtml(md)
+    expect(html).toContain('<code')
+    expect(html).toContain('abc')
+    expect(html).not.toContain('<hr')
+  })
+
+  it('keeps a VALID tilde fence with info string (~~~~ts … ~~~~) as a code block', async () => {
+    const md = '~~~~ts\nconst x = 1\n~~~~\n'
+    const html = await renderMarkdownToHtml(md)
+    expect(html).toContain('const x = 1')
+    expect(html).not.toContain('<hr')
+  })
 })

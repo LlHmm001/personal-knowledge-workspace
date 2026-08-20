@@ -14,7 +14,7 @@
 import { readFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { createContext, runInContext } from 'node:vm'
-import { protectWikiLinks, restoreWikiLinks, rewriteAttachmentUrls, stripManagedSummaryMarkers } from '@deepseek-ai/dsh-pkw-domain'
+import { protectWikiLinks, restoreWikiLinks, rewriteAttachmentUrls, stripManagedSummaryMarkers, neutralizeUnmatchedTildeFences } from '@deepseek-ai/dsh-pkw-domain'
 
 interface LuteGlobal {
   New: () => LuteEngine
@@ -68,10 +68,9 @@ async function loadLute(): Promise<LuteGlobal> {
 export async function renderMarkdownToHtml(markdown: string): Promise<string> {
   const Lute = await loadLute()
   // Display projection: hide machine-managed summary markers (canonical untouched),
-  // and normalize bare tilde-runs (~{3,}) to a horizontal rule. A bare 4-tilde line
-  // (e.g. after frontmatter) is an unclosed CommonMark fence that would otherwise
-  // swallow the whole body into a raw <pre><code> block in Reading.
-  const text = stripManagedSummaryMarkers(markdown).replace(/^[ \t]*~{3,}[ \t]*$/gm, '---')
+  // and neutralize only UNMATCHED tilde fences (a bare ~{3,} with no closer) so
+  // they cannot swallow the body; valid tilde fences keep their semantics.
+  const text = neutralizeUnmatchedTildeFences(stripManagedSummaryMarkers(markdown))
   const { text: protectedText, tokens } = protectWikiLinks(text)
   const lute = Lute.New()
   lute.SetCallout(true)

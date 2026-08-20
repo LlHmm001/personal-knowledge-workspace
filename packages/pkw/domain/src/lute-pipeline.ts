@@ -72,6 +72,41 @@ export function restoreWikiLinks(html: string, tokens: WikiLinkToken[]): string 
 }
 
 /**
+ * Fence-aware tilde-fence normalization (display projection only). A valid
+ * tilde fenced code block (`~~~ … ~~~` or `~~~~ts … ~~~~`) must keep its
+ * Markdown semantics. Only an UNMATCHED tilde opener — a bare `~{3,}` line with
+ * no later closing fence of equal-or-greater length — is neutralized to a
+ * horizontal rule so it cannot swallow the rest of the document into one raw
+ * code block. Canonical Markdown is never mutated (Source mode keeps the line).
+ */
+export function neutralizeUnmatchedTildeFences(markdown: string): string {
+  const lines = String(markdown).split('\n')
+  const out: string[] = []
+  let inTildeFence = false
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!
+    const m = /^[ \t]*(~{3,})([ \t]*.*)$/.exec(line)
+    if (m === null) { out.push(line); continue }
+    const count = m[1]!.length
+    if (inTildeFence) {
+      // Inside a tilde fence → this is the closer (or an inner fence line).
+      out.push(line)
+      inTildeFence = false
+      continue
+    }
+    // Candidate opener. It needs a later bare closing fence (>= count tildes).
+    let hasCloser = false
+    for (let j = i + 1; j < lines.length; j++) {
+      const cm = /^[ \t]*(~{3,})[ \t]*$/.exec(lines[j]!)
+      if (cm !== null && cm[1]!.length >= count) { hasCloser = true; break }
+    }
+    if (hasCloser) { out.push(line); inTildeFence = true }
+    else out.push('---') // unmatched opener → harmless horizontal rule (display only)
+  }
+  return out.join('\n')
+}
+
+/**
  * Rewrite managed-attachment URLs (`attachments/<id>/<filename>`) in Lute HTML
  * to a served URL via `urlFor(id, filename)`. Matches only `src`/`href`
  * attributes with the relative `attachments/` prefix (never `https://…`), so
