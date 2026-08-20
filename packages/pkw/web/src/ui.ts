@@ -298,6 +298,7 @@ mark{background:var(--mark-bg);border-radius:2px;padding:0 2px}
 .mfolder-name{font-weight:600;font-size:14px}
 .mfolder-count{font-size:12px;color:var(--muted);margin-top:2px}
 .mfolder-title{font-weight:650;font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mobile-readonly-hint{font-size:12px;color:var(--muted);padding:6px 2px;margin-bottom:4px}
 .mnote-main,.msrc-main,.mtask-main{flex:1 1 auto;min-width:0}
 .mnote-title,.msrc-name,.mtask-title{font-size:15px;font-weight:600;line-height:1.3;word-break:break-word}
 .mnote-folder,.msrc-meta,.mtask-cat,.mtask-due{font-size:12px;color:var(--muted);margin-top:2px}
@@ -468,7 +469,7 @@ const STR = {
     workspaceSummary:'工作区摘要', kb:'知识库', state:'状态', parse:'解析', syncSection:'WeKnora 同步', noSyncInfo:'尚未同步。',
     reconcileDone:'重建完成', reconcileResult:'笔记修复 {a} · 附件修复 {b} · 待同步 {c} · 已删 {d}', syncingAll:'正在同步…', genericError:'操作失败', ok:'完成', emptyPreview:'（空）', searchFailed:'搜索失败',
     folder:'文件夹', rootFolder:'（根目录）', newNoteHere:'在此新建笔记', newSubfolder:'新建子文件夹', renameFolder:'重命名', moveTo:'移动到…', deleteFolder:'删除文件夹', trashFolder:'移入回收站',
-    recentNotes:'最近笔记', foldersSection:'文件夹', allNotes:'全部笔记', recentEdited:'最近编辑', myFolders:'我的文件夹', manageFolders:'管理文件夹', unfiled:'未归档', notesCount:'{n} 篇笔记', noFolders:'还没有文件夹。',
+    recentNotes:'最近笔记', foldersSection:'文件夹', allNotes:'全部笔记', recentEdited:'最近编辑', myFolders:'我的文件夹', manageFolders:'管理文件夹', unfiled:'未归档', notesCount:'{n} 篇笔记', noFolders:'还没有文件夹。', mobileEditDesktopOnly:'正文编辑请在桌面端使用',
     folderTrashTitle:'此文件夹包含 {n} 个笔记 · {m} 个子文件夹', folderTrashWhole:'整个文件夹和全部内容移入回收站', folderTrashKeep:'保留内容：移到上一级，仅删除当前文件夹',
     folderRenamePrompt:'新文件夹名称', folderDeleteConfirm:'删除文件夹「{n}」？', folderNotEmpty:'文件夹不为空，无法删除。', moveNoteTo:'移动笔记到', moveUp:'上移', moveDown:'下移',
     sortMode:'排序', sortManual:'手动', sortTitle:'标题', sortUpdated:'更新时间', cancel:'取消', createFolderPrompt:'文件夹名称', folderCreated:'文件夹已创建', selectFolder:'选择一个文件夹。',
@@ -532,7 +533,7 @@ const STR = {
     workspaceSummary:'Workspace summary', kb:'KB', state:'State', parse:'Parse', syncSection:'WeKnora Sync', noSyncInfo:'Not synced yet.',
     reconcileDone:'Reconcile done', reconcileResult:'Notes repaired {a} · attachments repaired {b} · dirty {c} · deleted {d}', syncingAll:'Syncing…', genericError:'Operation failed', ok:'Done', emptyPreview:'(empty)', searchFailed:'Search failed',
     folder:'Folder', rootFolder:'(root)', newNoteHere:'New note here', newSubfolder:'New subfolder', renameFolder:'Rename', moveTo:'Move to…', deleteFolder:'Delete folder', trashFolder:'Move to trash',
-    recentNotes:'Recent notes', foldersSection:'Folders', allNotes:'All notes', recentEdited:'Recently edited', myFolders:'My folders', manageFolders:'Manage folders', unfiled:'Unfiled', notesCount:'{n} notes', noFolders:'No folders yet.',
+    recentNotes:'Recent notes', foldersSection:'Folders', allNotes:'All notes', recentEdited:'Recently edited', myFolders:'My folders', manageFolders:'Manage folders', unfiled:'Unfiled', notesCount:'{n} notes', noFolders:'No folders yet.', mobileEditDesktopOnly:'Editing is available on desktop',
     folderTrashTitle:'This folder contains {n} notes · {m} subfolders', folderTrashWhole:'Move the whole folder and all contents to trash', folderTrashKeep:'Keep contents: move to parent, delete only this folder',
     folderRenamePrompt:'New folder name', folderDeleteConfirm:'Delete folder 「{n}」?', folderNotEmpty:'Folder is not empty and cannot be deleted.', moveNoteTo:'Move note to', moveUp:'Move up', moveDown:'Move down',
     sortMode:'Sort', sortManual:'Manual', sortTitle:'Title', sortUpdated:'Updated', cancel:'Cancel', createFolderPrompt:'Folder name', folderCreated:'Folder created', selectFolder:'Select a folder.',
@@ -853,19 +854,23 @@ function mobileFolderCard(f){
   return '<div class="mfolder" data-action="mobile-folder-open" data-path="' + esc(f.path) + '">' +
     '<span class="mfolder-ic">📁</span>' +
     '<div class="mfolder-main"><div class="mfolder-name">' + esc(f.name) + '</div><div class="mfolder-count">' + esc(t('notesCount', { n: count })) + '</div></div>' +
+    '<button class="mnote-more" data-action="mobile-folder-menu" data-path="' + esc(f.path) + '">⋯</button>' +
     '<span class="chev">›</span></div>'
 }
 function renderMobileNotesHome(){
   const folders = (state.treeRoot || []).filter(n => n.kind === 'folder')
   const allNotes = []
   collectNotes(state.treeRoot || [], allNotes)
-  const recent = allNotes.slice().sort((a, b) => (a.updatedAt || '') < (b.updatedAt || '') ? 1 : -1).slice(0, 10)
+  const unfiled = allNotes.filter(n => parentOfPath(n.relativePath || '') === '')
+  const recent = allNotes.filter(n => parentOfPath(n.relativePath || '') !== '').slice().sort((a, b) => (a.updatedAt || '') < (b.updatedAt || '') ? 1 : -1).slice(0, 10)
   const foldersHtml = folders.length ? folders.map(mobileFolderCard).join('') : '<div class="empty small">' + esc(t('noFolders')) + '</div>'
-  const recentHtml = recent.length ? recent.map(n => mobileNoteRow(n)).join('') : '<div class="empty small">' + esc(t('emptyNotes')) + '</div>'
+  const unfiledHtml = unfiled.length ? unfiled.map(n => mobileNoteRow(n)).join('') : '<div class="empty small">' + esc(t('emptyNotes')) + '</div>'
+  const recentHtml = recent.length ? recent.map(n => mobileNoteRow(n)).join('') : ''
   $('#main').innerHTML =
     '<div class="toolbar"><button class="btn primary" data-action="mobile-notes-new">+</button></div>' +
     '<div class="list-section">' + esc(t('foldersSection')) + '</div>' + foldersHtml +
-    '<div class="list-section">' + esc(t('recentNotes')) + '</div>' + recentHtml
+    '<div class="list-section">' + esc(t('unfiled')) + '</div>' + unfiledHtml +
+    (recentHtml ? '<div class="list-section">' + esc(t('recentNotes')) + '</div>' + recentHtml : '')
 }
 function renderMobileFolderView(path){
   const notes = []
@@ -873,7 +878,7 @@ function renderMobileFolderView(path){
   const folderNotes = notes.filter(n => parentOfPath(n.relativePath || '') === path)
   const name = path.split('/').pop()
   $('#main').innerHTML =
-    '<div class="toolbar"><button class="btn" data-action="mobile-notes-back">← ' + esc(t('back')) + '</button><span class="mfolder-title">📁 ' + esc(name) + '</span><span class="spacer" style="flex:1"></span><button class="btn primary" data-action="mobile-notes-new">+</button></div>' +
+    '<div class="toolbar"><button class="btn" data-action="mobile-notes-back">← ' + esc(t('back')) + '</button><span class="mfolder-title">📁 ' + esc(name) + '</span><span class="spacer" style="flex:1"></span><button class="btn primary" data-action="mobile-notes-new">+</button><button class="btn small" data-action="mobile-folder-menu" data-path="' + esc(path) + '">⋯</button></div>' +
     (folderNotes.length ? folderNotes.map(n => mobileNoteRow(n)).join('') : '<div class="empty">' + esc(t('emptyNotes')) + '</div>')
 }
 function mobileNotesScopeSheet(){
@@ -996,7 +1001,7 @@ async function openNote(noteId){
   try {
     const d = await api('getNote', { noteId })
     if (seq !== noteSeq || state.view !== 'notes') return // stale: a newer note/view owns the surface
-    state.editor = { noteId, persistedMarkdown: d.markdown, body: d.body || '', frontmatter: d.frontmatter || '', dirty: false, saving: false, mode: localStorage.getItem('pkw-editor-mode') || 'live', observedRevision: d.note && d.note.observedRevision, contentHash: d.note && d.note.contentHash }
+    state.editor = { noteId, persistedMarkdown: d.markdown, body: d.body || '', frontmatter: d.frontmatter || '', dirty: false, saving: false, mode: isMobile() ? 'reading' : (localStorage.getItem('pkw-editor-mode') || 'live'), observedRevision: d.note && d.note.observedRevision, contentHash: d.note && d.note.contentHash }
     state.noteAttachments = d.attachments || []
     // Expand parent folders so the opened Note is visible + highlighted in the tree
     // (identity stays NoteId; path is only used to reveal ancestors).
@@ -1038,18 +1043,16 @@ function renderEditorShell(d){
   const fm = parseFrontmatterClient(d.markdown)
   const modeBtn = (m, key) => '<button class="btn mode ' + (mode === m ? 'active' : '') + '" data-action="set-mode" data-mode="' + m + '">' + esc(t(key)) + '</button>'
   if (isMobile()) {
+    // OPTION C: Mobile Read-first. Reliable reading/managing/searching on mobile;
+    // full body editing stays on Desktop. No Vditor/textarea on mobile.
     return '<div class="toolbar">' +
       '<button class="btn small" data-action="mobile-back-notes">← ' + esc(t('notes')) + '</button>' +
-      '<span id="saveStatus" class="saved">✓ ' + esc(t('saved')) + '</span>' +
-      '<span class="spacer"></span>' + modeBtn('reading', 'modeReading') + modeBtn('live', 'modeLive') + modeBtn('source', 'modeSource') +
+      '<span class="spacer"></span>' +
       '<button class="btn small" data-action="mobile-editor-menu">⋯</button>' +
       '</div>' +
-      '<div class="editor-head"><span class="title note-title" data-id="' + esc(state.selectedNoteId) + '">' + esc(fm.title || d.note.title || '') + '</span></div>' +
-      '<div id="editorPane">' +
-        (mode === 'live' ? '<div id="vditor" style="min-height:calc(100vh - 180px)"><div class="empty">' + esc(t('editorLoading')) + '</div></div>' : '') +
-        (mode === 'source' ? '<textarea id="editor" aria-label="Markdown">' + esc(d.markdown) + '</textarea>' : '') +
-        (mode === 'reading' ? '<div id="preview"></div>' : '') +
-      '</div>' +
+      '<div class="editor-head"><span class="title note-title" data-id="' + esc(state.selectedNoteId) + '">' + esc(fm.title || d.note.title || '') + '</span><span class="path">' + esc(d.note.relativePath) + '</span></div>' +
+      '<div class="mobile-readonly-hint">' + esc(t('mobileEditDesktopOnly')) + '</div>' +
+      '<div id="editorPane"><div id="preview"></div></div>' +
       '<div id="bkAttachments"></div><div id="relatedKnowledge"></div>'
   }
   return '<div class="toolbar">' +
@@ -3423,6 +3426,14 @@ document.addEventListener('click', (e) => {
   else if (act === 'mobile-notes-back') { state.mobileNotesFolder = null; state.selectedFolder = null; render() }
   else if (act === 'mobile-notes-home') { state.mobileNotesFolder = null; state.selectedFolder = null; render() }
   else if (act === 'mobile-folder-open') { const p = el.dataset.path || ''; state.mobileNotesFolder = p; state.selectedFolder = p; render() }
+  else if (act === 'mobile-folder-menu') {
+    const p = el.dataset.path || ''
+    if (!p) return
+    mobileActionSheet(t('folder'), [
+      { label: t('renameFolder'), action: 'rename-folder', path: p },
+      { label: t('trashFolder'), action: 'delete-folder', path: p, danger: true },
+    ])
+  }
   else if (act === 'mobile-source-menu') {
     const aid = id
     mobileActionSheet(t('sources'), [
@@ -3449,7 +3460,6 @@ document.addEventListener('click', (e) => {
     const nid = state.selectedNoteId
     if (!nid) return
     mobileActionSheet(t('notes'), [
-      { label: t('save'), action: 'save-note', id: nid },
       { label: t('renameTitle'), action: 'rename-note', id: nid },
       { label: t('moveNoteTo'), action: 'move-note', id: nid },
       { label: t('syncNow'), action: 'sync-note', id: nid },

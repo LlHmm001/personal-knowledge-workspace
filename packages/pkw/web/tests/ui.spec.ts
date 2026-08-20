@@ -409,4 +409,21 @@ describe('PKW web UI (served page)', () => {
     expect(js).toContain('mobileNotesFolder')
     expect(page).toContain('.mfolder')
   })
+
+  it('mobile Notes unfiled section + folder menu + OPTION C read-only editor', () => {
+    const js = script()
+    const page = renderPage()
+    // Unfiled notes (root notes) must surface in the mobile Notes home.
+    expect(js).toContain('unfiled')
+    expect(js).toContain("parentOfPath(n.relativePath || '') === ''")
+    // Folder management reuses existing rename/trash mutations via ⋯.
+    expect(js).toContain('mobile-folder-menu')
+    expect(js).toContain("action: 'rename-folder'")
+    expect(js).toContain("action: 'delete-folder'")
+    // OPTION C: mobile is read-first — no Vditor/textarea on mobile.
+    expect(js).toContain('mobileEditDesktopOnly')
+    expect(js).toContain('mobile-readonly-hint')
+    expect(js).toContain("mode: isMobile() ? 'reading'")
+    expect(page).toContain('.mobile-readonly-hint')
+  })
 })
