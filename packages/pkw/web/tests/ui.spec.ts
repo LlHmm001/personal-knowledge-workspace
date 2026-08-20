@@ -372,4 +372,13 @@ describe('PKW web UI (served page)', () => {
     expect(page).toContain('.hit{width:100%;max-width:100%;box-sizing:border-box;min-width:0}')
     expect(page).toContain('.mnote,.msrc,.mtask{display:flex;align-items:flex-start;gap:10px;padding:12px 10px;border:1px solid var(--border);border-radius:12px;margin-bottom:8px;background:var(--panel);width:100%;max-width:100%;min-width:0;box-sizing:border-box}')
   })
+
+  it('mobile-layout-regression: page content containers fill viewport (≤600px)', () => {
+    const page = renderPage()
+    // Every page content container must be full-width with no desktop max-width.
+    expect(page).toContain('@media(max-width:600px){')
+    expect(page).toContain('main{width:100%;max-width:none;min-width:0;box-sizing:border-box;grid-column:1;grid-row:2}')
+    expect(page).toContain('main > *{width:100%;max-width:none;min-width:0;box-sizing:border-box}')
+    expect(page).toContain('#kbBody,#kbList,#attList,.mquad,.mboard,.mboard-select{width:100%;max-width:none;min-width:0;box-sizing:border-box}')
+  })
 })
