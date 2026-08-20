@@ -395,4 +395,18 @@ describe('PKW web UI (served page)', () => {
     expect(page).toContain('.macc-head')
     expect(page).toContain('.macc-body')
   })
+
+  it('mobile Notes folder system: home + folder view + scope sheet', () => {
+    const js = script()
+    const page = renderPage()
+    expect(js).toContain('renderMobileNotesHome')
+    expect(js).toContain('renderMobileFolderView')
+    expect(js).toContain('mobileFolderCard')
+    expect(js).toContain('mobileNotesScopeSheet')
+    expect(js).toContain('mobile-notes-new')
+    expect(js).toContain('mobile-folder-open')
+    expect(js).toContain('mobile-notes-back')
+    expect(js).toContain('mobileNotesFolder')
+    expect(page).toContain('.mfolder')
+  })
 })

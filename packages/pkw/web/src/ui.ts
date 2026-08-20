@@ -292,6 +292,12 @@ mark{background:var(--mark-bg);border-radius:2px;padding:0 2px}
 .hit-clickable{cursor:pointer}.hit-clickable:hover{border-color:var(--accent)}
 .hit .chev{float:right;color:var(--muted);font-size:16px;margin-left:6px}
 .mnote,.msrc,.mtask{display:flex;align-items:flex-start;gap:10px;padding:12px 10px;border:1px solid var(--border);border-radius:12px;margin-bottom:8px;background:var(--panel);width:100%;max-width:100%;min-width:0;box-sizing:border-box}
+.mfolder{display:flex;align-items:center;gap:10px;padding:12px 12px;border:1px solid var(--border);border-radius:12px;margin-bottom:8px;background:var(--panel);width:100%;max-width:100%;min-width:0;box-sizing:border-box;cursor:pointer}
+.mfolder-ic{flex:0 0 auto;font-size:20px}
+.mfolder-main{flex:1 1 auto;min-width:0}
+.mfolder-name{font-weight:600;font-size:14px}
+.mfolder-count{font-size:12px;color:var(--muted);margin-top:2px}
+.mfolder-title{font-weight:650;font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .mnote-main,.msrc-main,.mtask-main{flex:1 1 auto;min-width:0}
 .mnote-title,.msrc-name,.mtask-title{font-size:15px;font-weight:600;line-height:1.3;word-break:break-word}
 .mnote-folder,.msrc-meta,.mtask-cat,.mtask-due{font-size:12px;color:var(--muted);margin-top:2px}
@@ -462,6 +468,7 @@ const STR = {
     workspaceSummary:'工作区摘要', kb:'知识库', state:'状态', parse:'解析', syncSection:'WeKnora 同步', noSyncInfo:'尚未同步。',
     reconcileDone:'重建完成', reconcileResult:'笔记修复 {a} · 附件修复 {b} · 待同步 {c} · 已删 {d}', syncingAll:'正在同步…', genericError:'操作失败', ok:'完成', emptyPreview:'（空）', searchFailed:'搜索失败',
     folder:'文件夹', rootFolder:'（根目录）', newNoteHere:'在此新建笔记', newSubfolder:'新建子文件夹', renameFolder:'重命名', moveTo:'移动到…', deleteFolder:'删除文件夹', trashFolder:'移入回收站',
+    recentNotes:'最近笔记', foldersSection:'文件夹', allNotes:'全部笔记', recentEdited:'最近编辑', myFolders:'我的文件夹', manageFolders:'管理文件夹', unfiled:'未归档', notesCount:'{n} 篇笔记', noFolders:'还没有文件夹。',
     folderTrashTitle:'此文件夹包含 {n} 个笔记 · {m} 个子文件夹', folderTrashWhole:'整个文件夹和全部内容移入回收站', folderTrashKeep:'保留内容：移到上一级，仅删除当前文件夹',
     folderRenamePrompt:'新文件夹名称', folderDeleteConfirm:'删除文件夹「{n}」？', folderNotEmpty:'文件夹不为空，无法删除。', moveNoteTo:'移动笔记到', moveUp:'上移', moveDown:'下移',
     sortMode:'排序', sortManual:'手动', sortTitle:'标题', sortUpdated:'更新时间', cancel:'取消', createFolderPrompt:'文件夹名称', folderCreated:'文件夹已创建', selectFolder:'选择一个文件夹。',
@@ -525,6 +532,7 @@ const STR = {
     workspaceSummary:'Workspace summary', kb:'KB', state:'State', parse:'Parse', syncSection:'WeKnora Sync', noSyncInfo:'Not synced yet.',
     reconcileDone:'Reconcile done', reconcileResult:'Notes repaired {a} · attachments repaired {b} · dirty {c} · deleted {d}', syncingAll:'Syncing…', genericError:'Operation failed', ok:'Done', emptyPreview:'(empty)', searchFailed:'Search failed',
     folder:'Folder', rootFolder:'(root)', newNoteHere:'New note here', newSubfolder:'New subfolder', renameFolder:'Rename', moveTo:'Move to…', deleteFolder:'Delete folder', trashFolder:'Move to trash',
+    recentNotes:'Recent notes', foldersSection:'Folders', allNotes:'All notes', recentEdited:'Recently edited', myFolders:'My folders', manageFolders:'Manage folders', unfiled:'Unfiled', notesCount:'{n} notes', noFolders:'No folders yet.',
     folderTrashTitle:'This folder contains {n} notes · {m} subfolders', folderTrashWhole:'Move the whole folder and all contents to trash', folderTrashKeep:'Keep contents: move to parent, delete only this folder',
     folderRenamePrompt:'New folder name', folderDeleteConfirm:'Delete folder 「{n}」?', folderNotEmpty:'Folder is not empty and cannot be deleted.', moveNoteTo:'Move note to', moveUp:'Move up', moveDown:'Move down',
     sortMode:'Sort', sortManual:'Manual', sortTitle:'Title', sortUpdated:'Updated', cancel:'Cancel', createFolderPrompt:'Folder name', folderCreated:'Folder created', selectFolder:'Select a folder.',
@@ -571,6 +579,7 @@ const state = {
   view: 'overview',
   selectedNoteId: null,
   selectedFolder: null,
+  mobileNotesFolder: null,
   selectedAttachmentId: null,
   sortMode: localStorage.getItem('pkw-sort') || 'manual',
   treeRoot: [],
@@ -714,10 +723,15 @@ function render(){
   document.querySelectorAll('.nav button').forEach(b => b.classList.toggle('active', b.dataset.view === state.view))
   document.querySelectorAll('#bottomNav .bn-item').forEach(b => b.classList.toggle('active', b.dataset.view === state.view))
   const pageTitle = $('#pageTitle')
-  if (pageTitle) pageTitle.textContent = isMobile() ? (state.view === 'attachments' ? t('sources') : t(state.view)) : 'PKW'
+  if (pageTitle) {
+    let title = isMobile() ? (state.view === 'attachments' ? t('sources') : t(state.view)) : 'PKW'
+    if (isMobile() && state.view === 'notes' && state.selectedNoteId === null && state.mobileNotesFolder === null) title = t('notes') + ' ▾'
+    else if (isMobile() && state.view === 'notes' && state.mobileNotesFolder !== null) title = '📁 ' + state.mobileNotesFolder.split('/').pop()
+    pageTitle.textContent = title
+  }
   refreshHeader()
   if (state.view === 'overview') renderOverview()
-  else if (state.view === 'notes') { renderTreeToolbar(); renderTree(); renderDetail(); if (state.selectedNoteId === null) { if (state.selectedFolder !== null) renderFolderMain(state.selectedFolder); else renderNotesExplorer() } ensureVditorLoaded().catch(() => {}) }
+  else if (state.view === 'notes') { renderTreeToolbar(); renderTree(); renderDetail(); if (state.selectedNoteId === null) { if (!isMobile() && state.selectedFolder !== null) renderFolderMain(state.selectedFolder); else renderNotesExplorer() } ensureVditorLoaded().catch(() => {}) }
   else if (state.view === 'attachments') renderAttachments()
   else if (state.view === 'tasks') renderTasks()
   else if (state.view === 'trash') renderTrash()
@@ -777,7 +791,7 @@ async function renderTree(){
     if (seq !== viewSeq) return // stale response: a newer navigation owns the surface
     state.treeRoot = tree.root || []
     $('#list').innerHTML = renderTreeNodes(state.treeRoot, '') || '<div class="empty">' + esc(t('emptyNotes')) + '<div class="cta"><button class="btn primary" data-action="new-note">+ ' + esc(t('emptyNotesCta')) + '</button></div></div>'
-    if (state.view === 'notes' && state.selectedNoteId === null && state.selectedFolder === null) renderNotesExplorer()
+    if (state.view === 'notes' && state.selectedNoteId === null) renderNotesExplorer()
     restoreScroll()
   } catch (e) { if (state.treeRoot.length === 0 && seq === viewSeq) $('#list').innerHTML = '<div class="empty">' + esc(t('genericError')) + '</div>' }
 }
@@ -815,15 +829,62 @@ function explorerNoteRow(n){
     '</div>'
 }
 function renderNotesExplorer(){
+  if (isMobile()) {
+    if (state.mobileNotesFolder !== null) { renderMobileFolderView(state.mobileNotesFolder); return }
+    renderMobileNotesHome()
+    return
+  }
   const notes = []
   collectNotes(state.treeRoot || [], notes)
-  const toolbar = isMobile()
-    ? '<div class="toolbar"><button class="btn primary" data-action="mobile-note-create">+</button></div>'
-    : '<div class="toolbar"><button class="btn primary" data-action="new-note">+ ' + esc(t('newNote')) + '</button><button class="btn" data-action="new-folder">+ ' + esc(t('newFolder')) + '</button></div>'
+  const toolbar = '<div class="toolbar"><button class="btn primary" data-action="new-note">+ ' + esc(t('newNote')) + '</button><button class="btn" data-action="new-folder">+ ' + esc(t('newFolder')) + '</button></div>'
   $('#main').innerHTML = '<h2>' + esc(t('notes')) + '</h2>' + toolbar +
     (notes.length
-      ? '<div>' + notes.map(n => isMobile() ? mobileNoteRow(n) : explorerNoteRow(n)).join('') + '</div>'
+      ? '<div>' + notes.map(n => explorerNoteRow(n)).join('') + '</div>'
       : '<div class="empty"><h3>' + esc(t('emptyNotes')) + '</h3><div class="cta"><button class="btn primary" data-action="new-note">+ ' + esc(t('emptyNotesCta')) + '</button></div></div>')
+}
+function folderNoteCount(folderNode){
+  let c = 0
+  const walk = (nodes) => { for (const n of nodes) { if (n.kind === 'note') c++; else if (n.kind === 'folder') walk(n.children || []) } }
+  walk(folderNode.children || [])
+  return c
+}
+function mobileFolderCard(f){
+  const count = folderNoteCount(f)
+  return '<div class="mfolder" data-action="mobile-folder-open" data-path="' + esc(f.path) + '">' +
+    '<span class="mfolder-ic">📁</span>' +
+    '<div class="mfolder-main"><div class="mfolder-name">' + esc(f.name) + '</div><div class="mfolder-count">' + esc(t('notesCount', { n: count })) + '</div></div>' +
+    '<span class="chev">›</span></div>'
+}
+function renderMobileNotesHome(){
+  const folders = (state.treeRoot || []).filter(n => n.kind === 'folder')
+  const allNotes = []
+  collectNotes(state.treeRoot || [], allNotes)
+  const recent = allNotes.slice().sort((a, b) => (a.updatedAt || '') < (b.updatedAt || '') ? 1 : -1).slice(0, 10)
+  const foldersHtml = folders.length ? folders.map(mobileFolderCard).join('') : '<div class="empty small">' + esc(t('noFolders')) + '</div>'
+  const recentHtml = recent.length ? recent.map(n => mobileNoteRow(n)).join('') : '<div class="empty small">' + esc(t('emptyNotes')) + '</div>'
+  $('#main').innerHTML =
+    '<div class="toolbar"><button class="btn primary" data-action="mobile-notes-new">+</button></div>' +
+    '<div class="list-section">' + esc(t('foldersSection')) + '</div>' + foldersHtml +
+    '<div class="list-section">' + esc(t('recentNotes')) + '</div>' + recentHtml
+}
+function renderMobileFolderView(path){
+  const notes = []
+  collectNotes(state.treeRoot || [], notes)
+  const folderNotes = notes.filter(n => parentOfPath(n.relativePath || '') === path)
+  const name = path.split('/').pop()
+  $('#main').innerHTML =
+    '<div class="toolbar"><button class="btn" data-action="mobile-notes-back">← ' + esc(t('back')) + '</button><span class="mfolder-title">📁 ' + esc(name) + '</span><span class="spacer" style="flex:1"></span><button class="btn primary" data-action="mobile-notes-new">+</button></div>' +
+    (folderNotes.length ? folderNotes.map(n => mobileNoteRow(n)).join('') : '<div class="empty">' + esc(t('emptyNotes')) + '</div>')
+}
+function mobileNotesScopeSheet(){
+  const folders = (state.treeRoot || []).filter(n => n.kind === 'folder')
+  const items = [
+    { label: t('allNotes'), action: 'mobile-notes-home' },
+    { label: t('recentEdited'), action: 'mobile-notes-home' },
+  ]
+  for (const f of folders) items.push({ label: '📁 ' + f.name, action: 'mobile-folder-open', id: f.path })
+  items.push({ label: '+ ' + t('newFolder'), action: 'new-folder' })
+  mobileActionSheet(t('notes'), items)
 }
 
 // ── Markdown renderer ───────────────────────────────────────────────────────
@@ -3353,6 +3414,15 @@ document.addEventListener('click', (e) => {
       { label: t('newFolder'), action: 'new-folder' },
     ])
   }
+  else if (act === 'mobile-notes-new') {
+    mobileActionSheet(t('newNote'), [
+      { label: '📝 ' + t('newNote'), action: 'new-note' },
+      { label: '📁 ' + t('newFolder'), action: 'new-folder' },
+    ])
+  }
+  else if (act === 'mobile-notes-back') { state.mobileNotesFolder = null; state.selectedFolder = null; render() }
+  else if (act === 'mobile-notes-home') { state.mobileNotesFolder = null; state.selectedFolder = null; render() }
+  else if (act === 'mobile-folder-open') { const p = el.dataset.path || ''; state.mobileNotesFolder = p; state.selectedFolder = p; render() }
   else if (act === 'mobile-source-menu') {
     const aid = id
     mobileActionSheet(t('sources'), [
@@ -3784,6 +3854,7 @@ $('#mobileMoreBtn').addEventListener('click', () => { mobileActionSheet(t('mobil
   { label: t('themeLight'), action: 'theme-light' },
   { label: t('themeDark'), action: 'theme-dark' },
 ]) })
+$('#pageTitle').addEventListener('click', () => { if (isMobile() && state.view === 'notes' && state.selectedNoteId === null && state.mobileNotesFolder === null) mobileNotesScopeSheet() })
 window.addEventListener('beforeunload', (e) => { if (state.editor.dirty && state.selectedNoteId !== null) { e.preventDefault(); e.returnValue = '' } })
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { refreshHeader(); if (state.view === 'notes') { renderTree(); if (state.selectedNoteId) kickSyncPoll({ pending: true }) } } })
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (currentThemeMode() === 'system') applyTheme('system') })
