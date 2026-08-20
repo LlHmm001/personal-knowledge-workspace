@@ -364,6 +364,17 @@ mark{background:var(--mark-bg);border-radius:2px;padding:0 2px}
 .src-sub{font-size:11px;color:var(--muted)}
 .src-act{flex:0 0 auto;font-size:12px;color:var(--accent);text-decoration:none;padding:3px 8px;border:1px solid var(--border);border-radius:6px}
 .src-act:hover{background:var(--bg-hover)}
+/* Desktop PDF Preview Pane (right Inspector) */
+#detail.previewing{width:460px;max-width:60vw}
+.pv-head{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.pv-name{flex:1;font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pv-frame{width:100%;height:60vh;border:1px solid var(--border);border-radius:8px;background:#fff}
+.pv-img{width:100%;height:auto;border-radius:8px}
+.pv-actions{display:flex;gap:6px;margin-top:10px}
+/* Live managed file inline chip (rewritten attachment links) */
+a.src-inline{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border:1px solid var(--border);border-radius:8px;background:var(--bg-elevated);color:var(--accent);text-decoration:none;font-size:13px}
+a.src-inline::before{content:"📄";font-size:14px}
+a.src-inline:hover{border-color:var(--accent)}
 /* Search → Viewer navigation context */
 .search-context-banner{display:inline-block;margin:2px 0 4px;padding:3px 10px;border-radius:999px;font-size:12px;background:var(--bg-hover);color:var(--text-secondary);border:1px solid var(--border)}
 </style>
@@ -430,7 +441,7 @@ const STR = {
     themeSystem:'跟随系统', themeLight:'浅色', themeDark:'深色',
     knowledge:'知识', knowledgeIndexed:'已索引', knowledgePending:'待索引', knowledgeNotIndexed:'未索引', knowledgeParseFailed:'解析失败', relatedNotes:'相关笔记', relatedKnowledge:'相关知识', refAttachments:'引用附件', mime:'类型', attWaiting:'等待解析', attProcessing:'解析中', attOptimizing:'优化索引中', attReady:'已解析', attFailed:'解析失败', attachments:'附件', businessKnowledge:'知识',
     knowledgeBrowse:'浏览', knowledgeBrowseTitle:'知识发现', knowledgeEmpty:'还没有可发现的知识。', knowledgeOffline:'知识检索暂不可用', sourceLabel:'来源', attachmentsN:'附件 ×{n}', knowledgeFilterPlaceholder:'筛选知识（标题 / 摘要 / 来源）…',
-    sources:'来源', sourcesDesc:'你上传的知识资料来源文件。', usedIn:'用于', usedByN:'{n} 篇笔记使用', isolated:'未关联笔记', isolatedHint:'该文件还没有被任何笔记引用。', hasSummary:'有摘要', refresh:'刷新', sourceFiles:'来源文件', mobileMore:'更多', back:'返回',
+    sources:'来源', sourcesDesc:'你上传的知识资料来源文件。', usedIn:'用于', usedByN:'{n} 篇笔记使用', isolated:'未关联笔记', isolatedHint:'该文件还没有被任何笔记引用。', hasSummary:'有摘要', refresh:'刷新', sourceFiles:'来源文件', mobileMore:'更多', back:'返回', openInNewTab:'新标签打开',
     parseStatus:'解析状态', summary:'摘要', reparse:'重新解析', reparseStarted:'已提交重新解析',
     noteMissing:'笔记文件已不存在', noteMissingBody:'笔记“{id}”的 Markdown 文件在工作区中找不到，可能已被外部删除或移动。', rescan:'重新扫描', removeFromWorkspace:'从工作区移除', removeMissingConfirm:'从工作区移除“{id}”？该笔记文件已不存在。此操作将清理 PKW 中的残留记录和知识库投影，无法从回收站恢复该文件。',
     missingSource:'源文件已不存在',
@@ -493,7 +504,7 @@ const STR = {
     themeSystem:'Follow system', themeLight:'Light', themeDark:'Dark',
     knowledge:'Knowledge', knowledgeIndexed:'Indexed', knowledgePending:'Pending', knowledgeNotIndexed:'Not indexed', knowledgeParseFailed:'Parse failed', relatedNotes:'Related notes', relatedKnowledge:'Related knowledge', refAttachments:'Referenced attachments', mime:'Type', attWaiting:'Waiting', attProcessing:'Processing', attOptimizing:'Optimizing index', attReady:'Parsed', attFailed:'Parse failed', attachments:'Attachments', businessKnowledge:'Knowledge',
     knowledgeBrowse:'Browse', knowledgeBrowseTitle:'Knowledge Discovery', knowledgeEmpty:'No discoverable knowledge yet.', knowledgeOffline:'Knowledge search unavailable', sourceLabel:'Source', attachmentsN:'{n} attachments', knowledgeFilterPlaceholder:'Filter knowledge (title / summary / source)…',
-    sources:'Sources', sourcesDesc:'The source files that make up your knowledge.', usedIn:'Used in', usedByN:'{n} notes use this', isolated:'Not linked to a note', isolatedHint:'This file is not referenced by any note yet.', hasSummary:'Has summary', refresh:'Refresh', sourceFiles:'Source files', mobileMore:'More', back:'Back',
+    sources:'Sources', sourcesDesc:'The source files that make up your knowledge.', usedIn:'Used in', usedByN:'{n} notes use this', isolated:'Not linked to a note', isolatedHint:'This file is not referenced by any note yet.', hasSummary:'Has summary', refresh:'Refresh', sourceFiles:'Source files', mobileMore:'More', back:'Back', openInNewTab:'Open in new tab',
     parseStatus:'Parse status', summary:'Summary', reparse:'Reparse', reparseStarted:'Reparse submitted',
     noteMissing:'Note file is missing', noteMissingBody:'The Markdown file for note "{id}" cannot be found in the workspace. It may have been deleted or moved externally.', rescan:'Rescan', removeFromWorkspace:'Remove from workspace', removeMissingConfirm:'Remove "{id}" from the workspace? Its file is already missing. This will clean up the leftover PKW records and knowledge projection, and the file cannot be restored from Trash.',
     missingSource:'Source file missing',
@@ -799,8 +810,10 @@ function explorerNoteRow(n){
 function renderNotesExplorer(){
   const notes = []
   collectNotes(state.treeRoot || [], notes)
-  $('#main').innerHTML = '<h2>' + esc(t('notes')) + '</h2>' +
-    '<div class="toolbar"><button class="btn primary" data-action="new-note">+ ' + esc(t('newNote')) + '</button><button class="btn" data-action="new-folder">+ ' + esc(t('newFolder')) + '</button></div>' +
+  const toolbar = isMobile()
+    ? '<div class="toolbar"><button class="btn primary" data-action="mobile-note-create">+</button></div>'
+    : '<div class="toolbar"><button class="btn primary" data-action="new-note">+ ' + esc(t('newNote')) + '</button><button class="btn" data-action="new-folder">+ ' + esc(t('newFolder')) + '</button></div>'
+  $('#main').innerHTML = '<h2>' + esc(t('notes')) + '</h2>' + toolbar +
     (notes.length
       ? '<div>' + notes.map(n => isMobile() ? mobileNoteRow(n) : explorerNoteRow(n)).join('') + '</div>'
       : '<div class="empty"><h3>' + esc(t('emptyNotes')) + '</h3><div class="cta"><button class="btn primary" data-action="new-note">+ ' + esc(t('emptyNotesCta')) + '</button></div></div>')
@@ -1102,6 +1115,7 @@ function rewriteLiveAttachmentImgs(root){
       a.setAttribute('href', resolved + '/preview')
       a.setAttribute('target', '_blank')
       a.setAttribute('rel', 'noopener')
+      a.classList.add('src-inline')
     }
   }
 }
@@ -1150,6 +1164,7 @@ async function initVditor(){
 function vditorToolbar(){
   const calloutTypes = ['NOTE', 'TIP', 'INFO', 'IMPORTANT', 'WARNING', 'QUESTION', 'EXAMPLE', 'SUCCESS', 'DANGER']
   const ic = (s) => '<span style="font-size:13px;line-height:1">' + s + '</span>'
+  if (isMobile()) return mobileVditorToolbar(ic)
   return [
     'undo', 'redo', '|',
     'headings', '|',
@@ -1172,6 +1187,38 @@ function vditorToolbar(){
     '|',
     'outline',
   ]
+}
+function mobileVditorToolbar(ic){
+  // Compact mobile toolbar: high-frequency formatting only; the rest lives in ⋯.
+  return [
+    'headings',
+    'bold',
+    'list',
+    'link',
+    { name: 'attachment', tip: t('attachmentLabel'), icon: ic('📎'), click: () => pickAttachment() },
+    { name: 'mobile-format-more', tip: t('mobileMore'), icon: ic('⋯'), click: () => mobileFormatSheet() },
+    '|',
+    'undo', 'redo',
+  ]
+}
+function mobileFormatSheet(){
+  const items = [
+    ['I · ' + t('italic'), () => editorWrap('*', '*')],
+    ['S · ' + t('strike'), () => editorWrap('~~', '~~')],
+    ['❝ · ' + t('slashQuote'), () => editorInsert('> ')],
+    ['</> · ' + t('slashCodeBlock'), () => editorInsert('\\u0060\\u0060\\u0060\\n\\u0060\\u0060\\u0060')],
+    ['⊞ · ' + t('slashTable'), () => editorInsert('|  |  |\\n| --- | --- |\\n|  |  |\\n')],
+    ['🖼 · ' + t('slashImage'), () => editorInsert('![alt](url)')],
+    ['① · ' + t('slashFootnote'), () => editorInsert('[^1]')],
+  ]
+  document.querySelectorAll('.mobile-sheet-overlay').forEach(o => o.remove())
+  const ov = document.createElement('div')
+  ov.className = 'mobile-sheet-overlay'
+  ov.innerHTML = '<div class="mobile-sheet"><div class="ms-title">' + esc(t('mobileMore')) + '</div>' +
+    items.map((it, i) => '<button class="ms-item" data-mf="' + i + '">' + esc(it[0]) + '</button>').join('') +
+    '<button class="ms-cancel">' + esc(t('cancel')) + '</button></div>'
+  document.body.appendChild(ov)
+  ov.addEventListener('click', (e) => { const b = e.target.closest('[data-mf]'); if (b) { items[Number(b.dataset.mf)][1](); ov.remove() } else if (e.target === ov || e.target.closest('.ms-cancel')) ov.remove() })
 }
 function pickAttachment(){
   const inp = document.createElement('input')
@@ -1649,11 +1696,14 @@ function attCardHtml(a){
 function attToolbarHtml(){
   const typeBtn = (v, label) => '<button class="btn small' + (state.attType === v ? ' primary' : '') + '" data-action="att-type" data-type="' + v + '">' + esc(label) + '</button>'
   const sortBtn = (v, label) => '<button class="btn small' + (state.attSort === v ? ' primary' : '') + '" data-action="att-sort" data-sort="' + v + '">' + esc(label) + '</button>'
+  const sortLabel = state.attSort === 'name' ? t('attSortName') : state.attSort === 'size' ? t('attSortSize') : t('attSortRecent')
   return '<div class="toolbar">' +
-    '<button class="btn small" data-action="att-mode" data-mode="' + (state.attMode === 'list' ? 'grid' : 'list') + '">' + esc(state.attMode === 'list' ? t('attGridView') : t('attListView')) + '</button>' +
+    (isMobile() ? '' : '<button class="btn small" data-action="att-mode" data-mode="' + (state.attMode === 'list' ? 'grid' : 'list') + '">' + esc(state.attMode === 'list' ? t('attGridView') : t('attListView')) + '</button>') +
     '<input id="attSearch" type="search" placeholder="' + esc(t('attSearchPlaceholder')) + '" value="' + esc(state.attQuery) + '">' +
     typeBtn('all', t('attTypeAll')) + typeBtn('image', t('attTypeImage')) + typeBtn('document', t('attTypeDocument')) + typeBtn('other', t('attTypeOther')) +
-    '<span class="muted small">' + esc(t('attSort')) + '</span>' + sortBtn('recent', t('attSortRecent')) + sortBtn('name', t('attSortName')) + sortBtn('size', t('attSortSize')) +
+    (isMobile()
+      ? '<button class="btn small" data-action="att-sort-sheet">' + esc(t('attSort')) + '：' + esc(sortLabel) + ' ▼</button>'
+      : '<span class="muted small">' + esc(t('attSort')) + '</span>' + sortBtn('recent', t('attSortRecent')) + sortBtn('name', t('attSortName')) + sortBtn('size', t('attSortSize'))) +
     '</div>'
 }
 function attBatchBarHtml(){
@@ -1789,7 +1839,28 @@ async function openCompanionForAttachment(id){
   if (c && c.noteId) { setView('notes'); openNote(c.noteId) }
   else toast(t('attNoCompanion'), 'warn')
 }
-async function previewAttachment(id){ window.open('/pkw/attachment/' + id + '/preview', '_blank') }
+async function previewAttachment(id){
+  // Mobile → browser native viewer (new tab). Desktop → right Inspector preview pane.
+  if (isMobile()) { window.open('/pkw/attachment/' + id + '/preview', '_blank'); return }
+  try {
+    const d = await api('getAttachment', { attachmentId: id })
+    const a = d.attachment
+    const url = '/pkw/attachment/' + id + '/preview'
+    const mime = a.mimeType || ''
+    const isPdf = mime === 'application/pdf'
+    const isImage = mime.indexOf('image/') === 0
+    const media = isPdf
+      ? '<iframe class="pv-frame" src="' + esc(url) + '" title="' + esc(a.filename) + '"></iframe>'
+      : isImage
+        ? '<img class="pv-img" src="' + esc(url) + '" alt="' + esc(a.filename) + '">'
+        : '<div class="empty">' + esc(t('attPreview')) + '</div>'
+    $('#detail').classList.add('previewing')
+    $('#detail').innerHTML = '<div class="pv-head"><span class="pv-name">' + esc(a.filename) + '</span>' +
+      '<button class="btn small" data-action="pv-close" title="' + esc(t('taskClose')) + '">×</button></div>' +
+      media +
+      '<div class="pv-actions"><a class="btn small" href="' + esc(url) + '" download>' + esc(t('download')) + '</a> <a class="btn small" href="' + esc(url) + '" target="_blank" rel="noopener">' + esc(t('openInNewTab')) + '</a></div>'
+  } catch (e) { toast(t('genericError') + ': ' + e.message, 'err') }
+}
 async function copyAttachmentRef(id){
   const ref = 'attachments/' + id
   try { await navigator.clipboard.writeText(ref); toast(t('attCopied'), 'ok') }
@@ -3145,7 +3216,12 @@ document.addEventListener('click', (e) => {
   else if (act === 'delete-attachment') delAttachment(id)
   else if (act === 'att-mode') { state.attMode = mode === 'grid' ? 'grid' : 'list'; localStorage.setItem('pkw-att-mode', state.attMode); renderAttachmentsFrom(state.attachmentsCache) }
   else if (act === 'att-type') { state.attType = el.dataset.type || 'all'; localStorage.setItem('pkw-att-type', state.attType); renderAttachmentsFrom(state.attachmentsCache) }
-  else if (act === 'att-sort') { state.attSort = el.dataset.sort || 'recent'; localStorage.setItem('pkw-att-sort', state.attSort); renderAttachmentsFrom(state.attachmentsCache) }
+  else if (act === 'att-sort') { state.attSort = el.dataset.sort || el.dataset.id || 'recent'; localStorage.setItem('pkw-att-sort', state.attSort); renderAttachmentsFrom(state.attachmentsCache) }
+  else if (act === 'att-sort-sheet') { mobileActionSheet(t('attSort'), [
+    { label: t('attSortRecent'), action: 'att-sort', id: 'recent' },
+    { label: t('attSortName'), action: 'att-sort', id: 'name' },
+    { label: t('attSortSize'), action: 'att-sort', id: 'size' },
+  ]) }
   else if (act === 'att-toggle') attToggleSelection(id)
   else if (act === 'att-clear-selection') attClearSelection()
   else if (act === 'att-batch-trash') attBatchOp('trash')
@@ -3155,6 +3231,7 @@ document.addEventListener('click', (e) => {
   else if (act === 'att-open-companion') openCompanionForAttachment(id)
   else if (act === 'att-copy-ref') copyAttachmentRef(id)
   else if (act === 'att-preview') previewAttachment(id)
+  else if (act === 'pv-close') { $('#detail').classList.remove('previewing'); $('#detail').innerHTML = '' }
   else if (act === 'go-attachments') setView('attachments')
   else if (act === 'new-task') quickTaskDialog(null, null)
   else if (act === 'new-task-matrix') quickTaskDialog(id || null, null)
@@ -3228,6 +3305,12 @@ document.addEventListener('click', (e) => {
       { label: t('renameTitle'), action: 'rename-note', id: nid },
       { label: t('moveNoteTo'), action: 'move-note', id: nid },
       { label: t('trashFolder'), action: 'delete-note', id: nid, danger: true },
+    ])
+  }
+  else if (act === 'mobile-note-create') {
+    mobileActionSheet(t('newNote'), [
+      { label: t('newNote'), action: 'new-note' },
+      { label: t('newFolder'), action: 'new-folder' },
     ])
   }
   else if (act === 'mobile-source-menu') {

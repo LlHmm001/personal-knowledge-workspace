@@ -344,4 +344,23 @@ describe('PKW web UI (served page)', () => {
     expect(js).toContain("'/preview'")
     expect(js).toContain("a[href*=\"attachments/\"]")
   })
+
+  it('ships the Phase 1 closure surfaces (PDF pane, mobile toolbar, create/sort sheets)', () => {
+    const js = script()
+    const page = renderPage()
+    // Desktop PDF preview pane + mobile new-tab split
+    expect(js).toContain('pv-close')
+    expect(js).toContain('previewing')
+    expect(js).toContain('openInNewTab')
+    expect(page).toContain('.pv-frame')
+    // Mobile Vditor toolbar config (not desktop toolbar via CSS)
+    expect(js).toContain('mobileVditorToolbar')
+    expect(js).toContain('mobileFormatSheet')
+    expect(js).toContain('mobile-format-more')
+    // Mobile Notes create sheet + Sources sort sheet
+    expect(js).toContain('mobile-note-create')
+    expect(js).toContain('att-sort-sheet')
+    // Live managed file inline chip
+    expect(js).toContain('src-inline')
+  })
 })
