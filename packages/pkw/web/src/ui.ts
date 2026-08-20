@@ -233,7 +233,7 @@ mark{background:var(--mark-bg);border-radius:2px;padding:0 2px}
   #app{grid-template-columns:1fr;grid-template-rows:52px 1fr 58px;height:100dvh}
   #app > aside:first-of-type{display:none}
   #app > aside.right{display:none}
-  main{padding:14px 14px calc(58px + env(safe-area-inset-bottom) + 16px)}
+  main{padding:16px 16px calc(58px + env(safe-area-inset-bottom) + 16px);min-width:0;max-width:100vw;box-sizing:border-box}
   #bottomNav{display:flex;position:fixed;left:0;right:0;bottom:0;height:calc(58px + env(safe-area-inset-bottom));padding-bottom:env(safe-area-inset-bottom);background:var(--panel);border-top:1px solid var(--border);z-index:50}
   #wsBadge,#integBadge,#localBadge,#langBtn,#themeBtn,#inspectorToggle{display:none}
   #mobileMoreBtn{display:inline-flex}
@@ -241,7 +241,8 @@ mark{background:var(--mark-bg);border-radius:2px;padding:0 2px}
   .launcher{grid-template-columns:1fr 1fr 1fr}
   /* no horizontal overflow: containers clip, long tokens break instead of stretch */
   body,main{overflow-x:hidden}
-  main h2{font-size:17px}
+  /* Mobile header already shows the page title → drop the duplicate in-page h2 */
+  main > h2{display:none}
   .toolbar{flex-wrap:wrap;gap:6px}
   .toolbar #attSearch{flex:1 1 100%;min-width:0}
   .toolbar .btn.small,.toolbar .btn{padding:8px 10px;min-height:36px}
@@ -260,33 +261,37 @@ mark{background:var(--mark-bg);border-radius:2px;padding:0 2px}
   .att-row .btn.small{grid-area:owner}
   .att-grid{grid-template-columns:repeat(auto-fill,minmax(120px,1fr))}
   /* Task cards: allow title wrap + due/overdue visible */
-  .task-card{flex-wrap:wrap}
+  .task-card{flex-wrap:wrap;width:100%;box-sizing:border-box;min-width:0}
   .task-card .task-title{white-space:normal;word-break:break-word}
-  /* Knowledge cards already single-column */
+  /* Knowledge cards already single-column; clamp long summaries */
+  .hit{width:100%;max-width:100%;box-sizing:border-box;min-width:0}
   .hit .ref{flex-wrap:wrap}
   .hit .t{font-size:14px;word-break:break-word}
-  /* Editor: toolbar scrolls instead of stretching page */
-  #editorPane,.editor-head{overflow-x:auto}
-  /* Knowledge: clamp long summaries */
   .hit .snippet{display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
-  .hit .t{font-size:14px}
   /* Sources: drop desktop-only grid/sort/all-select on mobile (default card view) */
   #attSelectAll{display:none}
   .toolbar [data-action="att-mode"],.toolbar [data-action="att-sort"]{display:none}
   .toolbar [data-action="att-type"]{flex:0 0 auto;white-space:nowrap}
   .editor-head .title{word-break:break-word;white-space:normal}
+  #editorPane,.editor-head{overflow-x:auto}
   .vditor-toolbar{overflow-x:auto;flex-wrap:nowrap}
+  /* Tasks 2×2 quadrant overview: shrink to fit 390px */
+  .mquad{grid-template-columns:1fr 1fr;gap:6px}
+  .mquad-cell{min-width:0;padding:10px 8px;box-sizing:border-box}
+  .mq-n{font-size:14px}
+  .mq-l{font-size:11px}
+  .mq-c{font-size:17px}
 }
 @media(max-width:400px){
   header h1{font-size:13px}
   #integBadge,#localBadge{display:none}
-  main{padding:10px 10px calc(58px + env(safe-area-inset-bottom) + 12px)}
+  main{padding:16px 16px calc(58px + env(safe-area-inset-bottom) + 16px)}
   .bn-item{font-size:10px}
 }
 /* Mobile surface cards + bottom sheet (rendered only on mobile) */
 .hit-clickable{cursor:pointer}.hit-clickable:hover{border-color:var(--accent)}
 .hit .chev{float:right;color:var(--muted);font-size:16px;margin-left:6px}
-.mnote,.msrc,.mtask{display:flex;align-items:flex-start;gap:10px;padding:12px 10px;border:1px solid var(--border);border-radius:12px;margin-bottom:8px;background:var(--panel)}
+.mnote,.msrc,.mtask{display:flex;align-items:flex-start;gap:10px;padding:12px 10px;border:1px solid var(--border);border-radius:12px;margin-bottom:8px;background:var(--panel);width:100%;max-width:100%;min-width:0;box-sizing:border-box}
 .mnote-main,.msrc-main,.mtask-main{flex:1 1 auto;min-width:0}
 .mnote-title,.msrc-name,.mtask-title{font-size:15px;font-weight:600;line-height:1.3;word-break:break-word}
 .mnote-folder,.msrc-meta,.mtask-cat,.mtask-due{font-size:12px;color:var(--muted);margin-top:2px}

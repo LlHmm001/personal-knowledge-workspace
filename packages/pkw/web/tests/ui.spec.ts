@@ -363,4 +363,13 @@ describe('PKW web UI (served page)', () => {
     // Live managed file inline chip
     expect(js).toContain('src-inline')
   })
+
+  it('ships the mobile 390px layout closure (16px padding, no duplicate title, cards fit)', () => {
+    const page = renderPage()
+    expect(page).toContain('main{padding:16px 16px calc(58px + env(safe-area-inset-bottom) + 16px)')
+    expect(page).toContain('main > h2{display:none}')
+    expect(page).toContain('.mquad-cell{min-width:0')
+    expect(page).toContain('.hit{width:100%;max-width:100%;box-sizing:border-box;min-width:0}')
+    expect(page).toContain('.mnote,.msrc,.mtask{display:flex;align-items:flex-start;gap:10px;padding:12px 10px;border:1px solid var(--border);border-radius:12px;margin-bottom:8px;background:var(--panel);width:100%;max-width:100%;min-width:0;box-sizing:border-box}')
+  })
 })
