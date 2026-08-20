@@ -231,6 +231,7 @@ mark{background:var(--mark-bg);border-radius:2px;padding:0 2px}
 /* Mobile / small tablet: single-column workspace + bottom primary nav. */
 @media(max-width:768px){
   #app{grid-template-columns:1fr;grid-template-rows:52px 1fr 58px;height:100dvh}
+  #app.no-inspector{grid-template-columns:1fr}
   #app > aside:first-of-type{display:none}
   #app > aside.right{display:none}
   main{padding:16px 16px calc(58px + env(safe-area-inset-bottom) + 16px);min-width:0;max-width:100vw;box-sizing:border-box}
@@ -288,11 +289,9 @@ mark{background:var(--mark-bg);border-radius:2px;padding:0 2px}
   main{padding:16px 16px calc(58px + env(safe-area-inset-bottom) + 16px)}
   .bn-item{font-size:10px}
 }
-/* Mobile page-content width normalization: every page content container must
-   fill the viewport (never keep a desktop width/max-width). */
+/* Mobile page-content width normalization (targeted surface containers only). */
 @media(max-width:600px){
-  main{width:100%;max-width:none;min-width:0;box-sizing:border-box;grid-column:1;grid-row:2}
-  main > *{width:100%;max-width:none;min-width:0;box-sizing:border-box}
+  main{width:100%;max-width:none;min-width:0;box-sizing:border-box}
   #kbBody,#kbList,#attList,.mquad,.mboard,.mboard-select{width:100%;max-width:none;min-width:0;box-sizing:border-box}
 }
 /* Mobile surface cards + bottom sheet (rendered only on mobile) */

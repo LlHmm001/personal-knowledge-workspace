@@ -373,12 +373,15 @@ describe('PKW web UI (served page)', () => {
     expect(page).toContain('.mnote,.msrc,.mtask{display:flex;align-items:flex-start;gap:10px;padding:12px 10px;border:1px solid var(--border);border-radius:12px;margin-bottom:8px;background:var(--panel);width:100%;max-width:100%;min-width:0;box-sizing:border-box}')
   })
 
-  it('mobile-layout-regression: page content containers fill viewport (≤600px)', () => {
+  it('mobile-layout-regression: no-inspector grid must collapse to 1 column on mobile', () => {
     const page = renderPage()
-    // Every page content container must be full-width with no desktop max-width.
-    expect(page).toContain('@media(max-width:600px){')
-    expect(page).toContain('main{width:100%;max-width:none;min-width:0;box-sizing:border-box;grid-column:1;grid-row:2}')
-    expect(page).toContain('main > *{width:100%;max-width:none;min-width:0;box-sizing:border-box}')
+    // Root cause: #app.no-inspector (desktop hide-inspector) had higher specificity
+    // than the mobile #app{grid-template-columns:1fr}, so main stayed in the 280px
+    // column whenever #detail was empty (Tasks/Notes/Knowledge). The mobile override
+    // must collapse no-inspector to a single column too.
+    expect(page).toContain('#app.no-inspector{grid-template-columns:1fr}')
+    // Targeted surface containers normalize to full width (no broad main > * rule).
+    expect(page).toContain('main{width:100%;max-width:none;min-width:0;box-sizing:border-box}')
     expect(page).toContain('#kbBody,#kbList,#attList,.mquad,.mboard,.mboard-select{width:100%;max-width:none;min-width:0;box-sizing:border-box}')
   })
 })
