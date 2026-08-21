@@ -101,21 +101,3 @@ export function hasCompanionUserContent(markdown: string): boolean {
 export function stripManagedSummaryMarkers(markdown: string): string {
   return String(markdown).replace(/^[ \t]*<!-- pkw:attachment-summary:(?:start|end)[^>]*-->[ \t]*$/gm, '')
 }
-
-/**
- * Managed source projection: scan canonical Markdown for managed attachment
- * references (`attachments/<id>/<file>`), returning the stable AttachmentIds
- * with their kind (image vs file). Identity is the AttachmentId, never the path.
- */
-export function managedSourceProjection(markdown: string): Array<{ attachmentId: string; kind: 'image' | 'file' }> {
-  const out: Array<{ attachmentId: string; kind: 'image' | 'file' }> = []
-  const re = /(!?)\[[^\]]*\]\([^)\s]*attachments\/([^/\s]+)\/[^)\s]*\)/g
-  let m: RegExpExecArray | null
-  while ((m = re.exec(String(markdown))) !== null) {
-    const attachmentId = m[2]
-    if (attachmentId !== undefined && attachmentId !== '' && !out.some(o => o.attachmentId === attachmentId)) {
-      out.push({ attachmentId, kind: m[1] === '!' ? 'image' : 'file' })
-    }
-  }
-  return out
-}
