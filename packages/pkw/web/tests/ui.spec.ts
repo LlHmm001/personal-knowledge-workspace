@@ -169,16 +169,12 @@ describe('PKW web UI (served page)', () => {
     expect(renderPage()).toContain('.task-card.selected')
   })
 
-  it('wires knowledge view (Wiki list/page/search + Graph canvas)', () => {
+  it('wires knowledge view (Home + unified RAG search)', () => {
     const js = script()
     expect(js).toContain('renderKnowledgeView')
-    expect(js).toContain('renderWikiList')
-    expect(js).toContain('openWikiPage')
-    expect(js).toContain('renderGraphView')
-    expect(js).toContain('drawGraph')
-    expect(js).toContain("api('listWikiPages'")
-    expect(js).toContain("api('getWikiGraph'")
-    expect(js).toContain('graphCanvas')
+    expect(js).toContain('renderKnowledgeBrowseInto')
+    expect(js).toContain('runSearch')
+    expect(js).toContain('searchCardsHtml')
   })
 
   it('wires missing-canonical-note recovery (missing state + remove + idempotent delete)', () => {
@@ -193,8 +189,7 @@ describe('PKW web UI (served page)', () => {
     const js = script()
     expect(js).toContain('upgrade-companion')
     expect(js).toContain("api('upgradeCompanionNote'")
-    expect(js).toContain('wikiUnavailable')
-    expect(js).toContain('graphUnavailable')
+    expect(js).toContain('knowledgeOffline')
     expect(js).toContain('companionUpgrade')
   })
 

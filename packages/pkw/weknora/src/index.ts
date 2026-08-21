@@ -106,41 +106,10 @@ export interface KnowledgeListItem {
   parse_status?: string
 }
 
-// ── Wiki / Knowledge Graph (read-only projection of WeKnora generated data) ──
-
-export interface WikiPage {
-  id: string
-  slug: string
-  title: string
-  page_type?: string
-  status?: string
-  content?: string
-  summary?: string
-  aliases?: string[]
-  category_path?: string[]
-  folder_id?: string
-  updated_at?: string
-}
-
-export interface WikiPageList {
-  pages: WikiPage[]
-  total: number
-  page: number
-  page_size: number
-  total_pages: number
-}
-
-export interface WikiFolder {
-  id: string
-  name: string
-  page_count?: number
-  has_children?: boolean
-}
-
-export interface WikiFolderList {
-  parent_id?: string
-  folders?: WikiFolder[]
-}
+// ── Knowledge Graph (read-only projection of WeKnora generated data) ──
+// Only the graph-edge mapping remains ACTIVE: `relatedKnowledge` in the Host
+// bridge reads it to resolve neighbor relations. The Wiki page/folder/stats
+// surfaces and the graph VISUALIZATION UI were removed (no product entry).
 
 export interface WikiGraphNode {
   slug: string
@@ -158,16 +127,6 @@ export interface WikiGraphData {
   nodes: WikiGraphNode[]
   edges: WikiGraphEdge[]
   meta: { mode: string; total: number; returned: number; truncated: boolean; center?: string; depth?: number }
-}
-
-export interface WikiStats {
-  total_pages: number
-  pages_by_type?: Record<string, number>
-  total_links: number
-  orphan_count?: number
-  pending_tasks?: number
-  pending_issues?: number
-  is_active?: boolean
 }
 
 /** A hybrid-search hit, mirroring WeKnora `SearchResult`. */
@@ -366,11 +325,6 @@ export class WeKnoraClient extends Service {
     return r.data
   }
 
-  async cancelParse(knowledgeId: string): Promise<Knowledge> {
-    const r = await this.request<{ data: Knowledge }>('POST', `/knowledge/${knowledgeId}/cancel-parse`, {})
-    return r.data
-  }
-
   async hybridSearch(kbId: string, params: SearchParams): Promise<SearchResultChunk[]> {
     const r = await this.request<{ data: SearchResultChunk[] }>(
       'POST', `/knowledge-bases/${kbId}/hybrid-search`,
@@ -380,11 +334,6 @@ export class WeKnoraClient extends Service {
         ...(params.knowledgeIds !== undefined ? { knowledge_ids: params.knowledgeIds } : {}),
       },
     )
-    return r.data ?? []
-  }
-
-  async listKnowledgeBases(): Promise<Array<{ id: string; name: string }>> {
-    const r = await this.request<{ data: Array<{ id: string; name: string }> }>('GET', '/knowledge-bases')
     return r.data ?? []
   }
 
@@ -416,30 +365,7 @@ export class WeKnoraClient extends Service {
     return r.data ?? []
   }
 
-  // ── Wiki (read-only parity; same generated result as WeKnora) ──────────────
-
-  async listWikiPages(kbId: string, opts: { query?: string; pageType?: string; folderId?: string; page?: number; pageSize?: number } = {}): Promise<WikiPageList> {
-    const qs = new URLSearchParams()
-    if (opts.query) qs.set('query', opts.query)
-    if (opts.pageType) qs.set('page_type', opts.pageType)
-    if (opts.folderId !== undefined) qs.set('folder_id', opts.folderId)
-    qs.set('page', String(opts.page ?? 1))
-    qs.set('page_size', String(opts.pageSize ?? 200))
-    // NOTE: WeKnora's Wiki routes live under `/knowledgebase/{kb_id}/wiki` (SINGULAR
-    // "knowledgebase"), unlike the KB ingestion routes which use `/knowledge-bases`
-    // (plural). Using the plural here 404'd every Wiki/Graph call, which is what made
-    // the Knowledge View report "unavailable" while the topbar still showed "connected".
-    return this.request<WikiPageList>('GET', `/knowledgebase/${kbId}/wiki/pages?${qs.toString()}`)
-  }
-
-  async getWikiPage(kbId: string, slug: string): Promise<WikiPage> {
-    return this.request<WikiPage>('GET', `/knowledgebase/${kbId}/wiki/pages/${encodeURIComponent(slug)}`)
-  }
-
-  async listWikiFolders(kbId: string, parentId: string = ''): Promise<WikiFolderList> {
-    const qs = parentId ? `?parent_id=${encodeURIComponent(parentId)}` : ''
-    return this.request<WikiFolderList>('GET', `/knowledgebase/${kbId}/wiki/folders${qs}`)
-  }
+  // ── Knowledge Graph (edge mapping only; Wiki pages/folders/stats removed) ──
 
   async getWikiGraph(kbId: string, opts: { mode?: string; center?: string; depth?: number; types?: string[]; limit?: number } = {}): Promise<WikiGraphData> {
     const qs = new URLSearchParams()
@@ -449,10 +375,6 @@ export class WeKnoraClient extends Service {
     if (opts.types && opts.types.length) qs.set('types', opts.types.join(','))
     if (opts.limit) qs.set('limit', String(opts.limit))
     return this.request<WikiGraphData>('GET', `/knowledgebase/${kbId}/wiki/graph?${qs.toString()}`)
-  }
-
-  async getWikiStats(kbId: string): Promise<WikiStats> {
-    return this.request<WikiStats>('GET', `/knowledgebase/${kbId}/wiki/stats`)
   }
 
   /** Fingerprint the exact Manual payload the adapter sends for the given content. */

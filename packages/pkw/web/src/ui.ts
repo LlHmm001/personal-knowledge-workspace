@@ -25,7 +25,6 @@ export function renderPage(): string {
 header{grid-column:1/-1;display:flex;align-items:center;gap:12px;padding:0 16px;background:var(--panel);border-bottom:1px solid var(--border)}
 header h1{font-size:15px;margin:0;font-weight:700}
 header .spacer{flex:1}
-#search{width:320px;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg)}
 .badge{padding:2px 9px;border-radius:999px;font-size:12px;background:var(--bg-hover);color:var(--muted);white-space:nowrap}
 .badge.ok{background:var(--co-tip-bg);color:var(--ok)}.badge.warn{background:var(--co-warning-bg);color:var(--warn)}.badge.err{background:var(--co-danger-bg);color:var(--err)}
 .langbtn{padding:6px 11px;border:1px solid var(--border);background:var(--panel);border-radius:8px;cursor:pointer;font-size:12px;color:var(--ink);font-weight:600}
@@ -213,7 +212,6 @@ aside.right h3:first-child{margin-top:0}
 .task-card.dragging{opacity:.45}
 .task-card.selected{background:var(--bg-selected);border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
 .marquee{position:fixed;border:1px solid var(--accent);background:var(--accent-soft);z-index:85;pointer-events:none}
-.graph-legend-item.dim{opacity:.35}
 .drop-over{outline:2px dashed var(--accent);outline-offset:-2px;background:var(--co-note-bg)}
 .task-src{margin-left:6px;cursor:pointer;opacity:.65}.task-src:hover{opacity:1}
 .task-mv{margin-left:auto;display:inline-flex;gap:2px;opacity:.55}.task-mv span{cursor:pointer;padding:0 5px;border-radius:4px}.task-mv span:hover{background:var(--bg-hover);opacity:1}
@@ -466,7 +464,6 @@ const STR = {
     parseStatus:'解析状态', summary:'摘要', reparse:'重新解析', reparseStarted:'已提交重新解析',
     noteMissing:'笔记文件已不存在', noteMissingBody:'笔记“{id}”的 Markdown 文件在工作区中找不到，可能已被外部删除或移动。', rescan:'重新扫描', removeFromWorkspace:'从工作区移除', removeMissingConfirm:'从工作区移除“{id}”？该笔记文件已不存在。此操作将清理 PKW 中的残留记录和知识库投影，无法从回收站恢复该文件。',
     missingSource:'源文件已不存在',
-    knowledgeWiki:'Wiki', knowledgeGraph:'图谱', knowledgeSearchTab:'搜索', wikiGenerated:'WeKnora 生成内容', wikiOpenNote:'打开笔记', wikiEmpty:'尚未生成 Wiki 页面。', wikiSearchPlaceholder:'搜索 Wiki 页面…', graphEmpty:'图谱暂无节点。', graphFit:'适应屏幕', graphHideRelations:'隐藏关系', graphShowRelations:'显示关系', graphFull:'全库概览', knowledgeUnavailable:'WeKnora 暂不可用', wikiUnavailable:'Wiki 暂不可用', graphUnavailable:'图谱暂不可用',
     companionNote:'建立伴随笔记', noteLocation:'笔记位置', kbIndex:'解析并索引', kbIndexHint:'提取摘要与正文用于搜索', uploadedNoNote:'文件已上传，但伴随笔记创建失败', uploadedCompanion:'已生成 {n} 篇伴随笔记',
     attGridView:'网格视图', attListView:'列表视图', attSearchPlaceholder:'搜索文件名…', attTypeAll:'全部', attTypeImage:'图片', attTypeDocument:'文档', attTypeOther:'其它', attSort:'排序', attSortRecent:'最近', attSortName:'名称', attSortSize:'大小',
     attSelectAll:'全选', attSelected:'已选择 {n} 项', attBatchTrash:'移入回收站', attBatchReparse:'重新解析', attBatchIndex:'重新索引', attClearSelection:'取消选择',
@@ -530,7 +527,6 @@ const STR = {
     parseStatus:'Parse status', summary:'Summary', reparse:'Reparse', reparseStarted:'Reparse submitted',
     noteMissing:'Note file is missing', noteMissingBody:'The Markdown file for note "{id}" cannot be found in the workspace. It may have been deleted or moved externally.', rescan:'Rescan', removeFromWorkspace:'Remove from workspace', removeMissingConfirm:'Remove "{id}" from the workspace? Its file is already missing. This will clean up the leftover PKW records and knowledge projection, and the file cannot be restored from Trash.',
     missingSource:'Source file missing',
-    knowledgeWiki:'Wiki', knowledgeGraph:'Graph', knowledgeSearchTab:'Search', wikiGenerated:'WeKnora generated', wikiOpenNote:'Open note', wikiEmpty:'No Wiki pages generated yet.', wikiSearchPlaceholder:'Search Wiki pages…', graphEmpty:'No graph nodes.', graphFit:'Fit screen', graphHideRelations:'Hide relations', graphShowRelations:'Show relations', graphFull:'Full library', knowledgeUnavailable:'WeKnora unavailable', wikiUnavailable:'Wiki unavailable', graphUnavailable:'Graph unavailable',
     companionNote:'Create companion note', noteLocation:'Note location', kbIndex:'Parse & index', kbIndexHint:'Extract summary & text for search', uploadedNoNote:'File uploaded, but companion note creation failed', uploadedCompanion:'Created {n} companion notes',
     attGridView:'Grid view', attListView:'List view', attSearchPlaceholder:'Search filename…', attTypeAll:'All', attTypeImage:'Images', attTypeDocument:'Documents', attTypeOther:'Other', attSort:'Sort', attSortRecent:'Recent', attSortName:'Name', attSortSize:'Size',
     attSelectAll:'Select all', attSelected:'{n} selected', attBatchTrash:'Trash', attBatchReparse:'Reparse', attBatchIndex:'Re-index', attClearSelection:'Clear selection',
@@ -621,11 +617,8 @@ const state = {
   trashBusy: false,
   inspectorCollapsed: false,
   selectedTaskIds: new Set(),
-  knowledgeTab: 'browse',
   knowledgeCache: null,
   knowledgeShowAll: false,
-  wikiFolder: '',
-  graphTypes: [],
 }
 // ── View switching: navigation guard + single-flight + instrumentation ──────
 let viewSeq = 0
@@ -2625,100 +2618,6 @@ async function renderKnowledgeBrowseInto(){
     if (box) box.innerHTML = '<div class="empty">' + esc(t('knowledgeOffline')) + '</div><div class="empty"><button class="btn" data-action="knowledge-tab" data-tab="browse">' + esc(t('retry')) + '</button></div>'
   }
 }
-async function renderWikiList(){
-  const seq = viewSeq
-  $('#treeToolbar').innerHTML = ''; $('#detail').innerHTML = ''
-  $('#main').innerHTML = '<div class="empty">' + esc(t('loading')) + '</div>'
-  try {
-    const r = await loadOnce('listWikiPages', { pageSize: 200, folderId: state.wikiFolder })
-    if (seq !== viewSeq) return
-    const pages = (r && r.pages) || []
-    if (!pages.length) { $('#main').innerHTML = '<div class="empty"><h3>' + esc(t('wikiEmpty')) + '</h3></div>'; return }
-    $('#main').innerHTML = '<h2>' + esc(t('knowledgeWiki')) + '<span class="sub">' + ((r && r.total) || pages.length) + '</span></h2>' +
-      '<input id="wikiSearch" placeholder="' + esc(t('wikiSearchPlaceholder')) + '" style="width:100%;margin-bottom:10px">' +
-      pages.map(p => '<div class="tree-row" data-action="open-wiki-page" data-slug="' + esc(p.slug) + '"><span class="ic">📄</span><span class="nm">' + esc(p.title) + '</span>' + (p.page_type ? '<span class="badge">' + esc(p.page_type) + '</span>' : '') + '</div>').join('')
-    $('#wikiSearch').addEventListener('keydown', (e) => { if (e.key === 'Enter') { const q = $('#wikiSearch').value.trim(); wikiSearch(q) } })
-  } catch (e) { if (seq === viewSeq) $('#main').innerHTML = '<div class="empty"><h3>' + esc(t('wikiUnavailable')) + '</h3><p class="muted">' + esc(e.message || '') + '</p><button class="btn" data-action="knowledge-tab" data-tab="wiki">' + esc(t('retry')) + '</button></div>' }
-}
-async function wikiSearch(q){
-  const seq = viewSeq
-  if (!q) { renderWikiList(); return }
-  try {
-    const r = await api('listWikiPages', { query: q, pageSize: 50 })
-    if (seq !== viewSeq) return
-    const pages = (r && r.pages) || []
-    $('#main').innerHTML = '<h2>' + esc(t('knowledgeWiki')) + '<span class="sub">' + esc(q) + '</span></h2>' +
-      (pages.length ? pages.map(p => '<div class="tree-row" data-action="open-wiki-page" data-slug="' + esc(p.slug) + '"><span class="ic">📄</span><span class="nm">' + esc(p.title) + '</span>' + (p.page_type ? '<span class="badge">' + esc(p.page_type) + '</span>' : '') + '</div>').join('') : '<div class="empty">' + esc(t('noHits', { q })) + '</div>')
-  } catch (e) { if (seq === viewSeq) toast(t('genericError') + ': ' + e.message, 'err') }
-}
-async function openWikiPage(slug){
-  const seq = viewSeq
-  try {
-    const p = await api('getWikiPage', { slug })
-    if (seq !== viewSeq) return
-    const md = p.content || p.summary || ''
-    const html = await api('renderMarkdown', { markdown: md }).catch(() => esc(md))
-    if (seq !== viewSeq) return
-    const tree = await api('getTree', { sortMode: 'manual' }).catch(() => ({ root: [] }))
-    if (seq !== viewSeq) return
-    const found = findNoteByTitleOrPath(tree.root || [], p.title)
-    $('#main').innerHTML = '<div class="toolbar"><button class="btn" data-action="back-wiki">← ' + esc(t('knowledgeWiki')) + '</button>' +
-      (found ? '<button class="btn primary" data-action="open-note" data-id="' + esc(found.noteId) + '">' + esc(t('wikiOpenNote')) + '</button>' : '') +
-      '<span class="muted small">' + esc(t('wikiGenerated')) + '</span></div>' +
-      '<h2>' + esc(p.title) + (p.page_type ? ' <span class="badge">' + esc(p.page_type) + '</span>' : '') + '</h2>' +
-      (p.summary && p.summary !== p.content ? '<p class="muted">' + esc(p.summary) + '</p>' : '') +
-      '<div id="preview" style="min-height:40vh">' + html + '</div>'
-    $('#detail').innerHTML = '<h3>' + esc(t('knowledge')) + '</h3><div class="kv"><b>' + esc(t('wikiGenerated')) + '</b> <span class="v muted">' + esc(t('knowledgeWiki')) + '</span></div>' +
-      (found ? '<div class="kv"><b>' + esc(t('noteLabel')) + '</b> <span class="v"><a href="#" data-action="open-note" data-id="' + esc(found.noteId) + '">' + esc(found.title) + '</a></span></div>' : '')
-  } catch (e) { toast(t('genericError') + ': ' + e.message, 'err') }
-}
-function graphColor(type){
-  const map = { summary: '#5b8cff', entity: '#34d399', concept: '#fbbf24', synthesis: '#38bdf8', comparison: '#a78bfa' }
-  return map[type] || 'var(--accent)'
-}
-function renderGraphView(){
-  const seq = viewSeq
-  $('#treeToolbar').innerHTML = ''; $('#detail').innerHTML = ''
-  $('#main').innerHTML = '<div class="empty">' + esc(t('loading')) + '</div>'
-  api('getWikiGraph', { mode: 'overview', limit: 500, types: state.graphTypes.length ? state.graphTypes : undefined }).then(g => {
-    if (seq !== viewSeq) return
-    const nodes = g.nodes || [], edges = g.edges || []
-    if (!nodes.length) { $('#main').innerHTML = '<div class="empty"><h3>' + esc(t('graphEmpty')) + '</h3></div>'; return }
-    $('#main').innerHTML = '<h2>' + esc(t('knowledgeGraph')) + '<span class="sub">' + (g.meta ? g.meta.total : nodes.length) + '</span></h2>' +
-      '<div class="toolbar"><button class="btn small" data-action="graph-fit">' + esc(t('graphFit')) + '</button><button class="btn small" data-action="graph-toggle-rel">' + esc(t('graphHideRelations')) + '</button></div>' +
-      '<canvas id="graphCanvas" style="width:100%;height:58vh;border:1px solid var(--border);border-radius:8px;background:var(--bg-surface)"></canvas>' +
-      '<div class="muted small" style="margin-top:6px">' + ['summary', 'entity', 'concept', 'synthesis', 'comparison'].map(ty => '<span class="badge graph-legend-item' + (state.graphTypes.includes(ty) ? '' : ' dim') + '" data-action="graph-filter-type" data-type="' + ty + '" style="background:' + graphColor(ty) + ';color:#fff;margin-right:6px;cursor:pointer">' + esc(ty) + '</span>').join('') + '</div>'
-    drawGraph(nodes, edges)
-  }).catch(e => { if (seq === viewSeq) $('#main').innerHTML = '<div class="empty"><h3>' + esc(t('graphUnavailable')) + '</h3><p class="muted">' + esc((e && e.message) || '') + '</p><button class="btn" data-action="knowledge-tab" data-tab="graph">' + esc(t('retry')) + '</button></div>' })
-}
-function drawGraph(nodes, edges){
-  const canvas = $('#graphCanvas'); if (!canvas) return
-  const ctx = canvas.getContext('2d')
-  const dpr = window.devicePixelRatio || 1
-  const W = canvas.clientWidth, H = canvas.clientHeight
-  canvas.width = W * dpr; canvas.height = H * dpr; ctx.scale(dpr, dpr)
-  // simple circular layout (stable, no external force lib)
-  const bySlug = {}
-  nodes.forEach((n, i) => { const a = (i / nodes.length) * Math.PI * 2; bySlug[n.slug] = { ...n, x: W / 2 + Math.cos(a) * Math.min(W, H) * 0.38, y: H / 2 + Math.sin(a) * Math.min(W, H) * 0.38 } })
-  let panX = 0, panY = 0, scale = 1, showRel = true, dragging = false, last = null
-  function render(){
-    ctx.clearRect(0, 0, W, H)
-    ctx.save(); ctx.translate(panX, panY); ctx.scale(scale, scale)
-    if (showRel) { ctx.strokeStyle = 'rgba(128,140,160,.35)'; ctx.lineWidth = 1; edges.forEach(e => { const a = bySlug[e.source], b = bySlug[e.target]; if (a && b) { ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke() } }) }
-    nodes.forEach(n => { const p = bySlug[n.slug]; ctx.beginPath(); ctx.arc(p.x, p.y, 5 + Math.min(8, n.link_count), 0, Math.PI * 2); ctx.fillStyle = graphColor(n.page_type); ctx.fill() })
-    ctx.restore()
-    if (showRel) { ctx.fillStyle = 'var(--text-muted)'; ctx.font = '11px sans-serif'; ctx.fillText(nodes.length + ' nodes', 8, H - 8) }
-  }
-  function hit(x, y){ for (const n of nodes) { const p = bySlug[n.slug]; if ((x - p.x) * (x - p.x) + (y - p.y) * (y - p.y) < 100) return n } return null }
-  render()
-  canvas.addEventListener('mousedown', (e) => { dragging = true; last = { x: e.offsetX, y: e.offsetY } })
-  canvas.addEventListener('mousemove', (e) => { if (dragging) { panX += e.offsetX - last.x; panY += e.offsetY - last.y; last = { x: e.offsetX, y: e.offsetY }; render() } })
-  canvas.addEventListener('mouseup', () => { dragging = false })
-  canvas.addEventListener('wheel', (e) => { e.preventDefault(); scale = Math.max(0.2, Math.min(4, scale * (e.deltaY < 0 ? 1.1 : 0.9))); render() }, { passive: false })
-  canvas.addEventListener('click', (e) => { const n = hit((e.offsetX - panX) / scale, (e.offsetY - panY) / scale); if (n) openWikiPage(n.slug) })
-  canvas._fit = () => { panX = 0; panY = 0; scale = 1; render() }
-  canvas._toggleRel = () => { showRel = !showRel; const b = document.querySelector('[data-action="graph-toggle-rel"]'); if (b) b.textContent = showRel ? t('graphHideRelations') : t('graphShowRelations'); render() }
-}
 function searchCardsHtml(results){
   return results.map(r => {
     const local = r.local
@@ -3415,7 +3314,7 @@ document.addEventListener('mouseup', (e) => {
   document.body.appendChild(bar)
 })
 
-// ── Task drag/drop (HTML5 DnD; mirrors resolveTaskDrop domain semantics) ────
+// ── Task drag/drop (HTML5 DnD, client-side) ────
 document.addEventListener('dragstart', (e) => {
   const card = e.target.closest('.task-card[draggable="true"]')
   if (!card) return
@@ -3614,7 +3513,7 @@ document.addEventListener('click', (e) => {
   else if (act === 'theme-system') setTheme('system')
   else if (act === 'theme-light') setTheme('light')
   else if (act === 'theme-dark') setTheme('dark')
-  else if (act === 'knowledge-tab') { state.knowledgeTab = el.dataset.tab || 'wiki'; renderKnowledgeView() }
+  else if (act === 'knowledge-tab') { renderKnowledgeView() }
   else if (act === 'kb-clear-search') { state.searchQuery = ''; state.searchResults = null; renderKnowledgeView() }
   else if (act === 'knowledge-view-all') { state.knowledgeShowAll = true; renderKnowledgeBrowseInto() }
   else if (act === 'knowledge-back-home') { state.knowledgeShowAll = false; renderKnowledgeBrowseInto() }
@@ -3694,12 +3593,6 @@ document.addEventListener('click', (e) => {
       { label: t('del'), action: 'delete-note', id: nid, danger: true },
     ])
   }
-  else if (act === 'wiki-folder') { state.wikiFolder = el.dataset.folder || ''; renderKnowledgeView() }
-  else if (act === 'open-wiki-page') openWikiPage(el.dataset.slug)
-  else if (act === 'back-wiki') renderWikiList()
-  else if (act === 'graph-fit') { const c = $('#graphCanvas'); if (c && c._fit) c._fit() }
-  else if (act === 'graph-toggle-rel') { const c = $('#graphCanvas'); if (c && c._toggleRel) c._toggleRel() }
-  else if (act === 'graph-filter-type') { const ty = el.dataset.type; const i = state.graphTypes.indexOf(ty); if (i >= 0) state.graphTypes.splice(i, 1); else state.graphTypes.push(ty); renderGraphView() }
 })
 // Trash selection is pure local state: checkbox/select-all toggles never fetch.
 document.addEventListener('change', (e) => {
