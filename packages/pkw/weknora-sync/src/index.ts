@@ -200,6 +200,15 @@ const M_SYNCED = 'synced'
 const M_STALE = 'stale'
 const M_DELETED = 'deleted'
 
+/**
+ * Relative relevance band for retrieval. WeKnora hybrid-search scores are
+ * RRF-style fused values (rank-based, ~0.016 at rank 1) — NOT a 0..1 cosine —
+ * so an absolute floor is meaningless and silently erased every result. Only a
+ * relative band of the top score is valid. See the live-verification note in
+ * the sprint report.
+ */
+const RELEVANCE_RELATIVE_FLOOR = 0.25
+
 export interface RetrievalEvidence {
   chunkId: string
   content: string
@@ -234,6 +243,21 @@ export interface RetrievalResult {
   }
   /** Internal retrieval evidence: every chunk that matched, aggregated to one business object. Never exposed verbatim to the user. */
   evidence?: RetrievalEvidence[]
+}
+
+/**
+ * Readable dev-diagnostic for one retrieval run (C4). Stage-by-stage counts so a
+ * "search found nothing" can be localized to exactly the layer that dropped the
+ * hits — never exposed in the product UI, only logged + available on the RPC.
+ */
+export interface RetrievalTrace {
+  query: string
+  mainRaw: number
+  processingRaw: number
+  afterBusiness: number
+  afterCanonical: number
+  afterRelevance: number
+  final: number
 }
 
 /**
@@ -657,7 +681,20 @@ export class WeKnoraSyncService extends Service {
     let processingKnowledgeId = existing?.processingKnowledgeId
     if (processingKnowledgeId === undefined) {
       const bytes = await this.ctx.pkwAttachments.open(attachmentId)
-      const uploaded = await this.ctx.pkwWeKnora.uploadFile(kbId, { content: bytes, filename: rec.filename, mimeType: rec.mimeType, channel: 'pkw-processing' })
+      let uploaded
+      try {
+        uploaded = await this.ctx.pkwWeKnora.uploadFile(kbId, { content: bytes, filename: rec.filename, mimeType: rec.mimeType, channel: 'pkw-processing' })
+      } catch (error) {
+        // 409 duplicate_file: the SAME bytes already exist in this Processing KB
+        // (WeKnora dedups by file_hash). Adopt the existing KnowledgeId instead of
+        // re-throwing — otherwise every drain re-uploads and 409s forever, which
+        // is the "operations get slower over time" hot loop.
+        if (error instanceof WeKnoraError && error.kind === 'conflict' && error.duplicate !== undefined) {
+          uploaded = error.duplicate
+        } else {
+          throw error
+        }
+      }
       processingKnowledgeId = uploaded.id
       await this.reqProcessing().put(key, { attachmentId: key, workspaceId: this.config.workspaceId, processingKbId: kbId, processingKnowledgeId, state: 'parsing', configFingerprint: cfgFp, updatedAt: this.now() })
     }
@@ -1530,13 +1567,25 @@ export class WeKnoraSyncService extends Service {
   // ── retrieval ───────────────────────────────────────────────────────────────
 
   async search(query: string, opts: { kbId?: string; limit?: number; knowledgeIds?: string[] } = {}): Promise<RetrievalResult[]> {
+    return (await this.searchWithTrace(query, opts)).results
+  }
+
+  /**
+   * Retrieval with a dev-diagnostic trace (C4). Same pipeline as {@link search};
+   * the trace lets "search found nothing" be localized to the exact layer.
+   */
+  async searchWithTrace(query: string, opts: { kbId?: string; limit?: number; knowledgeIds?: string[] } = {}): Promise<{ results: RetrievalResult[]; trace: RetrievalTrace }> {
     const kbId = opts.kbId ?? this.config.kbId
     const limit = opts.limit ?? 10
+    const trace: RetrievalTrace = { query, mainRaw: 0, processingRaw: 0, afterBusiness: 0, afterCanonical: 0, afterRelevance: 0, final: 0 }
+
     const mainChunks: SearchResultChunk[] = await this.ctx.pkwWeKnora.hybridSearch(kbId, {
       query,
       limit,
       ...(opts.knowledgeIds !== undefined ? { knowledgeIds: opts.knowledgeIds } : {}),
     })
+    trace.mainRaw = mainChunks.length
+
     // Immediate hide: a locally-deleted (or stale) projection must not surface in
     // PKW retrieval even while the async WeKnora delete is still converging.
     const main = mainChunks
@@ -1549,12 +1598,13 @@ export class WeKnoraSyncService extends Service {
     // A2 federation: also search the Processing KB and remap hits to Business
     // Knowledge (owner Notes), then merge into the Main results.
     const processing = await this.searchProcessingForBusiness(query, limit)
+    trace.processingRaw = processing.raw
 
     // Retrieval Core (Foundation-lite): aggregate chunk-level EVIDENCE into one
     // BUSINESS result per Note / Attachment / Knowledge. A single PDF's N chunks
     // must never surface as N duplicate cards.
     const byBusiness = new Map<string, RetrievalResult>()
-    for (const r of [...main, ...processing]) {
+    for (const r of [...main, ...processing.results]) {
       const key = this.businessKey(r)
       const existing = byBusiness.get(key)
       if (existing === undefined) {
@@ -1580,15 +1630,48 @@ export class WeKnoraSyncService extends Service {
         }
       }
     }
+    trace.afterBusiness = byBusiness.size
 
-    const results = [...byBusiness.values()]
-    if (results.length === 0) return []
-    // Lightweight relevance floor (rules, not a trained reranker): keep results
-    // within a relative band of the top score, with a conservative absolute floor.
-    results.sort((a, b) => b.remote.score - a.remote.score)
-    const top = results[0]!.remote.score
-    const floor = Math.max(0.1, top * 0.25)
-    return results.filter(r => r.remote.score >= floor).slice(0, limit)
+    // Active canonical filter (B7): a remote hit whose local entity was deleted
+    // (or archived) must not surface while the async delete is converging. This
+    // mirrors the RPC-boundary guard so the trace count is authoritative.
+    const canonical: RetrievalResult[] = []
+    for (const r of byBusiness.values()) {
+      if (r.local === undefined) { canonical.push(r); continue }
+      if (r.local.entityType === ENTITY_NOTE) {
+        const n = this.ctx.pkwNotes.get(NoteId(r.local.entityId))
+        if (n === undefined || n.deletedAt !== undefined) continue
+      } else if (r.local.entityType === ENTITY_ATTACHMENT) {
+        const a = this.ctx.pkwAttachments.get(AttachmentId(r.local.entityId))
+        if (a === undefined || a.deletedAt !== undefined) continue
+      }
+      canonical.push(r)
+    }
+    trace.afterCanonical = canonical.length
+
+    if (canonical.length === 0) {
+      this.logRetrievalTrace(trace)
+      return { results: [], trace }
+    }
+
+    // Relevance floor is RELATIVE-ONLY. WeKnora hybrid-search returns RRF-style
+    // fused scores whose absolute magnitude is meaningless (a rank-1 hit scores
+    // ≈0.016, not a 0..1 cosine), so an absolute floor like `0.1` filtered every
+    // result out. A relative band of the top score keeps the ranking without
+    // erasing it.
+    canonical.sort((a, b) => b.remote.score - a.remote.score)
+    const top = canonical[0]!.remote.score
+    const floor = top * RELEVANCE_RELATIVE_FLOOR
+    const filtered = canonical.filter(r => r.remote.score >= floor)
+    trace.afterRelevance = filtered.length
+    const results = filtered.slice(0, limit)
+    trace.final = results.length
+    this.logRetrievalTrace(trace)
+    return { results, trace }
+  }
+
+  private logRetrievalTrace(trace: RetrievalTrace): void {
+    this.ctx.logger.info(`[pkw.retrieval] q=${JSON.stringify(trace.query)} main=${trace.mainRaw} processing=${trace.processingRaw} business=${trace.afterBusiness} canonical=${trace.afterCanonical} relevance=${trace.afterRelevance} final=${trace.final}`)
   }
 
   /** Business-object identity for retrieval aggregation (Note > Attachment > Knowledge). */
@@ -1604,13 +1687,13 @@ export class WeKnoraSyncService extends Service {
   }
 
   /** A2: search the Processing KB and remap hits → owner Note (Business Knowledge). */
-  private async searchProcessingForBusiness(query: string, limit: number): Promise<RetrievalResult[]> {
+  private async searchProcessingForBusiness(query: string, limit: number): Promise<{ results: RetrievalResult[]; raw: number }> {
     const kbRec = this.reqProcessingKb().get(this.config.workspaceId)
-    if (kbRec?.processingKbId === undefined) return []
+    if (kbRec?.processingKbId === undefined) return { results: [], raw: 0 }
     let chunks: SearchResultChunk[]
     try {
       chunks = await this.ctx.pkwWeKnora.hybridSearch(kbRec.processingKbId, { query, limit })
-    } catch { return [] }
+    } catch { return { results: [], raw: 0 } }
 
     const out: RetrievalResult[] = []
     for (const chunk of chunks) {
@@ -1638,7 +1721,7 @@ export class WeKnoraSyncService extends Service {
         })
       }
     }
-    return out
+    return { results: out, raw: chunks.length }
   }
 
   private findProcessingByKnowledgeId(knowledgeId: string): ProcessingRecord | undefined {
