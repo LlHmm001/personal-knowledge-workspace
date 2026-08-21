@@ -143,9 +143,10 @@ describe('PKW Web Host Bridge (real Core integration)', () => {
     const { web, sync } = await boot()
     const created = await web.call('createNote', { relativePath: 's.md', markdown: '# searchable note\n' }) as { noteId: string }
     await sync.syncNote(created.noteId as never) // force real WeKnora sync
-    const results = await web.call('search', { query: 'searchable', limit: 5 }) as Array<{ local?: { entityType: string; entityId: string }; remote: { knowledgeId: string } }>
-    expect(results.length).toBeGreaterThan(0)
-    const hit = results.find(r => r.local !== undefined)
+    const payload = await web.call('search', { query: 'searchable', limit: 5 }) as { results: Array<{ local?: { entityType: string; entityId: string }; remote: { knowledgeId: string } }>; trace: Record<string, unknown> }
+    expect(payload.results.length).toBeGreaterThan(0)
+    expect(payload.trace).toBeDefined()
+    const hit = payload.results.find(r => r.local !== undefined)
     expect(hit).toBeDefined()
     expect(hit!.local!.entityType).toBe('note')
     expect(hit!.local!.entityId).toBe(created.noteId)
@@ -471,9 +472,9 @@ describe('PKW Web Host Bridge (real Core integration)', () => {
     const { web, sync } = await boot()
     const created = await web.call('createNote', { relativePath: 'sub/s.md', markdown: '# searchable note\n' }) as { noteId: string }
     await sync.syncNote(created.noteId as never)
-    const results = await web.call('search', { query: 'searchable', limit: 5 }) as Array<{ local?: Record<string, unknown>; remote: Record<string, unknown> }>
-    expect(results.length).toBeGreaterThan(0)
-    const hit = results.find(r => r.local !== undefined)!
+    const payload = await web.call('search', { query: 'searchable', limit: 5 }) as { results: Array<{ local?: Record<string, unknown>; remote: Record<string, unknown> }>; trace: Record<string, unknown> }
+    expect(payload.results.length).toBeGreaterThan(0)
+    const hit = payload.results.find(r => r.local !== undefined)!
     expect(hit).toBeDefined()
     expect(hit.remote).not.toHaveProperty('knowledgeId')
     expect(hit.remote).not.toHaveProperty('kbId')
@@ -496,8 +497,8 @@ describe('PKW Web Host Bridge (real Core integration)', () => {
     const created = await web.call('createNote', { relativePath: 'gone.md', markdown: '# searchable gone\n' }) as { noteId: string }
     await sync.syncNote(created.noteId as never)
     await web.call('deleteNote', { noteId: created.noteId })
-    const results = await web.call('search', { query: 'searchable', limit: 5 }) as Array<{ local?: { entityId: string } }>
-    expect(results.some(r => r.local !== undefined && r.local.entityId === created.noteId)).toBe(false)
+    const payload = await web.call('search', { query: 'searchable', limit: 5 }) as { results: Array<{ local?: { entityId: string } }> }
+    expect(payload.results.some(r => r.local !== undefined && r.local.entityId === created.noteId)).toBe(false)
   })
 
   it('renameNoteTitle rewrites the title, preserving NoteId and path', async () => {

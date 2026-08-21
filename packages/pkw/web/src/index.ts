@@ -750,8 +750,8 @@ export class PkwWebService extends Service {
         return { purged: true }
       }
       case 'search': {
-        const results = await this.sync.search(String(args.query), { limit: typeof args.limit === 'number' ? args.limit : 10 })
-        return this.enrichRetrievalResults(results)
+        const { results, trace } = await this.sync.searchWithTrace(String(args.query), { limit: typeof args.limit === 'number' ? args.limit : 10 })
+        return { results: this.enrichRetrievalResults(results), trace }
       }
       case 'listKnowledge': return this.listKnowledge()
       case 'relatedKnowledge': return this.relatedKnowledge(String(args.noteId))

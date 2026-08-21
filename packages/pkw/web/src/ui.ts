@@ -390,6 +390,14 @@ a.src-inline::before{content:"📄";font-size:14px}
 a.src-inline:hover{border-color:var(--accent)}
 /* Search → Viewer navigation context */
 .search-context-banner{display:inline-block;margin:2px 0 4px;padding:3px 10px;border-radius:999px;font-size:12px;background:var(--bg-hover);color:var(--text-secondary);border:1px solid var(--border)}
+/* Folder-aware Notes Explorer: breadcrumb + selection */
+.crumbs{display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin-bottom:8px}
+.crumbs .crumb-link{background:none;border:none;color:var(--accent);cursor:pointer;font-size:13px;padding:2px 4px;border-radius:6px}
+.crumbs .crumb-link:hover{background:var(--accent-soft)}
+.crumbs .crumb-sep{color:var(--muted)}
+.sel-bar{background:var(--accent-soft);border:1px solid var(--accent);border-radius:8px;padding:6px 8px}
+.exp-check{flex:0 0 auto;margin:0;cursor:pointer}
+.explorer-item .chev{color:var(--muted)}
 </style>
 </head>
 <body>
@@ -453,7 +461,7 @@ const STR = {
     batchComplete:'标记完成', batchReopen:'重新打开', batchDelete:'删除 {n} 项任务', batchDeleteConfirm:'删除 {n} 项任务？', batchDeleteHint:'这些任务删除后无法恢复。', batchDone:'已处理 {n} 项', batchPartial:'已处理 {n} 项，{m} 项失败',
     themeSystem:'跟随系统', themeLight:'浅色', themeDark:'深色',
     knowledge:'知识', knowledgeIndexed:'已索引', knowledgePending:'待索引', knowledgeNotIndexed:'未索引', knowledgeParseFailed:'解析失败', relatedNotes:'相关笔记', relatedKnowledge:'相关知识', refAttachments:'引用附件', mime:'类型', attWaiting:'等待解析', attProcessing:'解析中', attOptimizing:'优化索引中', attReady:'已解析', attFailed:'解析失败', attachments:'附件', businessKnowledge:'知识',
-    knowledgeBrowse:'浏览', knowledgeBrowseTitle:'知识发现', knowledgeEmpty:'还没有可发现的知识。', knowledgeOffline:'知识检索暂不可用', sourceLabel:'来源', attachmentsN:'附件 ×{n}', knowledgeFilterPlaceholder:'筛选知识（标题 / 摘要 / 来源）…',
+    knowledgeBrowse:'浏览', knowledgeBrowseTitle:'知识发现', knowledgeEmpty:'还没有可发现的知识。', knowledgeOffline:'知识检索暂不可用', sourceLabel:'来源', attachmentsN:'附件 ×{n}', knowledgeFilterPlaceholder:'筛选知识（标题 / 摘要 / 来源）…', recentKnowledge:'最近知识', sourceOverview:'来源概览', viewAllKnowledge:'查看全部知识',
     sources:'来源', sourcesDesc:'你上传的知识资料来源文件。', usedIn:'用于', usedByN:'{n} 篇笔记使用', isolated:'未关联笔记', isolatedHint:'该文件还没有被任何笔记引用。', hasSummary:'有摘要', refresh:'刷新', sourceFiles:'来源文件', mobileMore:'更多', back:'返回', openInNewTab:'新标签打开',
     parseStatus:'解析状态', summary:'摘要', reparse:'重新解析', reparseStarted:'已提交重新解析',
     noteMissing:'笔记文件已不存在', noteMissingBody:'笔记“{id}”的 Markdown 文件在工作区中找不到，可能已被外部删除或移动。', rescan:'重新扫描', removeFromWorkspace:'从工作区移除', removeMissingConfirm:'从工作区移除“{id}”？该笔记文件已不存在。此操作将清理 PKW 中的残留记录和知识库投影，无法从回收站恢复该文件。',
@@ -468,7 +476,7 @@ const STR = {
     details:'详情', noteId:'NoteId', attachmentId:'AttachmentId', path:'路径', revision:'版本', updated:'更新时间', lastError:'最近错误', maintenance:'维护', advanced:'高级',
     workspaceSummary:'工作区摘要', kb:'知识库', state:'状态', parse:'解析', syncSection:'WeKnora 同步', noSyncInfo:'尚未同步。',
     reconcileDone:'重建完成', reconcileResult:'笔记修复 {a} · 附件修复 {b} · 待同步 {c} · 已删 {d}', syncingAll:'正在同步…', genericError:'操作失败', ok:'完成', emptyPreview:'（空）', searchFailed:'搜索失败',
-    folder:'文件夹', rootFolder:'（根目录）', newNoteHere:'在此新建笔记', newSubfolder:'新建子文件夹', renameFolder:'重命名', moveTo:'移动到…', deleteFolder:'删除文件夹', trashFolder:'移入回收站',
+    folder:'文件夹', rootFolder:'（根目录）', notesRoot:'笔记', upLevel:'上一级', newNoteHere:'在此新建笔记', newSubfolder:'新建子文件夹', renameFolder:'重命名', moveTo:'移动到…', deleteFolder:'删除文件夹', trashFolder:'移入回收站',
     recentNotes:'最近笔记', foldersSection:'文件夹', allNotes:'全部笔记', recentEdited:'最近编辑', myFolders:'我的文件夹', manageFolders:'管理文件夹', unfiled:'未归档', notesCount:'{n} 篇笔记', noFolders:'还没有文件夹。', mobileEditDesktopOnly:'正文编辑请在桌面端使用',
     folderTrashTitle:'此文件夹包含 {n} 个笔记 · {m} 个子文件夹', folderTrashWhole:'整个文件夹和全部内容移入回收站', folderTrashKeep:'保留内容：移到上一级，仅删除当前文件夹',
     folderRenamePrompt:'新文件夹名称', folderDeleteConfirm:'删除文件夹「{n}」？', folderNotEmpty:'文件夹不为空，无法删除。', moveNoteTo:'移动笔记到', moveUp:'上移', moveDown:'下移',
@@ -517,7 +525,7 @@ const STR = {
     batchComplete:'Mark complete', batchReopen:'Reopen', batchDelete:'Delete {n} tasks', batchDeleteConfirm:'Delete {n} tasks?', batchDeleteHint:'These tasks cannot be restored after deletion.', batchDone:'Processed {n} items', batchPartial:'Processed {n} items, {m} failed',
     themeSystem:'Follow system', themeLight:'Light', themeDark:'Dark',
     knowledge:'Knowledge', knowledgeIndexed:'Indexed', knowledgePending:'Pending', knowledgeNotIndexed:'Not indexed', knowledgeParseFailed:'Parse failed', relatedNotes:'Related notes', relatedKnowledge:'Related knowledge', refAttachments:'Referenced attachments', mime:'Type', attWaiting:'Waiting', attProcessing:'Processing', attOptimizing:'Optimizing index', attReady:'Parsed', attFailed:'Parse failed', attachments:'Attachments', businessKnowledge:'Knowledge',
-    knowledgeBrowse:'Browse', knowledgeBrowseTitle:'Knowledge Discovery', knowledgeEmpty:'No discoverable knowledge yet.', knowledgeOffline:'Knowledge search unavailable', sourceLabel:'Source', attachmentsN:'{n} attachments', knowledgeFilterPlaceholder:'Filter knowledge (title / summary / source)…',
+    knowledgeBrowse:'Browse', knowledgeBrowseTitle:'Knowledge Discovery', knowledgeEmpty:'No discoverable knowledge yet.', knowledgeOffline:'Knowledge search unavailable', sourceLabel:'Source', attachmentsN:'{n} attachments', knowledgeFilterPlaceholder:'Filter knowledge (title / summary / source)…', recentKnowledge:'Recent knowledge', sourceOverview:'Source overview', viewAllKnowledge:'View all knowledge',
     sources:'Sources', sourcesDesc:'The source files that make up your knowledge.', usedIn:'Used in', usedByN:'{n} notes use this', isolated:'Not linked to a note', isolatedHint:'This file is not referenced by any note yet.', hasSummary:'Has summary', refresh:'Refresh', sourceFiles:'Source files', mobileMore:'More', back:'Back', openInNewTab:'Open in new tab',
     parseStatus:'Parse status', summary:'Summary', reparse:'Reparse', reparseStarted:'Reparse submitted',
     noteMissing:'Note file is missing', noteMissingBody:'The Markdown file for note "{id}" cannot be found in the workspace. It may have been deleted or moved externally.', rescan:'Rescan', removeFromWorkspace:'Remove from workspace', removeMissingConfirm:'Remove "{id}" from the workspace? Its file is already missing. This will clean up the leftover PKW records and knowledge projection, and the file cannot be restored from Trash.',
@@ -532,7 +540,7 @@ const STR = {
     details:'Details', noteId:'NoteId', attachmentId:'AttachmentId', path:'Path', revision:'Revision', updated:'Updated', lastError:'Last error', maintenance:'Maintenance', advanced:'Advanced',
     workspaceSummary:'Workspace summary', kb:'KB', state:'State', parse:'Parse', syncSection:'WeKnora Sync', noSyncInfo:'Not synced yet.',
     reconcileDone:'Reconcile done', reconcileResult:'Notes repaired {a} · attachments repaired {b} · dirty {c} · deleted {d}', syncingAll:'Syncing…', genericError:'Operation failed', ok:'Done', emptyPreview:'(empty)', searchFailed:'Search failed',
-    folder:'Folder', rootFolder:'(root)', newNoteHere:'New note here', newSubfolder:'New subfolder', renameFolder:'Rename', moveTo:'Move to…', deleteFolder:'Delete folder', trashFolder:'Move to trash',
+    folder:'Folder', rootFolder:'(root)', notesRoot:'Notes', upLevel:'Up', newNoteHere:'New note here', newSubfolder:'New subfolder', renameFolder:'Rename', moveTo:'Move to…', deleteFolder:'Delete folder', trashFolder:'Move to trash',
     recentNotes:'Recent notes', foldersSection:'Folders', allNotes:'All notes', recentEdited:'Recently edited', myFolders:'My folders', manageFolders:'Manage folders', unfiled:'Unfiled', notesCount:'{n} notes', noFolders:'No folders yet.', mobileEditDesktopOnly:'Editing is available on desktop',
     folderTrashTitle:'This folder contains {n} notes · {m} subfolders', folderTrashWhole:'Move the whole folder and all contents to trash', folderTrashKeep:'Keep contents: move to parent, delete only this folder',
     folderRenamePrompt:'New folder name', folderDeleteConfirm:'Delete folder 「{n}」?', folderNotEmpty:'Folder is not empty and cannot be deleted.', moveNoteTo:'Move note to', moveUp:'Move up', moveDown:'Move down',
@@ -581,6 +589,7 @@ const state = {
   selectedNoteId: null,
   selectedFolder: null,
   mobileNotesFolder: null,
+  explorerSel: new Set(),
   selectedAttachmentId: null,
   sortMode: localStorage.getItem('pkw-sort') || 'manual',
   treeRoot: [],
@@ -588,6 +597,7 @@ const state = {
   editor: { noteId: null, persistedMarkdown: '', dirty: false, saving: false, mode: localStorage.getItem('pkw-editor-mode') || 'live' },
   taskView: localStorage.getItem('pkw-task-view') || 'all',
   mobileTaskBoard: 'inbox',
+  mobileTaskBoardChosen: false,
   mobileTaskQ: 1,
   mobileOpenSections: new Set(),
   highlightText: '',
@@ -613,6 +623,7 @@ const state = {
   selectedTaskIds: new Set(),
   knowledgeTab: 'browse',
   knowledgeCache: null,
+  knowledgeShowAll: false,
   wikiFolder: '',
   graphTypes: [],
 }
@@ -639,6 +650,14 @@ function refreshAttachments(){ invalidateLoad('listAttachments'); renderAttachme
 function refreshTrash(){ invalidateLoad('listTrash'); invalidateLoad('listTrashAttachments'); invalidateLoad('listTrashFolders'); renderTrash() }
 function viewMark(phase, extra){
   console.debug('[pkw.view] view=' + state.view + ' phase=' + phase + ' ms=' + Math.round(performance.now() - viewStart) + (extra ? ' ' + extra : ''))
+}
+// Lightweight dev mutation timing (A6): marks each awaited stage so a stuck
+// mutation can be localized without a profiler. console.debug only — never UI.
+function mutSpan(action){
+  const t0 = performance.now()
+  const mark = (p) => console.debug('[pkw.mut] ' + action + ' ' + p + ' +' + Math.round(performance.now() - t0) + 'ms')
+  const end = (p) => console.debug('[pkw.mut] ' + action + ' ' + p + ' total=' + Math.round(performance.now() - t0) + 'ms')
+  return { mark, end }
 }
 // Per-view scroll memory: a view is a projection, so switching back should
 // restore where the user was (main + left list), not reset to top.
@@ -732,7 +751,7 @@ function render(){
   }
   refreshHeader()
   if (state.view === 'overview') renderOverview()
-  else if (state.view === 'notes') { renderTreeToolbar(); renderTree(); renderDetail(); if (state.selectedNoteId === null) { if (!isMobile() && state.selectedFolder !== null) renderFolderMain(state.selectedFolder); else renderNotesExplorer() } ensureVditorLoaded().catch(() => {}) }
+  else if (state.view === 'notes') { renderTreeToolbar(); renderTree(); renderDetail(); if (state.selectedNoteId === null) renderNotesExplorer(); ensureVditorLoaded().catch(() => {}) }
   else if (state.view === 'attachments') renderAttachments()
   else if (state.view === 'tasks') renderTasks()
   else if (state.view === 'trash') renderTrash()
@@ -816,18 +835,70 @@ function renderDetail(){
   } else $('#detail').innerHTML = ''
 }
 // Notes Explorer: the Main-area surface for the Notes view when no Note is open.
-// Same NoteId/Folder/tree data as the sidebar Tree — just a second surface.
-function explorerNoteRow(n){
-  const folder = (n.relativePath || '').includes('/') ? (n.relativePath).slice(0, (n.relativePath).lastIndexOf('/')) : ''
-  return '<div class="tree-row note" data-action="open-note" data-id="' + esc(n.noteId) + '">' +
+// Folder-aware (D): direct child folders + direct child notes of the CURRENT
+// folder ('' = root), breadcrumb + up-level, per-scope multi-select (E).
+function explorerNoteRow(n, checked){
+  const key = 'note:' + n.noteId
+  return '<div class="tree-row note explorer-item" data-action="explorer-note" data-id="' + esc(n.noteId) + '">' +
+    '<input type="checkbox" class="exp-check" data-action="explorer-toggle" data-key="' + esc(key) + '"' + (checked ? ' checked' : '') + '>' +
     '<span class="ic">📄</span>' +
     '<span class="nm note-title" data-id="' + esc(n.noteId) + '">' + esc(n.title || n.relativePath) + '</span>' +
-    (folder ? '<span class="muted small mono">' + esc(folder) + '/</span>' : '') +
     '<span class="spacer" style="flex:1 1 auto"></span>' +
     '<span class="muted small">' + esc(fmtStamp(n.updatedAt)) + '</span>' +
     '<span class="syncbadge" data-sync="note:' + esc(n.noteId) + '">' + syncBadgeHtml(n.sync) + '</span>' +
     '<button class="btn small" data-action="rename-note" data-id="' + esc(n.noteId) + '">' + esc(t('renameTitle')) + '</button>' +
     '</div>'
+}
+function explorerFolderRow(f, checked){
+  const key = 'folder:' + f.path
+  return '<div class="tree-row folder explorer-item" data-action="explorer-folder" data-path="' + esc(f.path) + '">' +
+    '<input type="checkbox" class="exp-check" data-action="explorer-toggle" data-key="' + esc(key) + '"' + (checked ? ' checked' : '') + '>' +
+    '<span class="ic">📁</span>' +
+    '<span class="nm">' + esc(f.name) + '</span>' +
+    '<span class="muted small">' + esc(t('notesCount', { n: folderNoteCount(f) })) + '</span>' +
+    '<span class="spacer" style="flex:1 1 auto"></span>' +
+    '<span class="chev">›</span>' +
+    '</div>'
+}
+function explorerSelBarHtml(){
+  if (state.explorerSel.size === 0) return ''
+  return '<div class="toolbar sel-bar">' +
+    '<span class="muted">' + esc(t('trashSelected', { n: state.explorerSel.size })) + '</span>' +
+    '<button class="btn" data-action="explorer-select-all">' + esc(t('trashSelectAll')) + '</button>' +
+    '<button class="btn" data-action="explorer-bulk-move">' + esc(t('moveTo')) + '…</button>' +
+    '<button class="btn danger" data-action="explorer-bulk-trash">' + esc(t('trashFolder')) + '</button>' +
+    '<button class="btn" data-action="explorer-clear">' + esc(t('trashClearSelection')) + '</button>' +
+    '</div>'
+}
+function renderDesktopExplorer(path){
+  const cur = path || ''
+  const allNotes = []
+  collectNotes(state.treeRoot || [], allNotes)
+  const allFolders = []
+  collectFolders(state.treeRoot || [], allFolders)
+  const childFolders = allFolders.filter(f => parentOfPath(f.path) === cur)
+  const childNotes = allNotes.filter(n => (n.folder || '') === cur)
+
+  // Breadcrumb (D2): ↑ up-level + 笔记 / seg / seg, each clickable.
+  let crumb = '<div class="crumbs"><button class="btn small" data-action="explorer-up"' + (cur === '' ? ' disabled' : '') + '>↑ ' + esc(t('upLevel')) + '</button>'
+  crumb += '<button class="crumb-link" data-action="explorer-crumb" data-path="">' + esc(t('notesRoot')) + '</button>'
+  let acc = ''
+  for (const s of (cur ? cur.split('/') : [])) { acc = acc ? acc + '/' + s : s; crumb += '<span class="crumb-sep">/</span><button class="crumb-link" data-action="explorer-crumb" data-path="' + esc(acc) + '">' + esc(s) + '</button>' }
+  crumb += '</div>'
+
+  const toolbar = '<div class="toolbar"><button class="btn primary" data-action="new-note-here" data-path="' + esc(cur) + '">+ ' + esc(t('newNote')) + '</button>' +
+    '<button class="btn" data-action="new-subfolder" data-path="' + esc(cur) + '">+ ' + esc(t('newFolder')) + '</button>' +
+    (cur !== '' ? '<button class="btn" data-action="folder-menu" data-path="' + esc(cur) + '">' + esc(t('folder')) + ' ⋯</button>' : '') +
+    '</div>'
+
+  const body = (childFolders.length || childNotes.length)
+    ? childFolders.map(f => explorerFolderRow(f, state.explorerSel.has('folder:' + f.path))).join('') +
+      childNotes.map(n => explorerNoteRow(n, state.explorerSel.has('note:' + n.noteId))).join('')
+    : '<div class="empty"><h3>' + esc(t('emptyNotes')) + '</h3><div class="cta"><button class="btn primary" data-action="new-note-here" data-path="' + esc(cur) + '">+ ' + esc(t('emptyNotesCta')) + '</button></div></div>'
+
+  $('#main').innerHTML = '<h2>' + (cur ? esc(cur.split('/').pop()) : esc(t('notes'))) + '<span class="sub mono">' + esc(t('notesRoot') + (cur ? '/' + cur : '')) + '/</span></h2>' +
+    crumb + explorerSelBarHtml() + toolbar + '<div>' + body + '</div>'
+  renderDetail()
 }
 function renderNotesExplorer(){
   if (isMobile()) {
@@ -835,13 +906,89 @@ function renderNotesExplorer(){
     renderMobileNotesHome()
     return
   }
-  const notes = []
-  collectNotes(state.treeRoot || [], notes)
-  const toolbar = '<div class="toolbar"><button class="btn primary" data-action="new-note">+ ' + esc(t('newNote')) + '</button><button class="btn" data-action="new-folder">+ ' + esc(t('newFolder')) + '</button></div>'
-  $('#main').innerHTML = '<h2>' + esc(t('notes')) + '</h2>' + toolbar +
-    (notes.length
-      ? '<div>' + notes.map(n => explorerNoteRow(n)).join('') + '</div>'
-      : '<div class="empty"><h3>' + esc(t('emptyNotes')) + '</h3><div class="cta"><button class="btn primary" data-action="new-note">+ ' + esc(t('emptyNotesCta')) + '</button></div></div>')
+  renderDesktopExplorer(state.selectedFolder || '')
+}
+function collectFolders(nodes, out){ for (const n of nodes) { if (n.kind === 'folder') { out.push(n); collectFolders(n.children || [], out) } else if (n.children) collectFolders(n.children, out) } }
+// Explorer selection (E): keyed by 'note:<id>' / 'folder:<path>'.
+function explorerScopeKeys(path){
+  const cur = path || ''
+  const allNotes = []
+  collectNotes(state.treeRoot || [], allNotes)
+  const allFolders = []
+  collectFolders(state.treeRoot || [], allFolders)
+  const keys = []
+  for (const f of allFolders) if (parentOfPath(f.path) === cur) keys.push('folder:' + f.path)
+  for (const n of allNotes) if ((n.folder || '') === cur) keys.push('note:' + n.noteId)
+  return keys
+}
+function explorerToggleSel(key){
+  if (state.explorerSel.has(key)) state.explorerSel.delete(key)
+  else state.explorerSel.add(key)
+  renderNotesExplorer()
+}
+function explorerClearSel(){ state.explorerSel.clear(); renderNotesExplorer() }
+function explorerSelectAllScope(){
+  for (const k of explorerScopeKeys(state.selectedFolder || '')) state.explorerSel.add(k)
+  renderNotesExplorer()
+}
+// Normalize a mixed selection: a selected folder already covers its descendants,
+// so drop descendant notes/folders to avoid double-mutating (E1).
+function explorerNormalizedSelection(){
+  const folderPaths = []
+  const noteIds = []
+  for (const k of state.explorerSel) {
+    if (k.startsWith('folder:')) folderPaths.push(k.slice(7))
+    else if (k.startsWith('note:')) noteIds.push(k.slice(5))
+  }
+  const coveredNote = id => {
+    // A note is covered if any selected folder is its folder or ancestor.
+    const n = (state.treeRoot && flattenNotes(state.treeRoot).find(x => x.noteId === id))
+    if (!n) return false
+    return folderPaths.some(fp => (n.folder || '') === fp || (n.folder || '').startsWith(fp + '/'))
+  }
+  const finalFolders = folderPaths.filter(fp => !folderPaths.some(other => other !== fp && fp.startsWith(other + '/')))
+  const finalNotes = noteIds.filter(id => !coveredNote(id))
+  return { folders: finalFolders, notes: finalNotes }
+}
+function flattenNotes(nodes){ const out = []; collectNotes(nodes, out); return out }
+async function explorerBulkTrash(){
+  const { folders, notes } = explorerNormalizedSelection()
+  if (folders.length === 0 && notes.length === 0) return
+  try {
+    showActivity(t('trashDeleting'))
+    for (const f of folders) await api('trashFolder', { path: f })
+    for (const id of notes) await api('deleteNote', { noteId: id })
+    state.explorerSel.clear()
+    if (state.selectedFolder !== null && folders.includes(state.selectedFolder)) state.selectedFolder = null
+    clearActivity()
+    toast(t('deletedMsg'), 'ok')
+    await renderTree()
+    renderNotesExplorer()
+    refreshHeader()
+  } catch (e) { clearActivity(); toast(t('genericError') + ': ' + e.message, 'err') }
+}
+function explorerBulkMove(){
+  const { folders, notes } = explorerNormalizedSelection()
+  if (folders.length === 0 && notes.length === 0) return
+  showFolderPicker('', async (target) => {
+    try {
+      showActivity(t('moveTo'))
+      for (const f of folders) {
+        const newPath = (target ? target + '/' : '') + f.split('/').pop()
+        if (newPath !== f) await api('renameFolder', { path: f, newPath })
+      }
+      for (const id of notes) {
+        const cur = await api('getNote', { noteId: id })
+        const rel = (target ? target + '/' : '') + cur.note.relativePath.split('/').pop()
+        if (rel !== cur.note.relativePath) await api('moveNote', { noteId: id, relativePath: rel })
+      }
+      state.explorerSel.clear()
+      clearActivity()
+      toast(t('localSaved'), 'ok')
+      await renderTree()
+      renderNotesExplorer()
+    } catch (e) { clearActivity(); toast(t('genericError') + ': ' + e.message, 'err') }
+  })
 }
 function folderNoteCount(folderNode){
   let c = 0
@@ -1145,6 +1292,16 @@ function ensureVditorLoaded(){
 // Managed attachment URL resolver (Live + Reading share one rule):
 // any of  attachments/<id>/<file>, ./attachments/<id>/<file>,
 // /pkw/attachments/<id>/<file>, same-origin absolute → /pkw/attachment/<id>.
+// Encode a filename (or relative path) into a URL-safe Markdown destination
+// segment: only the user's filename/path segments are encoded, never the
+// 'attachments/<id>/' structure or '/' separators. Covers space, (), #, ?, %,
+// &, +, [], CJK, Japanese and emoji. Mirrors the Host-side
+// 'encodeAttachmentMarkdownPath' (single write-side rule).
+function encodeAttachmentPath(segment){
+  return String(segment || '').split('/').map(function(seg){
+    return encodeURIComponent(seg).replace(/[!'()*]/g, function(c){ return '%' + c.charCodeAt(0).toString(16).toUpperCase() })
+  }).join('/')
+}
 function managedAttachmentUrl(src){
   if (!src) return null
   let s = src
@@ -1339,8 +1496,9 @@ function uploadVditorFiles(files, asImage){
       // edited, so it does NOT become an independent WeKnora Knowledge.
       api('uploadAttachment', { filename: file.name, mimeType: file.type || 'application/octet-stream', contentBase64: base64, knowledgeMode: 'note-scoped', ownerNoteId: state.selectedNoteId }).then(up => {
         // Reference the STORED filename (up.filename), never the raw File.name, so the
-        // managed link always resolves to the persisted binary.
-        const ref = 'attachments/' + up.attachmentId + '/' + up.filename
+        // managed link always resolves to the persisted binary. The filename segment
+        // is URL-encoded (space/()/#/…/CJK/emoji) so it is a valid Markdown destination.
+        const ref = 'attachments/' + up.attachmentId + '/' + encodeAttachmentPath(up.filename)
         const md = asImage === false ? '[' + up.filename + '](' + ref + ')' : '![](' + ref + ')'
         if (vditor) vditor.insertValue(md)
         refreshHeader()
@@ -1656,16 +1814,15 @@ async function newFolder(parentPath){
   catch (e) { toast(t('genericError') + ': ' + e.message, 'err') }
 }
 function renderFolderMain(path){
-  $('#main').innerHTML = '<h2>' + esc(t('folder')) + '<span class="sub mono">' + esc(path) + '/</span></h2>' +
-    '<div class="toolbar"><button class="btn primary" data-action="new-note-here" data-path="' + esc(path) + '">+ ' + esc(t('newNoteHere')) + '</button><button class="btn" data-action="new-subfolder" data-path="' + esc(path) + '">+ ' + esc(t('newSubfolder')) + '</button><button class="btn" data-action="rename-folder" data-path="' + esc(path) + '">' + esc(t('renameFolder')) + '</button><button class="btn" data-action="delete-folder" data-path="' + esc(path) + '">' + esc(t('deleteFolder')) + '</button></div>'
-  renderDetail()
+  renderDesktopExplorer(path)
 }
 async function renameFolder(path){
   const name = prompt(t('folderRenamePrompt'), path.split('/').pop()); if (!name || !name.trim()) return
   const parent = parentOfPath(path); const newPath = (parent ? parent + '/' : '') + name.trim()
   if (newPath === path) return
-  try { await api('renameFolder', { path, newPath }); state.selectedFolder = newPath; await renderTree(); renderDetail(); renderFolderMain(newPath) }
-  catch (e) { toast(t('genericError') + ': ' + e.message, 'err') }
+  const span = mutSpan('renameFolder')
+  try { await api('renameFolder', { path, newPath }); span.mark('rpc'); state.selectedFolder = newPath; await renderTree(); span.mark('tree'); renderDetail(); renderFolderMain(newPath); span.end('paint') }
+  catch (e) { span.end('error'); toast(t('genericError') + ': ' + e.message, 'err') }
 }
 function folderCounts(path){
   let notes = 0, subfolders = 0
@@ -1691,24 +1848,37 @@ async function deleteFolder(path){
   catch (e) { toast(t('genericError') + ': ' + e.message, 'err') }
 }
 async function moveNote(noteId){
+  const span = mutSpan('moveNote')
   showFolderPicker('', (target) => {
     (async () => {
-      const cur = await api('getNote', { noteId })
-      const rel = (target ? target + '/' : '') + cur.note.relativePath.split('/').pop()
-      if (rel === cur.note.relativePath) return
-      try { await api('moveNote', { noteId, relativePath: rel }); await renderTree(); await openNote(noteId) }
-      catch (e) { toast(t('genericError') + ': ' + e.message, 'err') }
+      span.mark('pick')
+      try {
+        const cur = await api('getNote', { noteId }); span.mark('getNote')
+        const rel = (target ? target + '/' : '') + cur.note.relativePath.split('/').pop()
+        if (rel === cur.note.relativePath) { span.end('noop'); return }
+        await api('moveNote', { noteId, relativePath: rel }); span.mark('rpc')
+        await renderTree(); span.mark('tree')
+        await openNote(noteId); span.end('open')
+      } catch (e) { span.end('error'); toast(t('genericError') + ': ' + e.message, 'err') }
     })()
   })
 }
 function parentOfPath(p){ const i = p.lastIndexOf('/'); return i === -1 ? '' : p.slice(0, i) }
 function showFolderPicker(currentPath, cb){
   api('listFolders').then(folders => {
-    document.body.insertAdjacentHTML('beforeend', '<div class="modal-overlay"><div class="modal"><h3>' + esc(t('moveTo')) + '</h3><select id="pickFolder"><option value="">' + esc(t('rootFolder')) + '</option>' + folders.map(f => '<option value="' + esc(f) + '"' + (f === currentPath ? ' selected' : '') + '>' + esc(f) + '</option>').join('') + '</select><div class="modal-actions"><button class="btn" data-act="pick-cancel">' + esc(t('cancel')) + '</button><button class="btn primary" data-act="pick-ok">' + esc(t('ok')) + '</button></div></div></div>')
-    const done = (val) => { document.querySelector('.modal-overlay')?.remove(); if (val !== undefined) cb(val) }
-    document.querySelector('[data-act="pick-cancel"]').onclick = () => done(undefined)
-    document.querySelector('[data-act="pick-ok"]').onclick = () => done($('#pickFolder').value)
-  })
+    const overlay = document.createElement('div')
+    overlay.className = 'modal-overlay'
+    overlay.innerHTML = '<div class="modal"><h3>' + esc(t('moveTo')) + '</h3><select id="pickFolder"><option value="">' + esc(t('rootFolder')) + '</option>' + folders.map(f => '<option value="' + esc(f) + '"' + (f === currentPath ? ' selected' : '') + '>' + esc(f) + '</option>').join('') + '</select><div class="modal-actions"><button class="btn" data-act="pick-cancel">' + esc(t('cancel')) + '</button><button class="btn primary" data-act="pick-ok">' + esc(t('ok')) + '</button></div></div>'
+    document.body.appendChild(overlay)
+    const okBtn = overlay.querySelector('[data-act="pick-ok"]')
+    // Scoped handles: never 'document.querySelector(.modal-overlay)' — with
+    // stacked overlays the global selector removes the WRONG (first) one and
+    // leaves the top overlay stuck (the "move dialog never closes" bug).
+    const done = (val) => { overlay.remove(); if (val !== undefined) cb(val) }
+    overlay.querySelector('[data-act="pick-cancel"]').onclick = () => done(undefined)
+    okBtn.onclick = () => { okBtn.disabled = true; done(overlay.querySelector('#pickFolder').value) }
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) done(undefined) })
+  }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
 }
 
 // ── Attachments: Manager (list/grid, search, filter, sort, multi-select) ────
@@ -2125,6 +2295,14 @@ function filterTaskList(all, filter){
 function renderMobileTasks(){
   const matrices = state.matricesCache || []
   const all = state.tasksCache || []
+  // G2 default-board rule: restore a user-chosen board; otherwise default to the
+  // FIRST user Matrix (stable manualOrder) — Inbox is the fallback only when the
+  // user has no matrices. G4: a deleted/archived board falls back to the next
+  // Matrix, then Inbox (never a dangling matrixId).
+  if (!state.mobileTaskBoardChosen && matrices.length > 0) state.mobileTaskBoard = matrices[0].matrixId
+  if (state.mobileTaskBoard !== 'inbox' && !matrices.some(m => m.matrixId === state.mobileTaskBoard)) {
+    state.mobileTaskBoard = matrices.length > 0 ? matrices[0].matrixId : 'inbox'
+  }
   const board = state.mobileTaskBoard
   const q = state.mobileTaskQ
   const inBoard = x => board === 'inbox' ? (x.matrixId === null || x.matrixId === undefined) : x.matrixId === board
@@ -2401,22 +2579,39 @@ async function renderKnowledgeBrowseInto(){
   const seq = viewSeq
   const box = $('#kbBody')
   if (!box) return
-  const draw = () => {
+  const card = (it) => {
+    const badges = (it.attachmentCount ? '<span class="badge">' + esc(t('attachmentsN', { n: it.attachmentCount })) + '</span>' : '') +
+      (it.indexed ? '<span class="badge ok">' + esc(t('knowledgeIndexed')) + '</span>' : (it.pending ? '<span class="badge warn">' + esc(t('knowledgePending')) + '</span>' : ''))
+    return knowledgeCardHtml({
+      title: it.title || it.relativePath || '',
+      snippet: it.summary,
+      source: it.folder,
+      updatedAt: it.updatedAt,
+      badges,
+      open: { action: 'open-note', id: it.noteId, label: t('openNote') },
+    })
+  }
+  // C5 Knowledge Home: no query → a bounded home (recent + source overview), NOT
+  // the whole library as infinite cards. "View all" is an explicit user action.
+  const drawHome = () => {
+    const items = state.knowledgeCache || []
+    const recent = items.slice().sort((a, b) => (a.updatedAt || '') < (b.updatedAt || '') ? 1 : -1).slice(0, 8)
+    const s = state.summaryCache
+    const noteCount = items.length
+    const sourceCount = (s && typeof s.attachments === 'number') ? s.attachments : state.attachmentsCache.length
+    box.innerHTML =
+      '<div class="list-section">' + esc(t('recentKnowledge')) + '</div>' +
+      (recent.length ? recent.map(card).join('') : '<div class="empty">' + esc(t('knowledgeEmpty')) + '</div>') +
+      '<div class="list-section">' + esc(t('sourceOverview')) + '</div>' +
+      '<div class="kv"><b>' + esc(t('overviewNotes')) + '</b> <span class="v">' + noteCount + '</span> · <b>' + esc(t('overviewAttachments')) + '</b> <span class="v">' + sourceCount + '</span></div>' +
+      '<div class="cta" style="margin-top:12px"><button class="btn" data-action="knowledge-view-all">' + esc(t('viewAllKnowledge')) + '</button></div>'
+  }
+  const drawAll = () => {
     const items = state.knowledgeCache || []
     if (!items.length) { box.innerHTML = '<div class="empty">' + esc(t('knowledgeEmpty')) + '</div>'; return }
-    box.innerHTML = items.map(it => {
-      const badges = (it.attachmentCount ? '<span class="badge">' + esc(t('attachmentsN', { n: it.attachmentCount })) + '</span>' : '') +
-        (it.indexed ? '<span class="badge ok">' + esc(t('knowledgeIndexed')) + '</span>' : (it.pending ? '<span class="badge warn">' + esc(t('knowledgePending')) + '</span>' : ''))
-      return knowledgeCardHtml({
-        title: it.title || it.relativePath || '',
-        snippet: it.summary,
-        source: it.folder,
-        updatedAt: it.updatedAt,
-        badges,
-        open: { action: 'open-note', id: it.noteId, label: t('openNote') },
-      })
-    }).join('')
+    box.innerHTML = items.map(card).join('') + '<div class="cta" style="margin-top:12px"><button class="btn" data-action="knowledge-back-home">← ' + esc(t('back')) + '</button></div>'
   }
+  const draw = () => { if (state.knowledgeShowAll) drawAll(); else drawHome() }
   if (state.knowledgeCache) { draw(); viewMark('warm-paint', 'cache=hit') }
   else { box.innerHTML = '<div class="empty">' + esc(t('loading')) + '</div>'; viewMark('shell', 'cache=miss') }
   try {
@@ -2565,12 +2760,16 @@ function renderSearchResults(q, results){
 }
 async function runSearch(q){
   state.searchQuery = q
+  state.searchResults = null
   const box = $('#kbBody')
   if (box) box.innerHTML = '<div class="empty">' + esc(t('searching')) + '</div>'
   else $('#main').innerHTML = '<div class="empty">' + esc(t('searching')) + '</div>'
   try {
-    const results = await api('search', { query: q, limit: 10 })
+    const payload = await api('search', { query: q, limit: 10 })
+    const results = payload && Array.isArray(payload.results) ? payload.results : (Array.isArray(payload) ? payload : [])
     state.searchResults = results
+    // Dev-only retrieval trace (C4): localize "no hits" to a layer; never in UI.
+    if (payload && payload.trace) console.debug('[pkw.retrieval]', payload.trace)
     if (box) box.innerHTML = searchCardsHtml(results) || '<div class="empty">' + esc(t('noHits', { q })) + '</div>'
     else renderSearchResults(q, results)
   } catch (e) { state.searchResults = null; const msg = '<div class="empty">' + esc(t('knowledgeOffline')) + '</div><div class="empty muted">' + esc(e.message || '') + '</div>'; if (box) box.innerHTML = msg; else $('#main').innerHTML = msg }
@@ -2584,20 +2783,24 @@ function quickSwitch(){
   api('getTree', { sortMode: 'manual' }).then(tree => {
     const notes = []
     collectNotes(tree.root, notes)
-    document.body.insertAdjacentHTML('beforeend', '<div class="modal-overlay"><div class="modal"><h3>' + esc(t('quickSwitch')) + '</h3><input id="qsInput" placeholder="' + esc(t('typeToSearch')) + '" /><div id="qsList" style="max-height:300px;overflow:auto"></div></div></div>')
-    const input = $('#qsInput'); input.focus()
+    const overlay = document.createElement('div')
+    overlay.className = 'modal-overlay'
+    overlay.innerHTML = '<div class="modal"><h3>' + esc(t('quickSwitch')) + '</h3><input id="qsInput" placeholder="' + esc(t('typeToSearch')) + '" /><div id="qsList" style="max-height:300px;overflow:auto"></div></div>'
+    document.body.appendChild(overlay)
+    const input = overlay.querySelector('#qsInput'); input.focus()
+    const listEl = overlay.querySelector('#qsList')
     const render = () => {
       const q = input.value.trim().toLowerCase()
       const list = notes.filter(n => !q || n.title.toLowerCase().includes(q) || n.relativePath.toLowerCase().includes(q)).slice(0, 30)
-      $('#qsList').innerHTML = list.map(n => '<div class="tree-row" data-qsid="' + esc(n.noteId) + '"><span class="ic">📄</span><span class="nm">' + esc(n.title) + '</span><span class="muted mono">' + esc(n.relativePath) + '</span></div>').join('') || '<div class="empty">' + esc(t('noHits', { q: '' })) + '</div>'
+      listEl.innerHTML = list.map(n => '<div class="tree-row" data-qsid="' + esc(n.noteId) + '"><span class="ic">📄</span><span class="nm">' + esc(n.title) + '</span><span class="muted mono">' + esc(n.relativePath) + '</span></div>').join('') || '<div class="empty">' + esc(t('noHits', { q: '' })) + '</div>'
     }
     render()
     input.addEventListener('input', render)
-    $('#qsList').addEventListener('click', (e) => {
+    listEl.addEventListener('click', (e) => {
       const row = e.target.closest('[data-qsid]')
-      if (row) { document.querySelector('.modal-overlay')?.remove(); setView('notes'); openNote(row.dataset.qsid) }
+      if (row) { overlay.remove(); setView('notes'); openNote(row.dataset.qsid) }
     })
-    document.querySelector('.modal-overlay').addEventListener('click', (e) => { if (e.target.classList.contains('modal-overlay')) document.querySelector('.modal-overlay')?.remove() })
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove() })
   })
 }
 function collectNotes(nodes, out){ for (const n of nodes) { if (n.kind === 'note') out.push(n); else collectNotes(n.children || [], out) } }
@@ -2617,7 +2820,7 @@ document.addEventListener('paste', async (e) => {
       const el = $('#editor')
       if (el) {
         // Reference the STORED filename so the managed link resolves to the binary.
-        const ref = '![](attachments/' + up.attachmentId + '/' + up.filename + ')'
+        const ref = '![](attachments/' + up.attachmentId + '/' + encodeAttachmentPath(up.filename) + ')'
         insertAtCursor(el, '\\n' + ref + '\\n')
       }
       toast(t('uploadSuccess'), 'ok'); refreshHeader()
@@ -3275,6 +3478,14 @@ document.addEventListener('click', (e) => {
     e.preventDefault()
     return
   }
+  // Ctrl/Cmd + click toggles explorer selection (E) instead of opening.
+  if ((e.ctrlKey || e.metaKey) && e.target.closest('.explorer-item')) {
+    const item = e.target.closest('.explorer-item')
+    const key = item.querySelector('.exp-check')
+    if (key) explorerToggleSel(key.dataset.key)
+    e.preventDefault()
+    return
+  }
   const el = e.target.closest('[data-action]'); if (!el) return
   const act = el.dataset.action, id = el.dataset.id, path = el.dataset.path, mode = el.dataset.mode
   if (act === 'new-note') newNote()
@@ -3283,7 +3494,22 @@ document.addEventListener('click', (e) => {
   else if (act === 'new-subfolder') newFolder(path)
   else if (act === 'open-note') { setView('notes'); if (el.dataset.reason) state.searchContext = { reason: el.dataset.reason, attName: el.dataset.attname || '' }; else state.searchContext = null; openNote(id) }
   else if (act === 'open-attachment') { setView('attachments'); openAttachment(id) }
-  else if (act === 'select-folder') { state.selectedFolder = path; state.selectedNoteId = null; renderTree(); renderFolderMain(path); renderDetail() }
+  else if (act === 'select-folder') { state.selectedFolder = path; state.selectedNoteId = null; state.explorerSel.clear(); renderTree(); renderFolderMain(path); renderDetail() }
+  else if (act === 'explorer-up') { state.selectedFolder = parentOfPath(state.selectedFolder || ''); state.selectedNoteId = null; state.explorerSel.clear(); renderTree(); renderFolderMain(state.selectedFolder || '') }
+  else if (act === 'explorer-crumb') { state.selectedFolder = path || null; state.selectedNoteId = null; state.explorerSel.clear(); renderTree(); renderFolderMain(path || '') }
+  else if (act === 'explorer-open-folder' || act === 'explorer-folder') { state.selectedFolder = path; state.selectedNoteId = null; state.explorerSel.clear(); renderTree(); renderFolderMain(path) }
+  else if (act === 'explorer-note') { openNote(id) }
+  else if (act === 'explorer-toggle') { explorerToggleSel(el.dataset.key) }
+  else if (act === 'explorer-select-all') explorerSelectAllScope()
+  else if (act === 'explorer-clear') explorerClearSel()
+  else if (act === 'explorer-bulk-move') explorerBulkMove()
+  else if (act === 'explorer-bulk-trash') explorerBulkTrash()
+  else if (act === 'folder-menu') {
+    showContextMenu(e.clientX, e.clientY, [
+      { label: t('renameFolder'), action: 'rename-folder', id: path },
+      { label: t('deleteFolder'), action: 'delete-folder', id: path },
+    ])
+  }
   else if (act === 'toggle-folder') { if (state.collapsed.has(path)) state.collapsed.delete(path); else state.collapsed.add(path); const c = document.querySelector('.tree-children[data-folder="' + CSS.escape(path) + '"]'); if (c) { c.style.display = state.collapsed.has(path) ? 'none' : ''; el.textContent = state.collapsed.has(path) ? '▸' : '▾' } }
   else if (act === 'save-note') saveNote()
   else if (act === 'set-mode') { state.editor.mode = mode; localStorage.setItem('pkw-editor-mode', mode); const d = state.editor.noteId; if (d) openNote(d) }
@@ -3340,7 +3566,7 @@ document.addEventListener('click', (e) => {
     if (key !== 'done') state.mobileTaskQ = Number(key) || 1
     renderMobileTasks()
   }
-  else if (act === 'mobile-board') { state.mobileTaskBoard = el.dataset.id || el.dataset.board || 'inbox'; renderMobileTasks() }
+  else if (act === 'mobile-board') { state.mobileTaskBoard = el.dataset.id || el.dataset.board || 'inbox'; state.mobileTaskBoardChosen = true; renderMobileTasks() }
   else if (act === 'mobile-board-sheet') {
     const mats = state.matricesCache || []
     const items = []
@@ -3390,6 +3616,8 @@ document.addEventListener('click', (e) => {
   else if (act === 'theme-dark') setTheme('dark')
   else if (act === 'knowledge-tab') { state.knowledgeTab = el.dataset.tab || 'wiki'; renderKnowledgeView() }
   else if (act === 'kb-clear-search') { state.searchQuery = ''; state.searchResults = null; renderKnowledgeView() }
+  else if (act === 'knowledge-view-all') { state.knowledgeShowAll = true; renderKnowledgeBrowseInto() }
+  else if (act === 'knowledge-back-home') { state.knowledgeShowAll = false; renderKnowledgeBrowseInto() }
   else if (act === 'mobile-more') {
     mobileActionSheet(t('mobileMore'), [
       { label: t('overview'), action: 'go-overview' },
@@ -3847,7 +4075,7 @@ function quickTaskDialog(matrixId, sourceRefs, prefill, defaultQuad){
 }
 // Header global search removed (Search is now the unified Knowledge entry).
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') { if (taskDetailRequestClose) { taskDetailRequestClose(); return } dismissContextMenu(); dismissSelButton(); dismissWikiSuggest(); return }
+  if (e.key === 'Escape') { if (taskDetailRequestClose) { taskDetailRequestClose(); return } dismissContextMenu(); dismissSelButton(); dismissWikiSuggest(); if (state.explorerSel.size) explorerClearSel(); return }
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') { e.preventDefault(); if (state.view === 'notes' && state.selectedNoteId !== null) saveNote() }
   else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'o') { e.preventDefault(); quickSwitch() }
   else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'b' && $('#editor')) { e.preventDefault(); document.execCommand('insertText', false, '**bold**') }
