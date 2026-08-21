@@ -424,7 +424,7 @@ describe('PKW Web Host Bridge (real Core integration)', () => {
     expect(first.relativePath).toBe('工作/海报3.md') // CJK base preserved (not __3.md)
     expect(first.title).toBe('海报3')
     const doc = await web.call('getNote', { noteId: first.noteId }) as { markdown: string }
-    expect(doc.markdown).toContain('attachments/' + up.attachmentId + '/海报3.jpg') // ref matches stored binary
+    expect(doc.markdown).toContain('attachments/' + up.attachmentId + '/%E6%B5%B7%E6%8A%A53.jpg') // ref is URL-encoded (space/()/CJK/emoji-safe)
     // Idempotent: a second call returns the SAME note (created:false), no 海报(2).md.
     const second = await web.call('createCompanionNote', { attachmentId: up.attachmentId, folder: '工作' }) as { noteId: string; created: boolean }
     expect(second.created).toBe(false)

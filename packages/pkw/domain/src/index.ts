@@ -30,7 +30,7 @@ export type { CompletionDraft, SubtaskSeedItem, SubtaskSeedSource } from './subt
 export { deriveSelectAll, parseTrashItemKey, reconcileSelection, summarizeBatch, trashItemKey } from './trash.ts'
 export type { BatchResult, SelectAllState, TrashItemKind } from './trash.ts'
 export { companionUserContent, extractAttachmentSummary, hasCompanionUserContent, insertAttachmentSummary, stripManagedSummaryMarkers, managedSourceProjection } from './companion-summary.ts'
-export { companionNoteMarkdown, filenameStem, sanitizeNoteBase, uniqueNotePath } from './direct-upload.ts'
+export { companionNoteMarkdown, decodeAttachmentMarkdownPath, encodeAttachmentMarkdownPath, filenameStem, sanitizeNoteBase, uniqueNotePath } from './direct-upload.ts'
 export { enrichNoteForKnowledge, stripInternalFrontmatter } from './note-projection.ts'
 export type { NoteProjectionBudget, NoteScopedDerived } from './note-projection.ts'
 export { compileProcessingDocx, createDocxNote, extractDocxText, readDocxNoteId, writeDocxNoteId } from './docx-note.ts'

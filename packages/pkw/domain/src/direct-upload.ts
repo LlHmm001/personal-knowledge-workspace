@@ -62,8 +62,43 @@ export function uniqueNotePath(folder: string, base: string, existing: ReadonlyS
  * never the raw browser `File.name`, so the managed reference always resolves.
  */
 export function companionNoteMarkdown(base: string, attachmentId: string, storedFilename: string, mimeType: string): string {
-  const ref = 'attachments/' + attachmentId + '/' + storedFilename
+  const ref = 'attachments/' + attachmentId + '/' + encodeAttachmentMarkdownPath(storedFilename)
   const isImage = String(mimeType || '').startsWith('image/')
   const refMd = isImage ? '![](' + ref + ')' : '[' + storedFilename + '](' + ref + ')'
   return '# ' + base + '\n\n' + refMd + '\n'
+}
+
+/**
+ * Encode a filename (or a relative path segment) into a URL-safe Markdown
+ * destination. Only the user's filename/path segments are encoded — the
+ * `attachments/<id>/` structure and the `/` separators are preserved.
+ *
+ * Covers space, `()`, `#`, `?`, `%`, `&`, `+`, `[]`, CJK, Japanese and emoji
+ * (F2). This is the SINGLE write-side rule for managed attachment references;
+ * every reader (rewriteAttachmentUrls / collectManagedLinks /
+ * managedAttachmentUrl / serveAttachment) resolves by AttachmentId only, so it
+ * accepts either an encoded or a legacy raw filename.
+ */
+export function encodeAttachmentMarkdownPath(segment: string): string {
+  return String(segment).split('/').map(encodeAttachmentSegment).join('/')
+}
+
+function encodeAttachmentSegment(segment: string): string {
+  // encodeURIComponent escapes space # ? % & + [ ] and all non-ASCII, but LEAVES
+  // - _ . ! ~ * ' ( ) unescaped. In a bare Markdown destination `(`, `)` and `'`
+  // are unsafe, so encode them too. `-`, `_`, `.` and `~` stay literal (safe).
+  return encodeURIComponent(segment).replace(/[!'()*]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase())
+}
+
+/**
+ * Inverse of {@link encodeAttachmentMarkdownPath}. Idempotent on raw names and
+ * tolerant of malformed legacy refs (returns the input unchanged on decode error
+ * rather than throwing).
+ */
+export function decodeAttachmentMarkdownPath(segment: string): string {
+  try {
+    return decodeURIComponent(String(segment))
+  } catch {
+    return String(segment)
+  }
 }
