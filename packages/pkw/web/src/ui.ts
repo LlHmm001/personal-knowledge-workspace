@@ -2299,8 +2299,11 @@ function renderMobileTasks(){
   const board = state.mobileTaskBoard
   const q = state.mobileTaskQ
   const inBoard = x => board === 'inbox' ? (x.matrixId === null || x.matrixId === undefined) : x.matrixId === board
-  const openInBoard = all.filter(x => x.status === 'open' && inBoard(x))
-  const doneInBoard = all.filter(x => x.status === 'completed' && inBoard(x))
+  // Subtasks live inside the task-detail sheet; the mobile board lists ROOT tasks
+  // only, matching the desktop matrix/list views (parentTaskId === null).
+  const isRoot = x => x.parentTaskId === null
+  const openInBoard = all.filter(x => x.status === 'open' && isRoot(x) && inBoard(x))
+  const doneInBoard = all.filter(x => x.status === 'completed' && isRoot(x) && inBoard(x))
   const qCounts = { 1: 0, 2: 0, 3: 0, 4: 0 }
   for (const x of openInBoard) qCounts[quadrantOf(x)]++
   // Default-expand the current Q when nothing is open yet (or when switching board).
