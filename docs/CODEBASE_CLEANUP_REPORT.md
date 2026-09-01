@@ -37,6 +37,8 @@
 
 ## Deferred（可疑但暂不删）
 
+> 收敛于 docs/DEBT.md
+
 - 未使用的 domain **类型声明**（若干 interface/type）：删除价值低、且类型契约边界易误伤，本轮不逐一处理，记 DEBT。
 - `// Header global search removed` 注释：保留作为"为什么没搜索框"的历史说明。
 - **WeKnora deleting/asynq 停摆**（上轮 OPS DEBT）：WeKnora 侧异步删除 worker 未完成 chunk 清理，非 PKW 代码，不改 worker。

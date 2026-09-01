@@ -62,6 +62,18 @@ The LATE marker — a sentence any user expects to be searchable — is **lost u
 
 Main-KB and Processing-KB hybrid-search scores are not directly comparable. First version: independent top-K per KB → business-level merge → no precise unified sort; documented as a known limitation.
 
+### Ranking limitation (live, deferred to agent-ization)
+
+> 收敛于 docs/DEBT.md
+
+**Observed**: searching a rare term (e.g. 「潘帕斯」) returns 1 correct + N unrelated results. Root cause is NOT a PKW merge/data bug:
+
+1. **WeKnora `hybrid-search` applies no server-side relevance threshold** — it always returns `match_count` chunks. Sprint live probes: nonsense query `zzzzzzqqqqqq` returned 9 noise chunks (top ≈0.0125); a real query (`赚钱观念`) topped ≈0.0162. Real and noise RRF scores **overlap**, so neither an absolute nor relative floor can cleanly separate them.
+2. **The relative floor `top * RELEVANCE_RELATIVE_FLOOR (0.25)` is effectively a no-op** because RRF fused scores cluster in a narrow band, so it retains nearly everything WeKnora returned. The prior absolute floor (`Math.max(0.1, …)`, ~6× the real top) erased all results and was removed; the fix overshot to "no gating."
+3. **The 「正文命中」 label is misleading**: `searchCardsHtml` defaults any main-KB note hit to `noteBodyMatch` (matchReason is only set for attachment/processing hits), so pure vector noise reads as a literal body hit.
+
+**Correct fix** = a real reranker / LLM (agent-ized) relevance gate, NOT a threshold tweak. **Deferred this round** (avoid re-triggering the "search finds nothing" regression); tracked with the retrieval agent-ization task.
+
 ## Isolated attachment
 
 An attachment with no referencing Note is **not** a Business Knowledge; Processing hits for it are not surfaced as Note results (no fabricated NoteId). (Attachment detail remains available in the Attachment Manager.)

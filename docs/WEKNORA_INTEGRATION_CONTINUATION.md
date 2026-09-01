@@ -55,6 +55,9 @@ pnpm typecheck   # 0 错误
 - 业务层禁 `node:fs`/`better-sqlite3`；凭证只走 `ctx.credentials`；Host 不依赖 Agent/Client。
 
 ## 6. Remaining Debt（非 correctness blocker）
+
+> 收敛于 docs/DEBT.md
+
 - **Lint/tooling**：PKW repo 无独立 lint 配置；当前质量门禁 = `tsc strict` + tests（+ Harness pre-commit 对 substrate patch）。属 tooling debt，非 WeKnora correctness blocker，本轮未引入大型 ESLint 工具链。
 - **性能**：`reconcile()` 对每个 attachment 全量 `open()` 算 sha256（可改 catalog.sha256 短路）；manual CREATE recovery 全 KB list+download（可后续按 `channel=pkw`/source 过滤）；drain 扫 intents O(n)（可加 per-entity 索引）。
 - **Neo4j**：验收期间发现本机 WeKnora app 曾因 Neo4j data volume 与 `.env` 密码不一致而 crash-loop（RestartCount 增长后恢复，manual create 一度 502，后自愈/稳定）。这是 WeKnora 部署问题，非 PKW 缺陷；若复发需在 WeKnora 侧对齐 neo4j 密码。

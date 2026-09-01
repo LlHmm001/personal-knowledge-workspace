@@ -1,5 +1,7 @@
 # Word Note Migration (DOCX canonical)
 
+> ⚠️ Superseded by: `docs/PHASE_1_CLOSURE.md` §2 — DOCX canonical **REJECTED**, DOCX primary transport **REJECTED**（Markdown Note + Attachment binary 胜出）。DOCX 全链代码已随 `docs/CODEBASE_CLEANUP_REPORT.md` 删除。本文件保留仅作历史证据。
+
 Status: **direction accepted** (user decision). This doc records the agreed model + phased plan; only the P0 foundation (DOCX read/write mechanics) is implemented this round.
 
 ## Data model

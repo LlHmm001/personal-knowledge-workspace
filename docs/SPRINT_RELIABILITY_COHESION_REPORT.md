@@ -138,6 +138,8 @@ Inbox 保留，仅不再强制成为移动端首页。
 
 ## Debt
 
+> 收敛于 docs/DEBT.md
+
 1. **harness 严格 typecheck 报 PKW 既有 `exactOptionalPropertyTypes` 错误**（`attachments/events/notes/frontmatter` 等，共 ~20 处），是 PKW 在 harness 的 `tsconfig.host.json` 下**未过严格可选属性检查**的既有债，与本轮改动无关；PKW 自身 tsconfig 全绿。建议后续专项收紧。
 2. `weknora-sync` 的 `multiple exact candidates → deterministic canonical` 测试在一次运行中出现非确定性失败（本机 stash 到 HEAD 复现过，当前运行通过），疑似 fake adapter 顺序相关 flaky，未归因，留待加固。
 3. **WeKnora 侧 50 条 Knowledge 停在 `deleting`**：asynq 异步删除 worker 未完成 chunk/向量清理，PKW 无法代偿（软删 + 404 + 检索隔离已正确）。这是 WeKnora 部署运维项。

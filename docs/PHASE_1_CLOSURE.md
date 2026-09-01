@@ -47,6 +47,8 @@ below).
 | PKW → WeKnora `resource://` integration | **REJECTED FOR CURRENT API SURFACE** |
 | A1 full attachment materialization into Main Knowledge | **REJECTED** |
 
+> ⚠️ Post-closure amendment: the "DOCX utility/export RETAINED" decision above was later superseded — all DOCX code (`docx-note.ts` + `docx`/`jszip` deps) was removed in post-closure cleanup. See `CODEBASE_CLEANUP_REPORT.md`.
+
 Reopen any of these only if the underlying external capability actually changes.
 
 ---
@@ -111,6 +113,8 @@ Re-evaluate only if the underlying editor condition changes.
 ---
 
 ## 7. Phase 1 Debt (NON-BLOCKING — do not implement now)
+
+> 收敛于 docs/DEBT.md
 
 ### PRODUCT DEBT
 - Mobile real-device polish

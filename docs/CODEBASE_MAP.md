@@ -39,6 +39,19 @@
 - `web` RPC `search` → `{results, trace}`；`enrichRetrievalResults` 只暴露 title/snippet/folder/reason/updatedAt，不暴露 raw chunk/score/knowledgeId/kbId。
 - Knowledge Home（无 query）= 最近知识 + 来源概览 + 查看全部；有 query = 检索结果。
 
+### 检索已知限制（当前未修，留给 agent 化）
+
+> 收敛于 docs/DEBT.md
+
+**现象**：搜「潘帕斯」等罕见词，第 1 条正确，但后面若干条与词无关（来源同 folder、标「正文命中」）。
+
+**根因链**（不是数据/聚合 bug）：
+1. **WeKnora `hybrid-search` 无服务端阈值**——必回 `match_count` 个 chunk；sprint 实测不存在的词「zzzzzzqqqqqq」也回 9 条噪音（top≈0.0125），真词「赚钱观念」top≈0.0162。真假分数**重叠**，用任何绝对/相对下限都无法干净切分。
+2. **PKW 相对下限 `top * 0.25` 是 no-op**：RRF 融合分簇集在窄带，`top*0.25` 基本保留 WeKnora 返回的全部 chunk（旧绝对下限 `0.1` ↑6 倍会把所有结果滤掉，已被去掉；现在矫枉过正到近乎不滤）。
+3. **「正文命中」标签有误导**：`searchCardsHtml` 对 main-KB note 命中默认标 `noteBodyMatch`（matchReason 只为 attachment/processing 命中设置），于是纯向量噪音被标成「正文命中」。
+
+**正确修法**：需要一个真正的 reranker / LLM（agent 化）相关性闸门，而不是调阈值。**本轮不修**（避免重蹈「搜不到」回归）；留给未来检索 agent 化。
+
 ## 已移除 / 已收敛（本轮 cleanup 后）
 
 - 见 `docs/CODEBASE_CLEANUP_REPORT.md`。要点：Wiki/Graph **可视化 UI 已删**，仅保留 `getWikiGraph` 边映射供 `relatedKnowledge`（Business Viewer）；DOCX 全删；`resolve`/`tasks-drag`/`markdown-semantics`/`subtask-draft` 四个死模块已删。
