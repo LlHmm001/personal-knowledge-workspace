@@ -115,20 +115,9 @@ const folderTrashEntrySchema = z.object({
 /** Notes projection domain: identity index + path→identity reverse index + manual order projection + folder trash entries. */
 export const noteDomainSpec = defineDomain({
   name: 'pkw_notes',
+  // No migrations (harness pre-release stance: a medium stamped with a
+  // different version rejects at open; changing a schema migrates by hand).
   version: 3,
-  migrations: {
-    // v1 → v2: keep note_index + note_paths verbatim; add the (empty) note_order
-    // manual-ordering projection. No records are transformed.
-    1: {
-      upgrade: (previous) => ({ tables: { ...previous.tables, note_order: {} } }),
-    },
-    // v2 → v3: add the (empty) folder_trash table. Physical folder-trash
-    // identity moves from `archive/<originalPath>` to `archive/folders/<entryId>`;
-    // existing on-disk `archive/<path>` folders are untouched (read-only legacy).
-    2: {
-      upgrade: (previous) => ({ tables: { ...previous.tables, folder_trash: {} } }),
-    },
-  },
   tables: {
     note_index: domainTable<NoteId, z.infer<typeof noteIndexRecordSchema>>(noteIndexRecordSchema),
     note_paths: domainTable<string, NoteId>(noteId),

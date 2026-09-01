@@ -9,7 +9,9 @@
 import { Service, type Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { createHash, randomUUID } from 'node:crypto'
-import { posix } from 'node:path'
+import { mkdir, rename as renameFile, rm, writeFile } from 'node:fs/promises'
+import { dirname, posix } from 'node:path'
+import type { FsTarget } from '@deepseek-ai/dsh-fs'
 import {
   ATTACHMENT_DELETED,
   ATTACHMENT_IMPORTED,
@@ -92,6 +94,28 @@ export class AttachmentsService extends Service {
     return this.table
   }
 
+  // ── workspace file mutations (the `ctx.fs` seam is read + text-write/edit
+  // only; rename/delete/binary-write go through `processPath` to the host
+  // filesystem, matching the harness's own trusted storage backends) ─────────
+
+  private processPath(target: FsTarget): string {
+    return this.ctx.fs.processPath(target)
+  }
+
+  private async moveFile(src: FsTarget, dst: FsTarget): Promise<void> {
+    await mkdir(dirname(this.processPath(dst)), { recursive: true })
+    await renameFile(this.processPath(src), this.processPath(dst))
+  }
+
+  private async removeFile(target: FsTarget): Promise<void> {
+    await rm(this.processPath(target), { force: true })
+  }
+
+  private async writeBytes(target: FsTarget, content: Uint8Array): Promise<void> {
+    await mkdir(dirname(this.processPath(target)), { recursive: true })
+    await writeFile(this.processPath(target), content, { flag: 'wx' })
+  }
+
   list(filter: import('@deepseek-ai/dsh-pkw-domain').AttachmentListFilter = {}): AttachmentRecord[] {
     const out: AttachmentRecord[] = []
     for (const [, record] of this.requireTable().entries()) {
@@ -116,7 +140,7 @@ export class AttachmentsService extends Service {
     const filename = safeFilename(input.filename)
     const relativePath = `attachments/${attachmentId}/${filename}`
     const target = await this.ctx.fs.resolve(this.handle.attachmentPath(attachmentId, filename))
-    await this.ctx.fs.writeBytes(target, input.content, { kind: 'createIfAbsent' })
+    await this.writeBytes(target, input.content)
     const hash = sha256(input.content)
     const now = new Date().toISOString()
     const record: AttachmentRecord = {
@@ -157,7 +181,7 @@ export class AttachmentsService extends Service {
     const record = this.requireTable().get(attachmentId)
     if (record === undefined || record.deletedAt !== undefined) return
     // Soft delete (trash): move the binary to archive instead of hard-deleting.
-    await this.ctx.fs.rename(
+    await this.moveFile(
       await this.ctx.fs.resolve(this.handle.attachmentPath(attachmentId, record.filename)),
       await this.ctx.fs.resolve(this.handle.archivePath(posix.join('attachments', String(attachmentId), record.filename))),
     )
@@ -178,7 +202,7 @@ export class AttachmentsService extends Service {
     if (record === undefined || record.deletedAt === undefined) {
       throw new Error(`pkwAttachments: attachment '${attachmentId}' is not trashed`)
     }
-    await this.ctx.fs.rename(
+    await this.moveFile(
       await this.ctx.fs.resolve(this.handle.archivePath(posix.join('attachments', String(attachmentId), record.filename))),
       await this.ctx.fs.resolve(this.handle.attachmentPath(attachmentId, record.filename)),
     )
@@ -198,8 +222,8 @@ export class AttachmentsService extends Service {
   async purge(attachmentId: AttachmentId): Promise<void> {
     const record = this.requireTable().get(attachmentId)
     if (record === undefined) return
-    try { await this.ctx.fs.remove(await this.ctx.fs.resolve(this.handle.archivePath(posix.join('attachments', String(attachmentId), record.filename)))) } catch { /* already gone */ }
-    try { await this.ctx.fs.remove(await this.ctx.fs.resolve(this.handle.attachmentPath(attachmentId, record.filename))) } catch { /* already gone */ }
+    await this.removeFile(await this.ctx.fs.resolve(this.handle.archivePath(posix.join('attachments', String(attachmentId), record.filename))))
+    await this.removeFile(await this.ctx.fs.resolve(this.handle.attachmentPath(attachmentId, record.filename)))
     await this.requireTable().delete(attachmentId)
   }
 

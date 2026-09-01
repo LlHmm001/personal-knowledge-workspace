@@ -146,14 +146,9 @@ const processingKbSchema = z.object({
 
 export const weknoraSyncDomainSpec = defineDomain({
   name: 'pkw_weknora_sync',
+  // No migrations (harness pre-release stance: a medium stamped with a
+  // different version rejects at open; changing a schema migrates by hand).
   version: 3,
-  migrations: {
-    // v2 → v3: add the (empty) note-scoped processing projection + Processing KB
-    // identity tables. Existing mappings/dirty/intents/reverse are untouched.
-    2: {
-      upgrade: (previous) => ({ tables: { ...previous.tables, processing: {}, processing_kb: {} } }),
-    },
-  },
   tables: {
     intents: domainTable<string, z.infer<typeof syncIntentSchema>>(syncIntentSchema),
     mappings: domainTable<string, z.infer<typeof entityMappingSchema>>(entityMappingSchema),

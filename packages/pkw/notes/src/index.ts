@@ -10,7 +10,9 @@
 import { Service, type Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { createHash, randomUUID } from 'node:crypto'
-import { posix } from 'node:path'
+import { mkdir, rename as renameFile, rm } from 'node:fs/promises'
+import { dirname, posix } from 'node:path'
+import type { FsTarget } from '@deepseek-ai/dsh-fs'
 import {
   AttachmentId,
   FolderTrashEntryId,
@@ -134,6 +136,27 @@ export class NotesService extends Service {
   private requireFolderTrash(): KvTable<string, FolderTrashEntry> {
     if (this.folderTrash === undefined) throw new Error('pkwNotes is not started yet')
     return this.folderTrash
+  }
+
+  // ── workspace file mutations (the `ctx.fs` seam is read + text-write/edit
+  // only; rename/delete go through `processPath` to the host filesystem,
+  // matching the harness's own trusted storage backends) ──────────────────────
+
+  private processPath(target: FsTarget): string {
+    return this.ctx.fs.processPath(target)
+  }
+
+  private async moveFile(src: FsTarget, dst: FsTarget): Promise<void> {
+    await mkdir(dirname(this.processPath(dst)), { recursive: true })
+    await renameFile(this.processPath(src), this.processPath(dst))
+  }
+
+  private async removeFile(target: FsTarget): Promise<void> {
+    await rm(this.processPath(target), { force: true })
+  }
+
+  private async removeDir(target: FsTarget): Promise<void> {
+    await rm(this.processPath(target), { recursive: true, force: true })
   }
 
   list(filter: NoteListFilter = {}): NoteIndexRecord[] {
@@ -292,7 +315,7 @@ export class NotesService extends Service {
     const existing = this.requireTable().get(noteId)
     if (existing === undefined) throw new Error(`pkwNotes: unknown note '${noteId}'`)
     const newTarget = await this.ctx.fs.resolve(this.handle.notePath(newRelativePath))
-    await this.ctx.fs.rename(
+    await this.moveFile(
       await this.ctx.fs.resolve(this.handle.notePath(existing.relativePath)),
       newTarget,
     )
@@ -325,7 +348,7 @@ export class NotesService extends Service {
     const src = await this.ctx.fs.resolve(this.handle.notePath(existing.relativePath))
     const canonicalMissing = await this.ctx.fs.stat(src) === undefined
     if (!canonicalMissing) {
-      await this.ctx.fs.rename(src, await this.ctx.fs.resolve(this.handle.archivePath(existing.relativePath)))
+      await this.moveFile(src, await this.ctx.fs.resolve(this.handle.archivePath(existing.relativePath)))
     }
     const payload: NoteEventPayload = {
       noteId: String(noteId),
@@ -345,7 +368,7 @@ export class NotesService extends Service {
     if (existing === undefined || existing.deletedAt === undefined) {
       throw new Error(`pkwNotes: note '${noteId}' is not trashed`)
     }
-    await this.ctx.fs.rename(
+    await this.moveFile(
       await this.ctx.fs.resolve(this.handle.archivePath(existing.relativePath)),
       await this.ctx.fs.resolve(this.handle.notePath(existing.relativePath)),
     )
@@ -368,8 +391,8 @@ export class NotesService extends Service {
   async purge(noteId: NoteId): Promise<void> {
     const existing = this.requireTable().get(noteId)
     if (existing === undefined) return
-    try { await this.ctx.fs.remove(await this.ctx.fs.resolve(this.handle.archivePath(existing.relativePath))) } catch { /* already gone */ }
-    try { await this.ctx.fs.remove(await this.ctx.fs.resolve(this.handle.notePath(existing.relativePath))) } catch { /* already gone */ }
+    await this.removeFile(await this.ctx.fs.resolve(this.handle.archivePath(existing.relativePath)))
+    await this.removeFile(await this.ctx.fs.resolve(this.handle.notePath(existing.relativePath)))
     await this.commitEvent(NOTE_PURGED, String(noteId), {
       noteId: String(noteId),
       relativePath: existing.relativePath,
@@ -584,7 +607,7 @@ export class NotesService extends Service {
     this.assertFolderPath(newPath)
     this.invalidateFoldersCache()
     if (oldPath === newPath) return
-    await this.ctx.fs.rename(
+    await this.moveFile(
       await this.ctx.fs.resolve(this.handle.notePath(oldPath)),
       await this.ctx.fs.resolve(this.handle.notePath(newPath)),
     )
@@ -606,7 +629,7 @@ export class NotesService extends Service {
     if (await this.ctx.fs.stat(target) !== undefined) {
       throw new Error(`pkwNotes: cannot restore folder '${entry.originalPath}' — target already exists`)
     }
-    await this.ctx.fs.rename(
+    await this.moveFile(
       await this.ctx.fs.resolve(this.handle.archivePath(entry.archivedPath)),
       target,
     )
@@ -632,7 +655,7 @@ export class NotesService extends Service {
     this.invalidateFoldersCache()
     const entry = this.requireFolderTrash().get(String(trashEntryId))
     if (entry === undefined) return
-    await this.ctx.fs.removeDir(await this.ctx.fs.resolve(this.handle.archivePath(entry.archivedPath)), { recursive: true })
+    await this.removeDir(await this.ctx.fs.resolve(this.handle.archivePath(entry.archivedPath)))
     const prefix = `${entry.originalPath}/`
     for (const [path, id] of [...this.requirePaths().entries()]) {
       if (path !== entry.originalPath && !path.startsWith(prefix)) continue
@@ -685,7 +708,7 @@ export class NotesService extends Service {
       deletedAt: now,
     }
     await this.requireFolderTrash().put(String(trashEntryId), entry)
-    await this.ctx.fs.rename(
+    await this.moveFile(
       await this.ctx.fs.resolve(this.handle.notePath(relativePath)),
       await this.ctx.fs.resolve(this.handle.archivePath(archivedRel)),
     )
