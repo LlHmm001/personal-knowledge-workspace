@@ -57,16 +57,18 @@ jobs:
           [ "$missing" -eq 0 ] && echo "OK: handover documents present."
 
   # ───────────────────────────────────────────────────────────────────────────
-  # Needs the private harness checkout, which PKW's tsconfig resolves through
-  # /opt/deepseek-harness. Set the repository variable HARNESS_REPO_URL to
+  # Needs the private harness checkout, selected by DSH_HARNESS_ROOT.
+  # Set the repository variable HARNESS_REPO_URL to
   # enable it (see docs/HANDOVER.md §7). When it is unset this job SKIPS — a
   # skip is honest and visible, unlike a green run that verified nothing.
   # ───────────────────────────────────────────────────────────────────────────
   verify:
-    name: typecheck + test
+    name: typecheck + test + build + packed runtime
     runs-on: ubuntu-latest
     timeout-minutes: 25
     if: vars.HARNESS_REPO_URL != ''
+    env:
+      DSH_HARNESS_ROOT: ${{ github.workspace }}/harness
 
     steps:
       - uses: actions/checkout@v4
@@ -84,12 +86,14 @@ jobs:
         with:
           repository: ${{ vars.HARNESS_REPO_URL }}
           token: ${{ secrets.HARNESS_REPO_TOKEN }}
+          ref: ${{ vars.HARNESS_REF }}
           path: harness
 
-      - name: Link harness to the pinned seam path
+      - name: Prepare Harness declarations and runtime
+        working-directory: harness
         run: |
-          sudo mkdir -p /opt
-          sudo ln -sfn "$GITHUB_WORKSPACE/harness" /opt/deepseek-harness
+          pnpm install --frozen-lockfile
+          pnpm run build:lib:host
 
       - name: Install
         run: pnpm install --frozen-lockfile
@@ -97,9 +101,26 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      # `pnpm test` is currently unstable (see docs/HANDOVER.md §8.1). Reported,
-      # not silently tolerated: this step is allowed to fail until the race in
-      # weknora-sync is fixed, and that debt stays visible in the run log.
-      - name: Test (known-unstable — see docs/HANDOVER.md §8.1)
-        continue-on-error: true
+      - name: Test
         run: pnpm test
+
+      - name: Repeated build and stale-output check
+        run: pnpm verify:build
+
+      - name: Packed registry install and plain Node runtime
+        run: pnpm verify:packed
+
+  tooling:
+    name: deployment tooling (no private Harness required)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test:tooling
