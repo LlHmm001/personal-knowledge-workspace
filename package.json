@@ -5,8 +5,13 @@
   "type": "module",
   "packageManager": "pnpm@11.7.0",
   "scripts": {
-    "test": "vitest run",
-    "typecheck": "tsc -p tsconfig.json"
+    "test": "node --test scripts/tests/*.test.mjs && vitest run",
+    "typecheck": "node scripts/typecheck.mjs",
+    "build": "node scripts/build.mjs",
+    "test:tooling": "node --test scripts/tests/*.test.mjs",
+    "deploy": "node scripts/deploy-pkw.mjs",
+    "verify:build": "node scripts/verify-build.mjs",
+    "verify:packed": "node scripts/verify-packed.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.20.0",

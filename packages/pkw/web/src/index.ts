@@ -19,6 +19,7 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { posix, extname, resolve as pathResolve, sep } from 'node:path'
 import { readFile } from 'node:fs/promises'
+import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import z from '@deepseek-ai/schemastery'
 import { AttachmentId, FolderTrashEntryId, NoteId, TaskId, TaskMatrixId, addColumnLeft, addColumnRight, addRowAbove, addRowBelow, companionNoteMarkdown, deleteColumn, deleteRow, deleteFootnote, deleteTable, editFootnoteDefinition, filenameStem, nextFootnoteKey, parseTrashItemKey, resolveTableCell, sanitizeNoteBase, setColumnAlign, summarizeBatch, uniqueNotePath } from '@deepseek-ai/dsh-pkw-domain'
@@ -33,6 +34,10 @@ import WeKnoraClient from '@deepseek-ai/dsh-pkw-weknora'
 import WeKnoraSyncService, { type RetrievalResult } from '@deepseek-ai/dsh-pkw-weknora-sync'
 import { renderPage } from './ui.ts'
 import { renderMarkdownToHtml } from './lute.ts'
+
+// Capture at module load: a stale running process must not claim a newly
+// installed version merely because package.json changed on disk.
+const packageVersion = (JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }).version
 
 export interface Config {
   /** Workspace root directory (notes/ + attachments/ live under it). */
@@ -282,7 +287,7 @@ export class PkwWebService extends Service {
     // Route surface. Disposers are owned by this fiber via ctx.effect.
     this.ctx.effect(() => this.ctx.webServer.register({
       kind: 'exact', path: '/pkw', handler: (_req, res) => {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'X-PKW-Version': packageVersion })
         res.end(renderPage())
       },
     }), 'pkw.web.page')
