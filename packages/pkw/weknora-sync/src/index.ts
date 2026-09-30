@@ -454,7 +454,11 @@ export class WeKnoraSyncService extends Service {
   private withEntityLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
     const prev = this.locks.get(key) ?? Promise.resolve()
     const run = prev.then(fn, fn)
-    this.locks.set(key, run.then(() => {}, () => {}))
+    const tail = run.then(() => {}, () => {})
+    this.locks.set(key, tail)
+    void tail.then(() => {
+      if (this.locks.get(key) === tail) this.locks.delete(key)
+    })
     return run
   }
 
@@ -488,6 +492,17 @@ export class WeKnoraSyncService extends Service {
   async materializeCompanionSummary(attachmentId: AttachmentIdT): Promise<boolean> {
     const rec = this.ctx.pkwAttachments.get(attachmentId)
     if (rec === undefined || rec.companionNoteId === undefined) return false
+    // Poll sweeps and direct callers can overlap. Serialize the whole
+    // read/compare/write by destination note, including multiple attachments
+    // with the same companion, so a stale snapshot cannot overwrite a summary.
+    return this.withEntityLock(`companion-note:${String(rec.companionNoteId)}`,
+      () => this.materializeCompanionSummaryLocked(attachmentId, String(rec.companionNoteId)))
+  }
+
+  private async materializeCompanionSummaryLocked(attachmentId: AttachmentIdT, expectedNoteId: string): Promise<boolean> {
+    const rec = this.ctx.pkwAttachments.get(attachmentId)
+    if (rec === undefined || rec.companionNoteId === undefined) return false
+    if (String(rec.companionNoteId) !== expectedNoteId) return false // relation changed while queued; retry with its new lock
     const mapping = this.reqMappings().get(this.entityKey(ENTITY_ATTACHMENT, String(attachmentId)))
     if (mapping === undefined || mapping.knowledgeId === undefined) return false
     let description: string | undefined

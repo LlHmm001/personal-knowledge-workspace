@@ -10,7 +10,7 @@
 > 架构边界与已拒绝方向见 [`docs/PHASE_1_CLOSURE.md`](docs/PHASE_1_CLOSURE.md)。
 
 > **⚠️ 接手前必读**：本项目当前存在「仓库源码 ≠ 线上运行产物」的部署缺口，
-> 且回归测试基线不稳定。**请先读 [`docs/HANDOVER.md`](docs/HANDOVER.md)** ——
+> 线上补丁回流与部署验收仍需目标环境。**请先读 [`docs/HANDOVER.md`](docs/HANDOVER.md)** ——
 > 它给出了完整的项目交代、冻结边界、已知问题和升级路线。
 
 ---
@@ -56,21 +56,25 @@ pnpm workspace monorepo。每个子包 = `@deepseek-ai/dsh-pkw-<name>`，位于 
 
 ## 开发
 
-要求 Node.js 22+ 与 pnpm（`packageManager` 已固定为 `pnpm@11.7.0`）。
+要求 Node.js 22.19+ 或 Node 24 与 pnpm（`packageManager` 已固定为 `pnpm@11.7.0`）。
 
 ```bash
-pnpm install       # 安装依赖（使用 pnpm-lock.yaml）
-pnpm typecheck     # tsc -p tsconfig.json
-pnpm test          # vitest run（单元 + 集成；集成用例需真实 WEKNORA_API_KEY，否则自跳过）
+export DSH_HARNESS_ROOT=/opt/deepseek-harness # 或已构建的 Harness checkout 绝对路径
+pnpm install --frozen-lockfile
+pnpm typecheck
+pnpm test          # 工具测试 + Vitest；真实 WeKnora 集成需凭据，否则自跳过
+pnpm build         # 十个包输出 lib/*.js 与声明
+pnpm verify:build  # 重复构建哈希与陈旧产物检查
+pnpm verify:packed # 打包、临时 registry 安装、普通 Node 加载与 HTTP/RPC
 ```
 
 > **`pnpm typecheck` 需要 harness checkout。** PKW 的 tsconfig 通过
 > `/opt/deepseek-harness` 这个软链解析 `@deepseek-ai/cordis` / `@deepseek-ai/dsh-*`。
 > 本机开发请设置 `DSH_HARNESS_ROOT`，详见 [`docs/HANDOVER.md`](docs/HANDOVER.md) §7。
 
-> **`pnpm test` 目前不稳定**（失败数在 1~6 之间浮动，根因是 `weknora-sync` 测试的并发竞态）。
-> 在它稳定之前，不要把它当作"我改坏了代码"的唯一判据。详见
-> [`docs/HANDOVER.md`](docs/HANDOVER.md) §8.1。
+> 同步并发回归、启用后的 storage 契约测试及未完成项见
+> [`docs/DELIVERY_STATUS.md`](docs/DELIVERY_STATUS.md)。构建/部署命令与验收边界见
+> [`docs/BUILD_AND_DEPLOY.md`](docs/BUILD_AND_DEPLOY.md)。本地通过不代表线上已升级。
 
 每个 service / 纯函数模块在 `tests/*.spec.ts` 下有其单测。
 
@@ -79,7 +83,8 @@ pnpm test          # vitest run（单元 + 集成；集成用例需真实 WEKNOR
 ## 配置
 
 `pkw-web`（`PkwWebService.Config`，zod 校验）需要的配置项，由 profile 的 `cordis.patch.yml` 注入。
-填写模板见 [`config.example.yaml`](config.example.yaml)，清单见 [`extension.json`](extension.json)。
+填写模板见 [`config.example.yaml`](config.example.yaml)，部署 manifest 的只读快照见
+[`docs/deploy/`](docs/deploy/README.md)。
 
 | 键 | 必填 | 说明 |
 | --- | --- | --- |

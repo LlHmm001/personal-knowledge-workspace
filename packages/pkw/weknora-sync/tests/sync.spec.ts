@@ -586,7 +586,7 @@ describe('manual update distributed failures', () => {
   })
 
   it('third-state drift: intent B unknown while local already C → converge to C (no replay)', async () => {
-    const { notes, sync, fake } = await boot()
+    const { notes, sync, fake } = await boot({ pollMs: 3_600_000 })
     const note = await notes.create({ relativePath: 'a.md', markdown: '# A\n' })
     const knowledgeId = await sync.syncNote(note.noteId)
 
@@ -598,7 +598,8 @@ describe('manual update distributed failures', () => {
     // Local drifts to C before the unknown B intent is recovered.
     await notes.update(note.noteId, `---\nid: ${note.noteId}\n---\n\n# C\n`)
 
-    await vi.waitFor(() => {
+    await vi.waitFor(async () => {
+      await sync.drain()
       expect(fake.manuals.get(knowledgeId)!.content).toContain('# C')
     }, { timeout: 2000 })
     expect(fake.manuals.size).toBe(1)
@@ -622,19 +623,20 @@ describe('worker: durable dirty, coalescing, retry, resume', () => {
   })
 
   it('event-independent backstop: reconcile re-derives dirty from canonical entities', async () => {
-    const { notes, sync } = await boot()
+    const { notes, sync } = await boot({ pollMs: 3_600_000 })
     // Reconcile is the event-loss backstop: it enumerates local canonical entities
     // directly (not the live event stream) and marks never-synced ones dirty.
     const note = await notes.create({ relativePath: 'a.md', markdown: '# v1\n' })
     const report = await sync.reconcile()
     expect(report.markedDirty).toBeGreaterThanOrEqual(1)
-    await vi.waitFor(() => {
+    await vi.waitFor(async () => {
+      await sync.drain()
       expect(sync.getMapping(note.noteId)?.knowledgeId).toBeDefined()
     }, { timeout: 2000 })
   })
 
   it('restart resume: unknown intent is recovered by a later drain (no new event)', async () => {
-    const { notes, sync, fake } = await boot()
+    const { notes, sync, fake } = await boot({ pollMs: 3_600_000 })
     const note = await notes.create({ relativePath: 'a.md', markdown: '# v1\n\nresume\n' })
     fake.next.commitThenDrop = 'create-manual'
     await expect(sync.syncNote(note.noteId)).rejects.toThrow()
@@ -642,7 +644,8 @@ describe('worker: durable dirty, coalescing, retry, resume', () => {
 
     // A fresh drain (equivalent to init-time resume) must recover the durable intent.
     await sync.drain()
-    await vi.waitFor(() => {
+    await vi.waitFor(async () => {
+      await sync.drain()
       expect(sync.getMapping(note.noteId)?.knowledgeId).toBeDefined()
     }, { timeout: 2000 })
     expect(fake.manuals.size).toBe(1)
@@ -753,12 +756,13 @@ describe('attachment sync', () => {
 
 describe('full reconcile', () => {
   it('marks never-synced entities dirty and converges', async () => {
-    const { notes, attachments, sync } = await boot()
+    const { notes, attachments, sync } = await boot({ pollMs: 3_600_000 })
     const note = await notes.create({ relativePath: 'a.md', markdown: '# v1\n' })
     await attachments.importFile({ content: Buffer.from('x'), filename: 'x.txt', mimeType: 'text/plain' })
     const report = await sync.reconcile()
     expect(report.markedDirty).toBe(2)
-    await vi.waitFor(() => {
+    await vi.waitFor(async () => {
+      await sync.drain()
       expect(sync.getMapping(note.noteId)?.knowledgeId).toBeDefined()
     }, { timeout: 2000 })
   })
@@ -841,8 +845,26 @@ describe('secret redaction', () => {
 // ── Companion Note summary materialization ────────────────────────────────────
 
 describe('companion summary materialization', () => {
+  it('serializes overlapping summary materializations and writes the canonical note once', async () => {
+    const { attachments, notes, sync, fake } = await boot({ pollMs: 3_600_000 })
+    const note = await notes.create({ relativePath: 'concurrent.md', markdown: '# Original\n' })
+    const attachment = await attachments.importFile({ content: Buffer.from('SUMMARY'), filename: 'summary.txt', mimeType: 'text/plain' })
+    await attachments.setCompanionNote(attachment.id, note.noteId)
+    const knowledgeId = await sync.syncAttachment(attachment.id)
+    const remote = fake.files.get(knowledgeId)!
+    remote.summary = 'One derived summary'
+    remote.summaryStatus = 'completed'
+    const before = notes.get(note.noteId)!.observedRevision
+    const outcomes = await Promise.all(Array.from({ length: 12 }, () => sync.materializeCompanionSummary(attachment.id)))
+    expect(outcomes.filter(Boolean)).toHaveLength(1)
+    expect(notes.get(note.noteId)!.observedRevision).toBe(before + 1)
+    const doc = await notes.getDocument(note.noteId)
+    expect(doc.markdown).toContain('# Original')
+    expect(doc.markdown.split('pkw:attachment-summary:start')).toHaveLength(2)
+  })
+
   it('materializes the Attachment Knowledge summary into the Companion Note (upsert, reuse KnowledgeId)', async () => {
-    const { attachments, notes, sync, fake } = await boot()
+    const { attachments, notes, sync, fake } = await boot({ pollMs: 3_600_000 })
     const note = await notes.create({ relativePath: '海报3.md', markdown: '# 海报3\n\n![](attachments/att_x/海报3.png)\n' })
     const rec = await attachments.importFile({ content: Buffer.from('PNG'), filename: '海报3.png', mimeType: 'image/png' })
     await attachments.setCompanionNote(rec.id, note.noteId)
