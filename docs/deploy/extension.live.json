@@ -1,0 +1,128 @@
+{
+  "id": "pkw",
+  "version": "0.1.0",
+  "requiresHarness": {
+    "min": "0.1.1-rc.1"
+  },
+  "capabilities": [
+    {
+      "name": "pkw.workspace",
+      "version": "1.0.0",
+      "inputSchema": {
+        "type": "object"
+      },
+      "outputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "pkw.notes",
+      "version": "1.0.0"
+    },
+    {
+      "name": "pkw.tasks",
+      "version": "1.0.0"
+    },
+    {
+      "name": "pkw.attachments",
+      "version": "1.0.0"
+    }
+  ],
+  "requires": {
+    "fs.binary-write": "^1.0.0",
+    "storage.migration": "^1.0.0"
+  },
+  "providesServices": [
+    {
+      "id": "pkwWorkspace",
+      "type": "service"
+    },
+    {
+      "id": "pkwNotes",
+      "type": "service"
+    },
+    {
+      "id": "pkwTasks",
+      "type": "service"
+    },
+    {
+      "id": "pkwAttachments",
+      "type": "service"
+    },
+    {
+      "id": "pkwEvents",
+      "type": "service"
+    },
+    {
+      "id": "pkwWeKnora",
+      "type": "service"
+    },
+    {
+      "id": "pkwWeKnoraSync",
+      "type": "service"
+    },
+    {
+      "id": "pkwWeb",
+      "type": "service"
+    }
+  ],
+  "requiresServices": [
+    "storageDomain",
+    "workspace",
+    "fs",
+    "timer",
+    "webServer",
+    "credentials"
+  ],
+  "dependencies": {
+    "@deepseek-ai/dsh-workspace": "*",
+    "@deepseek-ai/dsh-storage": "*",
+    "@deepseek-ai/dsh-storage-domain": "*",
+    "@deepseek-ai/dsh-storage-json": "*",
+    "@deepseek-ai/dsh-storage-sqlite": "*",
+    "@deepseek-ai/dsh-fs": "*",
+    "@deepseek-ai/dsh-fs-local": "*",
+    "@deepseek-ai/dsh-credentials": "*",
+    "@deepseek-ai/dsh-host-webserver": "*"
+  },
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "workspaceId": {
+        "type": "string"
+      }
+    }
+  },
+  "runtimeServices": {
+    "bundlePatch": "./bundle/cordis.patch.yml"
+  },
+  "storage": {
+    "type": "extension",
+    "defaultLocation": "extensions",
+    "movable": true,
+    "sizeEstimate": "500MB",
+    "dataCategories": [
+      "workspace",
+      "knowledge"
+    ]
+  },
+  "displayName": "Personal Knowledge Workspace",
+  "description": "Notes, tasks, attachments, events and WeKnora sync over the harness storage/fs seams.",
+  "author": "deepseek-harness",
+  "category": "knowledge",
+  "permissions": [
+    "storage.read-write",
+    "fs.read-write",
+    "workspace"
+  ],
+  "events": {
+    "listen": [
+      "storage/document-updated"
+    ],
+    "publish": [
+      "note.updated",
+      "task.updated",
+      "attachment.imported"
+    ]
+  }
+}

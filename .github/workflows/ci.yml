@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: typecheck + test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      # The harness is a private dependency: PKW's tsconfig resolves
+      # `@deepseek-ai/cordis` / `@deepseek-ai/dsh-*` through the harness checkout
+      # (see docs/HANDOVER.md §7). Without it, typecheck cannot resolve the seam
+      # and the suite is not meaningful. Set the repository variable
+      # HARNESS_REPO_URL (and secret HARNESS_REPO_TOKEN if private) to enable
+      # the full job; otherwise this workflow reports the gap instead of lying.
+      - name: Check harness availability
+        id: harness
+        run: |
+          if [ -n "${{ vars.HARNESS_REPO_URL }}" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::HARNESS_REPO_URL is not set — skipping typecheck/test (see docs/HANDOVER.md §7)."
+          fi
+
+      - name: Checkout harness (sibling of the PKW checkout)
+        if: steps.harness.outputs.available == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.HARNESS_REPO_URL }}
+          token: ${{ secrets.HARNESS_REPO_TOKEN || github.token }}
+          path: harness
+
+      - name: Link harness to the pinned seam path
+        if: steps.harness.outputs.available == 'true'
+        run: |
+          sudo mkdir -p /opt
+          sudo ln -sfn "$GITHUB_WORKSPACE/harness" /opt/deepseek-harness
+
+      - name: Install
+        if: steps.harness.outputs.available == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        if: steps.harness.outputs.available == 'true'
+        run: pnpm typecheck
+
+      - name: Test
+        if: steps.harness.outputs.available == 'true'
+        run: pnpm test

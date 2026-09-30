@@ -537,7 +537,11 @@ describe('manual create distributed failures', () => {
   })
 
   it('multiple exact candidates → deterministic canonical (completed preferred) + superseded recorded', async () => {
-    const { notes, adapter, sync, fake } = await boot()
+    // The worker never polls inside this test: the background note sync must not
+    // race the manual fixtures below. If it did land first, a mapping would exist
+    // and `recoverNote` would take the known-KnowledgeId path instead of candidate
+    // enumeration — which is exactly what this test is meant to cover.
+    const { notes, adapter, sync, fake } = await boot({ pollMs: 3_600_000 })
     const note = await notes.create({ relativePath: 'a.md', markdown: '# v1\n\ncanonical\n' })
     const doc = await notes.getDocument(note.noteId)
     const body = stripInternalFrontmatter(doc.markdown)

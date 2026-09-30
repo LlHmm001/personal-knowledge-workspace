@@ -1,4 +1,39 @@
+# ── dependencies ──────────────────────────────────────────────────────────────
 node_modules/
+.pnpm-store/
+
+# ── build output ─────────────────────────────────────────────────────────────
+dist/
+lib/
 *.tsbuildinfo
+
+# ── test / coverage ──────────────────────────────────────────────────────────
 coverage/
-.turbo/
+.vitest/
+*.log
+
+# ── PKW local workspace data (canonical notes/attachments NEVER go to git) ────
+pkw-workspace/
+workspace/
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+
+# ── secrets: nothing here may ever be committed ───────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets.yaml
+secrets.*.yaml
+config.yaml
+!config.example.yaml
+
+# ── editor / OS noise ────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json

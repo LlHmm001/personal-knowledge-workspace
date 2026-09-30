@@ -1,0 +1,25 @@
+# PKW host-plane bundle patch.
+#
+# Ownership model: the harness core owns the storage/workspace/webServer rows
+# (declared in extension.json's `requiresServices`, NOT re-registered here).
+# This patch registers only the PKW surface. The `pkw-web` row is the single
+# entry point: its Service.init registers the other seven PKW services as child
+# plugins, so the full eight-service surface (pkwWorkspace, pkwNotes, pkwTasks,
+# pkwAttachments, pkwEvents, pkwWeKnora, pkwWeKnoraSync, pkwWeb) lands in
+# ctx.services without double registration.
+#
+# Requires (from core): storageDomain, workspace, fs, timer, webServer, credentials.
+
+- insert:
+    - id: pkw-web
+      name: '@deepseek-ai/dsh-pkw-web'
+      config:
+        workspacePath: !!js dshHomePath('pkw', 'workspace')
+        kbId: '<REDACTED — injected per deployment>'
+        weknoraBaseUrl: 'http://127.0.0.1:18088/api/v1'
+        weknoraApiKeyRef: 'WEKNORA_API_KEY'
+        weknoraApiKey: ''
+        pollMs: 2000
+        retryBaseMs: 5000
+        retryMaxMs: 120000
+        recoveryGraceAttempts: 3
