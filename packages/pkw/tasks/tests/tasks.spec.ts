@@ -10,7 +10,7 @@ import WorkspaceRegistry from '@deepseek-ai/dsh-workspace'
 import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
 import PkwEventStoreService from '../../events/src/index.ts'
 import PkwWorkspaceService from '../../workspace/src/index.ts'
-import TasksService from '../src/index.ts'
+import TasksService, { taskContentHash } from '../src/index.ts'
 import { TaskId, TaskMatrixId } from '@deepseek-ai/dsh-pkw-domain'
 
 const dirs: string[] = []
@@ -48,6 +48,21 @@ async function boot(options: { dir?: string; databasePath?: string } = {}) {
 }
 
 describe('PKW tasks core', () => {
+  it('checks the displayed task fingerprint inside the mutation queue, including same-clock concurrent edits', async () => {
+    const { tasks } = await boot()
+    const task = await tasks.createTask({ title: 'Original', description: 'Keep this' })
+    const expectedContentHash = taskContentHash(task)
+    const results = await Promise.allSettled([
+      tasks.updateTask(task.taskId, { title: 'First editor' }, { expectedContentHash }),
+      tasks.updateTask(task.taskId, { description: 'Stale overwrite' }, { expectedContentHash }),
+    ])
+    expect(results[0].status).toBe('fulfilled')
+    expect(results[1]).toMatchObject({ status: 'rejected', reason: { code: 'PKW_TASK_CONFLICT' } })
+    expect(tasks.listTasks()[0]).toMatchObject({ title: 'First editor', description: 'Keep this' })
+    const current = tasks.listTasks()[0]!
+    await tasks.updateTask(task.taskId, { description: 'Explicit edit after reread' }, { expectedContentHash: taskContentHash(current) })
+    await expect(tasks.updateTask(task.taskId, { title: 'Bad guard' }, { expectedContentHash: 'invalid' })).rejects.toThrow('Invalid expectedContentHash')
+  })
   it('rejects runtime patches of immutable identity, workspace and creation timestamp', async () => {
     const { tasks } = await boot()
     const original = await tasks.createTask({ title: 'original' })

@@ -246,6 +246,7 @@ export interface RetrievalResult {
  * hits — never exposed in the product UI, only logged + available on the RPC.
  */
 export interface RetrievalTrace {
+  processingUnavailable?: boolean
   query: string
   mainRaw: number
   processingRaw: number
@@ -1616,6 +1617,7 @@ export class WeKnoraSyncService extends Service {
     // A2 federation: also search the Processing KB and remap hits to Business
     // Knowledge (owner Notes), then merge into the Main results.
     const processing = await this.searchProcessingForBusiness(query, limit)
+    if (processing.unavailable) trace.processingUnavailable = true
     trace.processingRaw = processing.raw
 
     // Retrieval Core (Foundation-lite): aggregate chunk-level EVIDENCE into one
@@ -1705,13 +1707,13 @@ export class WeKnoraSyncService extends Service {
   }
 
   /** A2: search the Processing KB and remap hits → owner Note (Business Knowledge). */
-  private async searchProcessingForBusiness(query: string, limit: number): Promise<{ results: RetrievalResult[]; raw: number }> {
+  private async searchProcessingForBusiness(query: string, limit: number): Promise<{ results: RetrievalResult[]; raw: number; unavailable?: boolean }> {
     const kbRec = this.reqProcessingKb().get(this.config.workspaceId)
     if (kbRec?.processingKbId === undefined) return { results: [], raw: 0 }
     let chunks: SearchResultChunk[]
     try {
       chunks = await this.ctx.pkwWeKnora.hybridSearch(kbRec.processingKbId, { query, limit })
-    } catch { return { results: [], raw: 0 } }
+    } catch { return { results: [], raw: 0, unavailable: true } }
 
     const out: RetrievalResult[] = []
     for (const chunk of chunks) {

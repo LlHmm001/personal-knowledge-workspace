@@ -30,11 +30,12 @@ import PkwEventStoreService from '@deepseek-ai/dsh-pkw-events'
 import PkwWorkspaceService from '@deepseek-ai/dsh-pkw-workspace'
 import NotesService, { splitFrontmatter } from '@deepseek-ai/dsh-pkw-notes'
 import AttachmentsService from '@deepseek-ai/dsh-pkw-attachments'
-import TasksService from '@deepseek-ai/dsh-pkw-tasks'
+import TasksService, { taskContentHash, TaskUpdateConflictError } from '@deepseek-ai/dsh-pkw-tasks'
 import WeKnoraClient from '@deepseek-ai/dsh-pkw-weknora'
 import WeKnoraSyncService, { type RetrievalResult } from '@deepseek-ai/dsh-pkw-weknora-sync'
 import { renderPage } from './ui.ts'
 import { renderMarkdownToHtml } from './lute.ts'
+import { localKeywordSearch, type LocalDocument } from './local-search.ts'
 
 // Capture at module load: a stale running process must not claim a newly
 // installed version merely because package.json changed on disk.
@@ -58,6 +59,9 @@ function noteWriteOptions(args: Record<string, unknown>): NoteUpdateOptions {
 }
 
 export interface Config {
+  /** Authenticated collaboration hosts bind each runtime to its own path. */
+  basePath?: string
+  workspaceTitle?: string
   /** Workspace root directory (notes/ + attachments/ live under it). */
   workspacePath: string
   /** Target WeKnora knowledge base id (the PKW mirror KB). */
@@ -243,6 +247,8 @@ function applyOrder(children: TreeChild[], order: OrderChild[], sortMode: string
 export class PkwWebService extends Service {
   static inject = ['storageDomain', 'fs', 'workspaceRegistry', 'webServer', 'timer']
   static Config: z<Config> = z.object({
+    basePath: z.string().default('/pkw'),
+    workspaceTitle: z.string().default(''),
     workspacePath: z.string(),
     kbId: z.string(),
     weknoraBaseUrl: z.string(),
@@ -267,11 +273,12 @@ export class PkwWebService extends Service {
   }
 
   protected async [Service.init](): Promise<void> {
+    if (!/^\/pkw(?:\/spaces\/[a-zA-Z0-9_-]+)?$/.test(this.basePath)) throw new Error('Invalid PKW basePath')
     const registry = this.ctx.workspaceRegistry
     const existing = await registry.resolveByPath(this.config.workspacePath)
     const ws = existing ?? await registry.create(this.config.workspacePath, 'PKW Personal Knowledge Workspace')
     this.workspaceId = String(ws.id)
-    this.workspaceName = ws.title
+    this.workspaceName = this.config.workspaceTitle || ws.title
 
     // PKW Core services, loaded into this plugin's fiber (browser never reaches them directly).
     await this.ctx.plugin(PkwEventStoreService)
@@ -304,14 +311,14 @@ export class PkwWebService extends Service {
 
     // Route surface. Disposers are owned by this fiber via ctx.effect.
     this.ctx.effect(() => this.ctx.webServer.register({
-      kind: 'exact', path: '/pkw', handler: (_req, res) => {
+      kind: 'exact', path: this.basePath, handler: (_req, res) => {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'X-PKW-Version': packageVersion })
-        res.end(renderPage(packageVersion))
+        res.end(renderPage(packageVersion, this.basePath))
       },
     }), 'pkw.web.page')
 
     this.ctx.effect(() => this.ctx.webServer.register({
-      kind: 'exact', path: '/pkw/api', handler: (req, res) => {
+      kind: 'exact', path: this.basePath + '/api', handler: (req, res) => {
         void this.handleApi(req, res)
       },
     }), 'pkw.web.api')
@@ -323,7 +330,7 @@ export class PkwWebService extends Service {
     const vditorEntry = createRequire(import.meta.url).resolve('vditor/dist/index.min.js')
     const vditorRoot = vditorEntry.slice(0, vditorEntry.length - 'dist/index.min.js'.length)
     this.ctx.effect(() => this.ctx.webServer.register({
-      kind: 'prefix', path: '/pkw/assets/vditor', handler: (req, res) => {
+      kind: 'prefix', path: this.basePath + '/assets/vditor', handler: (req, res) => {
         void this.serveVditorAsset(req, res, vditorRoot)
       },
     }), 'pkw.web.vditorAssets')
@@ -337,7 +344,7 @@ export class PkwWebService extends Service {
       // matcher look for `/pkw/attachment//…`, so every byte request fell through
       // to the SPA fallback and returned the GUI shell — breaking BOTH Live images
       // and Attachment Manager thumbnails.
-      kind: 'prefix', path: '/pkw/attachment', handler: (req, res) => {
+      kind: 'prefix', path: this.basePath + '/attachment', handler: (req, res) => {
         void this.serveAttachment(req, res)
       },
     }), 'pkw.web.attachment')
@@ -349,7 +356,7 @@ export class PkwWebService extends Service {
       // The byte route identity is the stable AttachmentId ONLY. The trailing
       // `<filename>` segment (if any) is never used for lookup — filename is
       // display/reference metadata, not route identity (CJK/spaces/rename safe).
-      let raw = decodeURIComponent(url.pathname.slice('/pkw/attachment/'.length)).replace(/^\/+|\/+$/g, '')
+      let raw = decodeURIComponent(url.pathname.slice((this.basePath + '/attachment/').length)).replace(/^\/+|\/+$/g, '')
       // Preview supports passive image/PDF/plain text; active document types remain downloads.
       const isPreview = raw.endsWith('/preview')
       if (isPreview) raw = raw.slice(0, -'/preview'.length).replace(/\/+$/g, '')
@@ -395,7 +402,7 @@ export class PkwWebService extends Service {
     try {
       const url = new URL(req.url ?? '/', 'http://localhost')
       // e.g. '3.11.3/dist/index.min.js' → version + 'dist/...' (allowlist).
-      const sub = url.pathname.slice('/pkw/assets/vditor/'.length)
+      const sub = url.pathname.slice((this.basePath + '/assets/vditor/').length)
       const [version, ...rest] = sub.split('/')
       if (version !== VDITOR_VERSION) {
         res.writeHead(404, { 'Content-Type': 'text/plain' })
@@ -430,7 +437,7 @@ export class PkwWebService extends Service {
       const result = await this.call(method, args)
       json(res, 200, { ok: true, value: result })
     } catch (error) {
-      if (error instanceof NoteUpdateConflictError) {
+      if (error instanceof NoteUpdateConflictError || error instanceof TaskUpdateConflictError) {
         json(res, 409, { ok: false, code: error.code, error: error.message })
         return
       }
@@ -439,6 +446,8 @@ export class PkwWebService extends Service {
   }
 
   /** Stable UI-facing RPC entry (also the contract under test). */
+  private get basePath(): string { return this.config.basePath ?? '/pkw' }
+
   async call(method: string, args: Json): Promise<unknown> {
     switch (method) {
       case 'summary': return this.summary()
@@ -474,7 +483,7 @@ export class PkwWebService extends Service {
         // Reading-mode HTML via the shared Lute engine (callout/table/code/wiki).
         const md = String(args.markdown ?? '')
         if (args.noteId !== undefined && args.noteId !== null && args.noteId !== '') return this.renderNoteMarkdown(md, String(args.noteId))
-        return renderMarkdownToHtml(md)
+        return renderMarkdownToHtml(md, this.basePath)
       }
       case 'tableMutation': {
         // Canonical GFM table edit: browser resolves the cell (tableIndex, header,
@@ -786,8 +795,15 @@ export class PkwWebService extends Service {
         return { purged: true }
       }
       case 'search': {
-        const { results, trace } = await this.sync.searchWithTrace(String(args.query), { limit: typeof args.limit === 'number' ? args.limit : 10 })
-        return { results: this.enrichRetrievalResults(results), trace }
+        const query = String(args.query ?? '').trim()
+        if (query.length > 200) throw new Error('检索问题请控制在 200 个字符以内')
+        const limit = typeof args.limit === 'number' && Number.isFinite(args.limit) ? Math.max(1, Math.min(50, Math.floor(args.limit))) : 10
+        if (!query) return { results: [], mode: 'local-keyword' }
+        if (args.mode === 'local' || await this.syncConfiguration() !== 'configured') return this.searchLocal(query, limit)
+        try {
+          const { results, trace } = await this.sync.searchWithTrace(query, { limit })
+          return { results: this.enrichRetrievalResults(results), trace, mode: 'remote', ...(trace.processingUnavailable ? { warning: '部分附件正文检索暂时不可用。以下结果来自当前可用的索引，不能据此断定附件中没有相关内容。' } : {}) }
+        } catch { return this.searchLocal(query, limit) }
       }
       case 'listKnowledge': return this.listKnowledge()
       case 'relatedKnowledge': return this.relatedKnowledge(String(args.noteId))
@@ -877,8 +893,9 @@ export class PkwWebService extends Service {
         ...(args.matrixId !== undefined ? { matrixId: args.matrixId === null ? null : TaskMatrixId(String(args.matrixId)) } : {}),
         ...(args.status !== undefined ? { status: String(args.status) as never } : {}),
         includeDeleted: args.includeDeleted === true,
-      })
-      case 'listSubtasks': return this.tasks.listSubtasks(TaskId(String(args.parentTaskId)))
+      }).map(task => ({ ...task, contentHash: taskContentHash(task) }))
+      case 'listTrashTasks': return this.tasks.listTasks({ includeDeleted: true }).filter(task => task.deletedAt !== undefined).map(task => ({ ...task, contentHash: taskContentHash(task) }))
+      case 'listSubtasks': return this.tasks.listSubtasks(TaskId(String(args.parentTaskId))).map(task => ({ ...task, contentHash: taskContentHash(task) }))
       case 'createTask': return this.tasks.createTask({
         title: String(args.title),
         ...(args.matrixId !== undefined && args.matrixId !== null ? { matrixId: TaskMatrixId(String(args.matrixId)) } : {}),
@@ -891,7 +908,11 @@ export class PkwWebService extends Service {
         ...(args.tags !== undefined ? { tags: Array.isArray(args.tags) ? args.tags.map(String) : [] } : {}),
         ...(args.sourceRefs !== undefined ? { sourceRefs: Array.isArray(args.sourceRefs) ? args.sourceRefs : [] } : {}),
       })
-      case 'updateTask': return this.tasks.updateTask(TaskId(String(args.taskId)), (args.patch ?? {}) as never)
+      case 'updateTask': {
+        if (args.expectedContentHash !== undefined && (typeof args.expectedContentHash !== 'string' || !/^[a-f0-9]{64}$/.test(args.expectedContentHash))) throw new Error('Invalid expectedContentHash')
+        const task = await this.tasks.updateTask(TaskId(String(args.taskId)), (args.patch ?? {}) as never, { expectedContentHash: args.expectedContentHash as string | undefined })
+        return { ...task, contentHash: taskContentHash(task) }
+      }
       case 'completeTask': return this.tasks.completeTask(TaskId(String(args.taskId)))
       case 'reopenTask': return this.tasks.reopenTask(TaskId(String(args.taskId)))
       case 'moveTaskToMatrix': return this.tasks.moveTaskToMatrix(TaskId(String(args.taskId)), args.matrixId !== undefined && args.matrixId !== null ? TaskMatrixId(String(args.matrixId)) : null)
@@ -949,6 +970,25 @@ export class PkwWebService extends Service {
   }
 
   /** Latest operation per entity, including terminal failures, plus dirty keys. */
+  private async searchLocal(query: string, limit: number): Promise<unknown> {
+    const documents: LocalDocument[] = []
+    const notes = this.notes.list()
+    let skipped = 0
+    for (const note of notes.slice(0, 5000)) {
+      try {
+        const doc = await this.notes.getDocument(note.noteId)
+        documents.push({ id: String(note.noteId), kind: 'note', title: doc.note.title, path: doc.note.relativePath, content: splitFrontmatter(doc.markdown).body })
+      } catch { skipped++ }
+    }
+    for (const attachment of this.attachments.list().slice(0, 5000)) {
+      // Companion-backed files already have a discoverable canonical note.
+      if (attachment.companionNoteId && this.notes.get(attachment.companionNoteId)?.deletedAt === undefined && this.notes.get(attachment.companionNoteId)) continue
+      documents.push({ id: String(attachment.id), kind: 'attachment', title: attachment.filename, content: attachment.filename })
+    }
+    const results = localKeywordSearch(query, documents, limit)
+    return { results, mode: 'local-keyword', warning: '当前使用本空间的本地关键词检索，范围为笔记正文和附件文件名；不包含附件内部全文或语义检索。' + (skipped || notes.length > 5000 || this.attachments.list().length > 5000 ? ' 部分资料未纳入本次检索，请检查文件状态或缩小资料范围。' : ''), trace: { mode: 'local-keyword', scanned: documents.length, skipped, final: results.length } }
+  }
+
   private async syncSnapshot(configuration?: SyncConfiguration): Promise<SyncSnapshot> {
     const currentConfiguration = configuration ?? await this.syncConfiguration()
     const intents = new Map<string, { state: string; lastError?: string }>()
@@ -1013,7 +1053,7 @@ export class PkwWebService extends Service {
         filename: r.remote.filename,
         score: r.remote.score,
       }
-      if (r.local === undefined) { out.push({ remote }); continue }
+      if (r.local === undefined) { if (this.basePath === '/pkw') out.push({ remote }); continue }
       // Stale-result guard: a remote hit whose local entity no longer exists (deleted
       // or archived) must NOT surface as a Business Knowledge result. The async
       // remote delete will eventually converge; until then, drop it here.
@@ -1157,7 +1197,7 @@ export class PkwWebService extends Service {
    * Markdown is never mutated.
    */
   private async renderNoteMarkdown(markdown: string, noteId: string): Promise<string> {
-    const html = await renderMarkdownToHtml(markdown)
+    const html = await renderMarkdownToHtml(markdown, this.basePath)
     const doc = await this.notes.getDocument(NoteId(noteId)).catch(() => undefined)
     if (doc === undefined) return html
     const esc = (s: string) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string))
@@ -1167,7 +1207,7 @@ export class PkwWebService extends Service {
       const rec = this.attachments.get(ref.attachmentId)
       if (rec === undefined || (rec.mimeType ?? '').indexOf('image/') === 0) continue
       const id = String(ref.attachmentId)
-      const href = '/pkw/attachment/' + encodeURIComponent(id)
+      const href = this.basePath + '/attachment/' + encodeURIComponent(id)
       const re = new RegExp('<a[^>]*href="' + href.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '"[^>]*>[^<]*</a>', 'g')
       const parts: string[] = []
       parts.push((rec.mimeType ?? '').split('/').pop() ?? '')

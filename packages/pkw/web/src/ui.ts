@@ -8,8 +8,10 @@
  * remote-sync polling that never rebuilds the editor or the folder tree.
  */
 
-export function renderPage(version = 'development'): string {
+export function renderPage(version = 'development', basePath = '/pkw'): string {
+  if (typeof basePath !== 'string' || basePath.trim() !== basePath || !/^\/pkw(?:\/spaces\/[a-zA-Z0-9_-]+)?$/.test(basePath)) throw new Error('Invalid PKW base path')
   const versionJson = JSON.stringify(version).replace(/</g, '\\u003c')
+  const basePathJson = JSON.stringify(basePath).replace(/</g, '\\u003c')
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -166,7 +168,7 @@ aside.right h3:first-child{margin-top:0}
 .form-label{display:block;font-size:12px;color:var(--muted);margin-bottom:4px}
 .stats{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-bottom:16px}
 .stat{border:1px solid var(--border);border-radius:10px;padding:12px 14px;background:var(--panel)}.stat .n{font-size:22px;font-weight:700}.stat .l{font-size:12px;color:var(--muted)}
-#toast{position:fixed;top:60px;left:50%;transform:translateX(-50%);z-index:60;display:none}
+#toast{position:fixed;top:60px;left:50%;transform:translateX(-50%);z-index:10000;display:none;pointer-events:none}
 #activity{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);z-index:60;display:none;align-items:center;gap:8px;padding:8px 14px;border-radius:999px;background:var(--panel);border:1px solid var(--border);box-shadow:0 4px 14px rgba(0,0,0,.15);font-size:13px;color:var(--text-secondary)}
 #activity .spinner{margin-right:2px}
 .toast{padding:9px 16px;border-radius:8px;color:#fff;font-size:13px;box-shadow:0 4px 14px rgba(0,0,0,.15)}
@@ -404,9 +406,16 @@ a.src-inline:hover{border-color:var(--accent)}
 .sel-bar{background:var(--accent-soft);border:1px solid var(--accent);border-radius:8px;padding:6px 8px}
 .exp-check{flex:0 0 auto;margin:0;cursor:pointer}
 .explorer-item .chev{color:var(--muted)}
+body.has-space{display:flex;flex-direction:column;height:100dvh}
+body.has-space #app{height:auto;flex:1;min-height:0}
+.space-context{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 12px;border-bottom:1px solid var(--border);background:var(--panel);font-size:12px}
+.space-context a{color:var(--accent)}
+.space-context .space-status{flex:1;min-width:140px;overflow-wrap:anywhere}
+[aria-disabled="true"]{opacity:.55;cursor:not-allowed}
 </style>
 </head>
-<body>
+<body${basePath === '/pkw' ? '' : ' class="has-space"'}>
+${basePath === '/pkw' ? '' : '<div class="space-context" id="spaceContext"><a href="/pkw" id="spaceBack">返回空间列表</a><span id="spaceStatus" class="space-status" role="status" aria-live="polite">正在读取空间权限…</span><a href="/pkw" id="spaceLogin" target="_blank" rel="noopener" hidden>在新窗口登录</a><button type="button" class="btn small" id="spaceRetry" hidden>重新验证会话</button></div>'}
 <div id="app">
   <header>
     <h1 id="pageTitle">PKW</h1>
@@ -451,7 +460,12 @@ const STR = {
   zh: {
     uploadRetained:'附件已上传到原笔记的来源中。你已切换页面，未向当前笔记插入链接。',
     searchResultsCount:'「{q}」的检索结果 · {n} 条', searchBackHome:'返回知识主页', searchOfflineHint:'搜索暂时不可用。已保存的笔记和附件不受检索失败影响。检查连接后重试，或返回笔记。', searchErrorDetails:'查看错误详情', searchEvidenceHint:'以下结果由知识服务检索返回，请结合摘要核对相关性。',
+    searchLocalEvidenceHint:'以下为当前空间的本地关键词匹配，请结合摘要核对相关性。', attachmentNameMatch:'附件文件名检索',
     editorOperationStale:'笔记或正文已变化，未应用旧操作。请在目标笔记中重试。', taskNewerEdits:'先前的修改已保存；保存期间新增的修改仍待保存。',
+    discardDraftConfirm:'放弃这个窗口中尚未保存的内容？', subtaskDraftPending:'子任务文本尚未添加。请先点击“+”添加，或清空文本后再关闭。',
+    taskConflict:'任务已在其他位置更新。当前草稿仍保留，服务器未被覆盖。请先复制草稿，再重新读取。', taskReload:'重新读取任务', taskReloadConfirm:'重新读取会替换当前任务草稿。请先复制需要保留的内容。继续？', taskVersionPending:'尚未取得这项任务的版本。请刷新任务后重试。', taskActionConflict:'任务已在其他位置更新，本次操作未应用。请查看最新任务后重试。',
+    subtaskEditPending:'子任务标题仍在编辑或保存中。请先按 Enter 保存，或按 Escape 取消后再关闭。',
+    spaceBack:'返回空间列表', spaceLogin:'在新窗口登录', spaceRetry:'重新验证会话', spaceLoading:'正在读取空间权限…', spaceReadOnly:'只读：可以阅读与检索，不能修改内容。', spaceLoginExpired:'登录已失效。当前草稿仍保留；请在新窗口登录后重新验证，再手动保存。', spaceDenied:'当前权限不允许此操作。草稿仍保留，请重新验证会话或联系空间管理员。', spaceDraftPending:'请先保存或关闭当前编辑窗口，再返回空间列表。', spaceRoleOwner:'所有者', spaceRoleAdmin:'管理员', spaceRoleEditor:'编辑者', spaceRoleViewer:'只读成员',
     itemActions:'{name}的操作', selectItem:'选择{name}', expandFolder:'展开{name}', collapseFolder:'收起{name}', syncWaitingConfig:'等待配置', syncConfigUnavailable:'配置暂不可读', syncWaitingConfigHint:'内容已保存在本地；完成知识服务配置后可同步。', syncConfigUnavailableHint:'知识服务配置暂不可读取，本地阅读和保存不依赖此服务。',
     reloadDraftChanged:'重新读取期间草稿又有修改，已保留当前草稿；复制完成后可再次重新读取。', reloadFailed:'重新读取失败，当前草稿仍保留，请检查连接后重试。',
     noteConflict:'笔记已在其他位置更新。当前草稿仍保留，服务器内容未被覆盖。请先复制草稿，再重新读取最新版本。', copyDraft:'复制草稿', manualCopyDraft:'查看或手动复制草稿', reloadNote:'重新读取', reloadNoteConfirm:'重新读取会丢弃当前未保存的草稿。请先复制草稿，之后再把需要的内容合并到最新笔记中。继续重新读取？', copyDraftFailed:'自动复制失败，请展开下方草稿，选中后手动复制。',
@@ -511,9 +525,11 @@ const STR = {
     tableDeleteRow:'删除当前行', tableDeleteCol:'删除当前列', tableDeleteTable:'删除表格', tableInsertSize:'插入表格',
     footnote:'脚注', footnoteContent:'脚注内容', footnoteInsert:'插入脚注', footnoteEdit:'编辑脚注', footnoteJump:'跳转到脚注', footnoteDelete:'删除脚注', footnoteBack:'回到引用', footnoteSelectText:'选中文字后插入脚注', footnoteEmpty:'（未选中文字，将在光标处插入引用）',
     trashAll:'全部', trashNotes:'笔记', trashFolders:'文件夹', trashAttachments:'附件', trashTypeFilter:'类型',
-    trashEmptyTrash:'清空回收站', trashSelectAll:'全选', trashSelected:'已选择 {n} 项', trashRestore:'恢复', trashPermanentDelete:'永久删除', trashClearSelection:'取消选择',
-    trashEmptyTitle:'回收站为空', trashEmptyBody:'删除的笔记、文件夹和附件会出现在这里。',
-    trashEmptyConfirmTitle:'清空回收站？', trashEmptyConfirmBody:'回收站中的全部 {n} 项内容将被永久删除，此操作无法撤销。',
+    trashEmptyTrash:'清空已删除资料', trashSelectAll:'全选', trashSelected:'已选择 {n} 项', trashRestore:'恢复', trashPermanentDelete:'永久删除', trashClearSelection:'取消选择',
+    trashEmptyTitle:'暂无删除的资料', trashEmptyBody:'删除的笔记、文件夹和附件会出现在这里。',
+    trashDocuments:'已删除资料', trashTasks:'已删除任务', trashTasksEmpty:'暂无已删除任务', trashTasksHint:'任务可逐项恢复，保留原有内容。原位置不可用时会调整到可访问的位置。上方清空资料操作不会删除这些任务。',
+    trashTasksReadFailed:'任务回收站读取失败，请重试。', trashTasksStale:'下方保留上次读取的列表，结果可能已变化。', trashTaskRestored:'任务已恢复，可在待办中查看', trashTaskRestoreFailed:'未能确认任务恢复结果，请刷新列表核对', trashTaskRestoreLabel:'恢复任务：{title}',
+    trashEmptyConfirmTitle:'清空已删除资料？', trashEmptyConfirmBody:'统计中的 {n} 项资料将被永久删除，此操作无法撤销；已删除任务不受影响。',
     trashEmptyConfirmStats:'笔记 {n} · 文件夹 {f} · 附件 {a}',
     trashPurgeConfirmTitle:'永久删除 {n} 项？', trashPurgeConfirmBody:'这些内容删除后无法从 PKW 回收站恢复。',
     trashRestoring:'正在恢复…', trashDeleting:'正在删除…', trashEmptied:'回收站已清空', trashRestored:'已恢复 {n} 项', trashRestoredPartial:'已恢复 {n} 项，{m} 项失败', trashPurged:'已永久删除 {n} 项', trashPurgedPartial:'已永久删除 {n} 项，{m} 项失败', trashDeletedTime:'删除于 {t}',
@@ -521,7 +537,12 @@ const STR = {
   en: {
     uploadRetained:'The file was uploaded to the original note’s sources. No link was inserted into your current note.',
     searchResultsCount:'Results for “{q}” · {n}', searchBackHome:'Back to knowledge home', searchOfflineHint:'Search is currently unavailable. Saved notes and attachments are unaffected by search failures. Check your connection and retry, or return to Notes.', searchErrorDetails:'Error details', searchEvidenceHint:'These results come from knowledge search. Check the excerpts for relevance.',
+    searchLocalEvidenceHint:'These are local keyword matches in this space. Check the excerpts for relevance.', attachmentNameMatch:'Attachment filename search',
     editorOperationStale:'The note or its text changed. The earlier operation was not applied; retry in the intended note.', taskNewerEdits:'Earlier edits were saved. Changes made while saving are still unsaved.',
+    discardDraftConfirm:'Discard the unsaved content in this dialog?', subtaskDraftPending:'The subtask text has not been added. Use “+” to add it, or clear the text before closing.',
+    taskConflict:'This task changed elsewhere. Your draft is still here and the server was not overwritten. Copy the draft before reloading.', taskReload:'Reload task', taskReloadConfirm:'Reloading will replace the current task draft. Copy anything you want to keep first. Continue?', taskVersionPending:'The task version is not available yet. Refresh the tasks and try again.', taskActionConflict:'This task changed elsewhere. The action was not applied. Review the latest task before trying again.',
+    subtaskEditPending:'A subtask title is being edited or saved. Press Enter to save, or Escape to cancel, before closing.',
+    spaceBack:'Back to spaces', spaceLogin:'Sign in in a new window', spaceRetry:'Verify session again', spaceLoading:'Loading space permissions…', spaceReadOnly:'Read only: you can read and search, but cannot change content.', spaceLoginExpired:'Your session expired. Your draft is still here. Sign in in a new window, verify the session again, then save manually.', spaceDenied:'Your current permissions do not allow this action. Your draft is still here. Verify the session again or contact a space administrator.', spaceDraftPending:'Save or close the current editing dialog before returning to spaces.', spaceRoleOwner:'Owner', spaceRoleAdmin:'Administrator', spaceRoleEditor:'Editor', spaceRoleViewer:'Read-only member',
     itemActions:'Actions for {name}', selectItem:'Select {name}', expandFolder:'Expand {name}', collapseFolder:'Collapse {name}', syncWaitingConfig:'Awaiting setup', syncConfigUnavailable:'Configuration unavailable', syncWaitingConfigHint:'Content is saved locally. Complete knowledge service setup to sync it.', syncConfigUnavailableHint:'Knowledge service configuration cannot be read. Local reading and saving do not depend on this service.',
     reloadDraftChanged:'Your draft changed while loading. It has been kept; copy it before trying again.', reloadFailed:'Could not load the latest note. Your draft is retained; check your connection and retry.',
     noteConflict:'This note changed elsewhere. Your draft is retained and the server was not overwritten. Copy your draft before loading the latest note.', copyDraft:'Copy draft', manualCopyDraft:'View or manually copy draft', reloadNote:'Load latest note', reloadNoteConfirm:'Loading the latest note will discard your unsaved draft. Copy it first, then merge the text you need into the latest note. Continue?', copyDraftFailed:'Automatic copy failed. Expand the draft below and select the text to copy it manually.',
@@ -581,26 +602,102 @@ const STR = {
     tableDeleteRow:'Delete row', tableDeleteCol:'Delete column', tableDeleteTable:'Delete table', tableInsertSize:'Insert table',
     footnote:'Footnote', footnoteContent:'Footnote content', footnoteInsert:'Insert footnote', footnoteEdit:'Edit footnote', footnoteJump:'Jump to footnote', footnoteDelete:'Delete footnote', footnoteBack:'Back to reference', footnoteSelectText:'Select text then insert footnote', footnoteEmpty:'(no selection — reference inserted at cursor)',
     trashAll:'All', trashNotes:'Notes', trashFolders:'Folders', trashAttachments:'Attachments', trashTypeFilter:'Type',
-    trashEmptyTrash:'Empty Trash', trashSelectAll:'Select all', trashSelected:'{n} selected', trashRestore:'Restore', trashPermanentDelete:'Delete permanently', trashClearSelection:'Clear selection',
-    trashEmptyTitle:'Trash is empty', trashEmptyBody:'Deleted notes, folders and attachments will appear here.',
-    trashEmptyConfirmTitle:'Empty Trash?', trashEmptyConfirmBody:'All {n} items in Trash will be permanently deleted. This cannot be undone.',
+    trashEmptyTrash:'Empty deleted documents', trashSelectAll:'Select all', trashSelected:'{n} selected', trashRestore:'Restore', trashPermanentDelete:'Delete permanently', trashClearSelection:'Clear selection',
+    trashEmptyTitle:'No deleted documents', trashEmptyBody:'Deleted notes, folders and attachments will appear here.',
+    trashDocuments:'Deleted documents', trashTasks:'Deleted tasks', trashTasksEmpty:'No deleted tasks', trashTasksHint:'Restore tasks individually with their content intact. Unavailable locations are adjusted to an accessible location. Emptying deleted documents above does not delete these tasks.',
+    trashTasksReadFailed:'Could not load deleted tasks. Please retry.', trashTasksStale:'The last loaded list is shown below and may be out of date.', trashTaskRestored:'Task restored. Find it in Tasks.', trashTaskRestoreFailed:'Could not confirm task restoration. Refresh the list to check the result.', trashTaskRestoreLabel:'Restore task: {title}',
+    trashEmptyConfirmTitle:'Empty deleted documents?', trashEmptyConfirmBody:'The {n} listed documents will be permanently deleted. This cannot be undone. Deleted tasks are not affected.',
     trashEmptyConfirmStats:'{n} notes · {f} folders · {a} attachments',
     trashPurgeConfirmTitle:'Delete {n} items permanently?', trashPurgeConfirmBody:'These items cannot be restored from Trash afterwards.',
     trashRestoring:'Restoring…', trashDeleting:'Deleting…', trashEmptied:'Trash emptied', trashRestored:'Restored {n} items', trashRestoredPartial:'Restored {n} items, {m} failed', trashPurged:'Deleted {n} items permanently', trashPurgedPartial:'Deleted {n} items permanently, {m} failed', trashDeletedTime:'Deleted {t}',
   },
 }
 const PKW_BUILD = ${versionJson}
+const PKW_BASE = ${basePathJson}
 let lang = localStorage.getItem('pkw-lang') === 'en' ? 'en' : 'zh'
 const t = (key, vars) => { let s = STR[lang][key] ?? STR.zh[key] ?? key; if (vars) for (const k in vars) s = s.split('{' + k + '}').join(String(vars[k])); return s }
+let workspaceSessionPromise = null
+let workspaceAccess = null
+let workspaceSessionError = ''
+async function ensureWorkspaceSession(){
+  if (PKW_BASE === '/pkw') return null
+  if (!workspaceSessionPromise) {
+    workspaceSessionPromise = (async () => {
+      const response = await fetch('/pkw/session', { credentials: 'same-origin', cache: 'no-store' })
+      let result = {}; try { result = await response.json() } catch (e) {}
+      if (!response.ok || result.ok !== true) {
+        const error = new Error(response.status === 401 ? t('spaceLoginExpired') : (result.error || t('genericError')))
+        error.code = result.code || (response.status === 401 ? 'PKW_AUTH_REQUIRED' : 'PKW_SESSION_FAILED'); throw error
+      }
+      const session = result.value
+      const space = session && Array.isArray(session.spaces) && session.spaces.find(item => item.id === PKW_BASE.split('/').pop())
+      if (!space || typeof session.csrf !== 'string' || !session.csrf || !['owner', 'admin', 'editor', 'viewer'].includes(space.role)) {
+        const error = new Error(t('spaceDenied')); error.code = 'PKW_FORBIDDEN'; throw error
+      }
+      workspaceAccess = { ...space, username: session.username, csrf: session.csrf }
+      workspaceSessionError = ''
+      paintWorkspaceSession()
+      return workspaceAccess
+    })().catch(error => { workspaceSessionPromise = null; workspaceSessionError = error.message; paintWorkspaceSession(); throw error })
+  }
+  return workspaceSessionPromise
+}
 const api = async (method, args = {}) => {
-  const res = await fetch('/pkw/api', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ method, args }) })
+  const session = await ensureWorkspaceSession()
+  const headers = { 'Content-Type': 'application/json' }
+  if (session) headers['X-PKW-CSRF'] = session.csrf
+  const res = await fetch(PKW_BASE + '/api', { method: 'POST', credentials: 'same-origin', headers, body: JSON.stringify({ method, args }) })
   let data = {}
   try { data = await res.json() } catch (e) {}
-  if (!res.ok || data.ok !== true) { const error = new Error((data && data.error) || ('HTTP ' + res.status)); error.code = data && data.code; throw error }
+  if (!res.ok || data.ok !== true) {
+    const error = new Error((data && data.error) || ('HTTP ' + res.status)); error.code = data && data.code
+    if (PKW_BASE !== '/pkw' && (res.status === 401 || res.status === 403)) {
+      workspaceSessionPromise = null
+      workspaceSessionError = t(res.status === 401 ? 'spaceLoginExpired' : 'spaceDenied')
+      paintWorkspaceSession()
+    }
+    throw error
+  }
   return data.value
 }
 const $ = (s) => document.querySelector(s)
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))
+function workspaceReadOnly(){ return PKW_BASE !== '/pkw' && (!workspaceAccess || workspaceAccess.role === 'viewer') }
+function paintWorkspaceSession(){
+  const status = $('#spaceStatus'); if (!status) return
+  $('#spaceBack').textContent = t('spaceBack'); $('#spaceLogin').textContent = t('spaceLogin'); $('#spaceRetry').textContent = t('spaceRetry')
+  $('#spaceLogin').hidden = !workspaceSessionError; $('#spaceRetry').hidden = !workspaceSessionError
+  const labels = { owner: 'spaceRoleOwner', admin: 'spaceRoleAdmin', editor: 'spaceRoleEditor', viewer: 'spaceRoleViewer' }
+  const identity = workspaceAccess ? workspaceAccess.name + ' · ' + t(labels[workspaceAccess.role]) : ''
+  status.textContent = [identity, workspaceSessionError || (workspaceReadOnly() ? t('spaceReadOnly') : '')].filter(Boolean).join(' — ') || t('spaceLoading')
+  applyWorkspacePermissions()
+}
+const workspaceWriteActions = new Set(['new-note','new-note-here','new-folder','new-subfolder','explorer-bulk-move','explorer-bulk-trash','save-note','rename-note','move-note','delete-note','rescan-notes','remove-missing-note','rename-folder','delete-folder','sync-note','upgrade-companion','sync-now','reconcile','upload-attachment','reparse-attachment','delete-attachment','att-batch-trash','att-batch-reparse','att-batch-index','att-create-companion','new-task','new-task-matrix','new-task-mobile','new-matrix','note-to-task','selection-to-task','toggle-task','subtask-edit','subtask-toggle','task-due','task-delete','task-duplicate','matrix-rename','matrix-archive','matrix-remove','task-up','task-down','restore-task','restore-one','purge-one','trash-restore','trash-purge','empty-trash','mobile-note-create','mobile-notes-new'])
+const workspacePurgeActions = new Set(['purge-one','trash-purge','empty-trash','remove-missing-note'])
+const workspaceDisabledControls = new Map()
+function workspaceActionDenied(el){
+  if (PKW_BASE === '/pkw') return false
+  const action = el.dataset.action
+  if (workspacePurgeActions.has(action) && (!workspaceAccess || !['owner','admin'].includes(workspaceAccess.role))) return true
+  return workspaceReadOnly() && (workspaceWriteActions.has(action) || (action === 'set-mode' && el.dataset.mode !== 'reading'))
+}
+function applyWorkspacePermissions(){
+  if (PKW_BASE === '/pkw') return
+  for (const [el, prior] of workspaceDisabledControls) {
+    if ('disabled' in el) el.disabled = prior.disabled
+    if (prior.aria === null) el.removeAttribute('aria-disabled'); else el.setAttribute('aria-disabled', prior.aria)
+    el.tabIndex = prior.tabIndex
+  }
+  workspaceDisabledControls.clear()
+  const controls = Array.from(document.querySelectorAll('[data-action], #taskDetailModal input, #taskDetailModal select, #taskDetailModal textarea, #tdSave, #tdAddSub'))
+  for (const el of controls) {
+    if (el.id === 'tdDraft') continue
+    if (!workspaceActionDenied(el) && !(workspaceReadOnly() && el.closest('#taskDetailModal') && !el.dataset.action)) continue
+    workspaceDisabledControls.set(el, { disabled: el.disabled, aria: el.getAttribute('aria-disabled'), tabIndex: el.tabIndex })
+    if ('disabled' in el) el.disabled = true
+    el.setAttribute('aria-disabled', 'true'); el.tabIndex = -1
+  }
+}
 
 const state = {
   view: 'overview',
@@ -628,6 +725,8 @@ const state = {
   searchResults: null,
   searchStatus: 'idle',
   searchError: '',
+  searchWarning: '',
+  searchMode: null,
   attMode: localStorage.getItem('pkw-att-mode') || 'list',
   attQuery: localStorage.getItem('pkw-att-query') || '',
   attType: localStorage.getItem('pkw-att-type') || 'all',
@@ -639,11 +738,107 @@ const state = {
   trashSelection: new Set(),
   trashFilter: 'all',
   trashBusy: false,
+  trashTaskBusy: null,
+  trashTaskError: '',
+  trashTasksLoadError: '',
   inspectorCollapsed: false,
   selectedTaskIds: new Set(),
   knowledgeCache: null,
   knowledgeShowAll: false,
 }
+// ── Dialog lifecycle: the top dialog owns keyboard focus and cancellation ──
+const dialogStack = []
+const dialogBackgrounds = new Map()
+let dialogObserver = null
+let dialogBodyOverflow = ''
+function dialogFocusable(panel){
+  return Array.from(panel.querySelectorAll('button, [href], input, select, textarea, [tabindex], [contenteditable="true"]'))
+    .filter(el => !el.disabled && el.tabIndex >= 0 && !el.closest('[hidden], [inert]') && el.getClientRects().length > 0)
+}
+function syncDialogBackground(){
+  const top = dialogStack[dialogStack.length - 1]
+  for (const [el, inert] of dialogBackgrounds) el.inert = inert
+  if (!top) { dialogBackgrounds.clear(); return }
+  for (const el of Array.from(document.body.children)) {
+    // Read-only live announcements remain available while all app controls are inert.
+    if (el.id === 'toast' || el.id === 'activity' || el.tagName === 'SCRIPT') continue
+    if (!dialogBackgrounds.has(el)) dialogBackgrounds.set(el, el.inert)
+    el.inert = el !== top.overlay
+  }
+}
+function mountDialog(overlay, options){
+  const panel = options.panel || overlay.querySelector('.modal') || overlay
+  const opener = document.activeElement
+  panel.setAttribute('role', 'dialog')
+  panel.setAttribute('aria-modal', 'true')
+  panel.setAttribute('aria-label', options.name)
+  panel.tabIndex = -1
+  const entry = { overlay, panel, options, opener, focus: () => {
+    const target = options.initialFocus && panel.querySelector(options.initialFocus)
+    const available = dialogFocusable(panel)
+    ;(target && available.includes(target) ? target : (available[0] || panel)).focus()
+  }, close: () => {
+    const index = dialogStack.indexOf(entry)
+    if (index < 0) return
+    // A parent owns its nested confirmations; tear them down in stack order.
+    while (dialogStack.length > index + 1) dialogStack[dialogStack.length - 1].close()
+    dialogStack.pop()
+    overlay.remove()
+    syncDialogBackground()
+    const top = dialogStack[dialogStack.length - 1]
+    if (!top) {
+      if (dialogObserver) { dialogObserver.disconnect(); dialogObserver = null }
+      document.body.style.overflow = dialogBodyOverflow
+    }
+    if (opener && opener.isConnected && !opener.closest('[inert]') && (!top || top.panel.contains(opener))) opener.focus()
+    else if (top) top.focus()
+    else { const main = document.getElementById('main'); if (main) main.focus() }
+  } }
+  if (!dialogStack.length) { dialogBodyOverflow = document.body.style.overflow; document.body.style.overflow = 'hidden' }
+  overlay.style.zIndex = String(100 + dialogStack.length * 10)
+  dialogStack.push(entry)
+  syncDialogBackground()
+  entry.focus()
+  if (!dialogObserver) {
+    dialogObserver = new MutationObserver(() => {
+      // Also release ownership if a host-level view teardown removes an overlay.
+      for (const item of dialogStack.slice()) if (!item.overlay.isConnected) item.close()
+      syncDialogBackground()
+      const top = dialogStack[dialogStack.length - 1]
+      if (top && !top.panel.contains(document.activeElement)) top.focus()
+    })
+    dialogObserver.observe(document.body, { childList: true, subtree: true })
+  }
+  return entry
+}
+function closeMountedDialog(overlay){
+  const entry = dialogStack.find(item => item.overlay === overlay)
+  if (entry) entry.close(); else overlay.remove()
+}
+document.addEventListener('keydown', (e) => {
+  const top = dialogStack[dialogStack.length - 1]
+  if (!top) return
+  if (e.key === 'Escape') {
+    if (e.isComposing) return
+    if (e.target.closest('[data-dialog-escape="local"]')) return
+    e.preventDefault(); e.stopImmediatePropagation()
+    if (top.options.onCancel) top.options.onCancel()
+  } else if (e.key === 'Tab') {
+    const items = dialogFocusable(top.panel), first = items[0] || top.panel, last = items[items.length - 1] || top.panel
+    if (!items.length || !items.includes(document.activeElement) || (e.shiftKey && document.activeElement === first) || (!e.shiftKey && document.activeElement === last)) {
+      e.preventDefault(); (e.shiftKey ? last : first).focus()
+    }
+    e.stopImmediatePropagation()
+  } else if ((e.metaKey || e.ctrlKey) && ['s', 'o'].includes(e.key.toLowerCase())) {
+    e.preventDefault(); e.stopImmediatePropagation()
+    if (e.key.toLowerCase() === 's' && top.options.onSave) top.options.onSave()
+  }
+}, true)
+document.addEventListener('focusin', (e) => {
+  const top = dialogStack[dialogStack.length - 1]
+  if (top && !top.panel.contains(e.target)) top.focus()
+}, true)
+function dialogHasDraft(){ return dialogStack.some(item => item.options.hasDraft && item.options.hasDraft()) }
 // ── View switching: navigation guard + single-flight + instrumentation ──────
 let viewSeq = 0
 let viewStart = 0
@@ -651,6 +846,7 @@ let noteSeq = 0
 let navigationSeq = 0
 let searchSeq = 0
 let attachmentSeq = 0
+let trashSeq = 0
 const inFlight = {}
 function loadOnce(method, args){
   const key = method + ':' + JSON.stringify(args || {})
@@ -667,7 +863,7 @@ function invalidateLoad(method){
 // post-mutation data is authoritative (Local mutation is an event, not polling).
 function refreshTasks(){ invalidateLoad('listTasks'); invalidateLoad('listMatrices'); renderTasks() }
 function refreshAttachments(){ invalidateLoad('listAttachments'); renderAttachments() }
-function refreshTrash(){ invalidateLoad('listTrash'); invalidateLoad('listTrashAttachments'); invalidateLoad('listTrashFolders'); renderTrash() }
+function refreshTrash(){ invalidateLoad('listTrash'); invalidateLoad('listTrashAttachments'); invalidateLoad('listTrashFolders'); invalidateLoad('listTrashTasks'); return renderTrash() }
 function viewMark(phase, extra){
   console.debug('[pkw.view] view=' + state.view + ' phase=' + phase + ' ms=' + Math.round(performance.now() - viewStart) + (extra ? ' ' + extra : ''))
 }
@@ -697,7 +893,7 @@ function toast(msg, kind){ const el = $('#toast'); el.innerHTML = '<div class="t
 // can't show byte progress. Not a job system — just an indeterminate spinner.
 function showActivity(msg){ const el = $('#activity'); if (!el) return; el.innerHTML = '<span class="spinner"></span>' + esc(msg); el.style.display = 'flex'; clearTimeout(showActivity._t) }
 function clearActivity(){ const el = $('#activity'); if (!el) return; clearTimeout(showActivity._t); showActivity._t = setTimeout(() => { el.style.display = 'none' }, 150) }
-function applyLang(){ document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en'; $('#langBtn').textContent = lang === 'zh' ? 'EN' : '中文'; document.querySelectorAll('.nav .launch-item').forEach(b => { const l = b.querySelector('.li-label'); if (l) l.textContent = b.dataset.view === 'attachments' ? t('sources') : t(b.dataset.view) }); document.querySelectorAll('#bottomNav .bn-item').forEach(b => { const l = b.querySelector('.bn-label'); if (l) l.textContent = b.dataset.view === 'attachments' ? t('sources') : t(b.dataset.view) }) }
+function applyLang(){ document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en'; $('#langBtn').textContent = lang === 'zh' ? 'EN' : '中文'; document.querySelectorAll('.nav .launch-item').forEach(b => { const l = b.querySelector('.li-label'); if (l) l.textContent = b.dataset.view === 'attachments' ? t('sources') : t(b.dataset.view) }); document.querySelectorAll('#bottomNav .bn-item').forEach(b => { const l = b.querySelector('.bn-label'); if (l) l.textContent = b.dataset.action === 'mobile-more' ? t('mobileMore') : b.dataset.view === 'attachments' ? t('sources') : t(b.dataset.view) }) }
 // ── Theme (system / light / dark) — preference in localStorage, tokens in CSS ──
 function currentThemeMode(){ return localStorage.getItem('pkw-theme') || 'system' }
 function applyTheme(mode){
@@ -1195,7 +1391,7 @@ async function openNote(noteId, loaded = null){
   try {
     const d = loaded || await api('getNote', { noteId })
     if (seq !== noteSeq || state.view !== 'notes' || state.selectedNoteId !== noteId) return // stale: a newer note/view owns the surface
-    state.editor = { noteId, persistedMarkdown: d.markdown, body: d.body || '', frontmatter: d.frontmatter || '', dirty: false, saving: false, mode: isMobile() ? 'reading' : (localStorage.getItem('pkw-editor-mode') || 'live'), observedRevision: d.note && d.note.observedRevision, contentHash: d.note && d.note.contentHash }
+    state.editor = { noteId, persistedMarkdown: d.markdown, body: d.body || '', frontmatter: d.frontmatter || '', dirty: false, saving: false, mode: isMobile() || workspaceReadOnly() ? 'reading' : (localStorage.getItem('pkw-editor-mode') || 'live'), observedRevision: d.note && d.note.observedRevision, contentHash: d.note && d.note.contentHash }
     state.noteAttachments = d.attachments || []
     // Expand parent folders so the opened Note is visible + highlighted in the tree
     // (identity stays NoteId; path is only used to reveal ancestors).
@@ -1230,6 +1426,7 @@ function searchContextBanner(ctx){
   let label = t('noteBodyMatch')
   if (ctx.reason === 'both') label = t('noteBodyMatch') + ' · ' + t('attMatch') + ' · ' + esc(ctx.attName || '')
   else if (ctx.reason === 'attachment') label = t('attMatch') + ' · ' + esc(ctx.attName || '')
+  else if (ctx.reason === 'attachment-name') label = t('attachmentNameMatch') + ' · ' + esc(ctx.attName || '')
   return '<div class="search-context-banner">' + label + '</div>'
 }
 function renderEditorShell(d){
@@ -1331,9 +1528,9 @@ function ensureVditorLoaded(){
   if (window.Vditor) return Promise.resolve()
   if (vditorLoadPromise) return vditorLoadPromise
   vditorLoadPromise = Promise.all([
-    loadCss('/pkw/assets/vditor/3.11.3/dist/index.css'),
-    loadScript('/pkw/assets/vditor/3.11.3/dist/js/lute/lute.min.js'),
-    loadScript('/pkw/assets/vditor/3.11.3/dist/index.min.js'),
+    loadCss(PKW_BASE + '/assets/vditor/3.11.3/dist/index.css'),
+    loadScript(PKW_BASE + '/assets/vditor/3.11.3/dist/js/lute/lute.min.js'),
+    loadScript(PKW_BASE + '/assets/vditor/3.11.3/dist/index.min.js'),
   ]).then(() => { if (!window.Vditor) throw new Error('Vditor failed to initialize') })
   return vditorLoadPromise
 }
@@ -1361,7 +1558,7 @@ function managedAttachmentUrl(src){
   if (slash < 0) return null
   const id = after.slice(0, slash)
   if (!id) return null
-  return '/pkw/attachment/' + id
+  return PKW_BASE + '/attachment/' + id
 }
 function rewriteLiveAttachmentImgs(root){
   if (!root || !root.querySelectorAll) return
@@ -1374,7 +1571,7 @@ function rewriteLiveAttachmentImgs(root){
     for (let a = 0; a < attrs.length; a++) {
       const attr = attrs[a]
       const src = img.getAttribute(attr) || ''
-      if (src.indexOf('/pkw/attachment/') === 0) continue
+      if (src.indexOf(PKW_BASE + '/attachment/') === 0) continue
       const resolved = managedAttachmentUrl(src)
       if (resolved) {
         console.debug('[pkw.live-img] ' + attr + '=' + src + ' currentSrc=' + (img.currentSrc || '') + ' resolved=' + resolved)
@@ -1389,7 +1586,7 @@ function rewriteLiveAttachmentImgs(root){
   for (let i = 0; i < links.length; i++) {
     const a = links[i]
     const href = a.getAttribute('href') || ''
-    if (href.indexOf('/pkw/attachment/') === 0) continue
+    if (href.indexOf(PKW_BASE + '/attachment/') === 0) continue
     const resolved = managedAttachmentUrl(href)
     if (resolved) {
       a.setAttribute('href', resolved + '/preview')
@@ -1419,7 +1616,7 @@ async function initVditor(){
     vditor = new window.Vditor(el, {
       mode: 'ir',
       cache: { enable: false },
-      cdn: '/pkw/assets/vditor/3.11.3',
+      cdn: PKW_BASE + '/assets/vditor/3.11.3',
       height: 'calc(100vh - 180px)',
       value: state.editor.body || '',
       toolbar: vditorToolbar(),
@@ -1492,14 +1689,15 @@ function mobileFormatSheet(){
     ['🖼 · ' + t('slashImage'), () => editorInsert('![alt](url)')],
     ['① · ' + t('slashFootnote'), () => editorInsert('[^1]')],
   ]
-  document.querySelectorAll('.mobile-sheet-overlay').forEach(o => o.remove())
+  document.querySelectorAll('.mobile-sheet-overlay').forEach(closeMountedDialog)
   const ov = document.createElement('div')
   ov.className = 'mobile-sheet-overlay'
   ov.innerHTML = '<div class="mobile-sheet"><div class="ms-title">' + esc(t('mobileMore')) + '</div>' +
     items.map((it, i) => '<button class="ms-item" data-mf="' + i + '">' + esc(it[0]) + '</button>').join('') +
     '<button class="ms-cancel">' + esc(t('cancel')) + '</button></div>'
   document.body.appendChild(ov)
-  ov.addEventListener('click', (e) => { const b = e.target.closest('[data-mf]'); if (b) { items[Number(b.dataset.mf)][1](); ov.remove() } else if (e.target === ov || e.target.closest('.ms-cancel')) ov.remove() })
+  const dialog = mountDialog(ov, { name: t('mobileMore'), panel: ov.querySelector('.mobile-sheet'), onCancel: () => dialog.close() })
+  ov.addEventListener('click', (e) => { const b = e.target.closest('[data-mf]'); if (b) { dialog.close(); items[Number(b.dataset.mf)][1]() } else if (e.target === ov || e.target.closest('.ms-cancel')) dialog.close() })
 }
 function pickAttachment(){
   const inp = document.createElement('input')
@@ -1722,7 +1920,7 @@ function renderSources(noteId, attachments){
     const rows = (sums || []).map(s => {
       const isImage = (s.mimeType || '').indexOf('image/') === 0
       const thumb = isImage
-        ? '<img class="bk-thumb" src="/pkw/attachment/' + esc(s.attachmentId) + '" alt="" loading="lazy" data-action="att-preview" data-id="' + esc(s.attachmentId) + '">'
+        ? '<img class="bk-thumb" src="' + PKW_BASE + '/attachment/' + esc(s.attachmentId) + '" alt="" loading="lazy" data-action="att-preview" data-id="' + esc(s.attachmentId) + '">'
         : '<span class="bk-ic" data-action="att-preview" data-id="' + esc(s.attachmentId) + '">📄</span>'
       const summary = s.description ? '<div class="bk-summary muted">' + esc(s.description) + '</div>' : ''
       const ownerHint = s.ownerCount > 1 ? '<span class="badge">' + esc(t('usedByN', { n: s.ownerCount })) + '</span>' : ''
@@ -2011,13 +2209,14 @@ function showFolderPicker(currentPath, cb){
   api('listFolders').then(folders => {
     const overlay = document.createElement('div')
     overlay.className = 'modal-overlay'
-    overlay.innerHTML = '<div class="modal"><h3>' + esc(t('moveTo')) + '</h3><select id="pickFolder"><option value="">' + esc(t('rootFolder')) + '</option>' + folders.map(f => '<option value="' + esc(f) + '"' + (f === currentPath ? ' selected' : '') + '>' + esc(f) + '</option>').join('') + '</select><div class="modal-actions"><button class="btn" data-act="pick-cancel">' + esc(t('cancel')) + '</button><button class="btn primary" data-act="pick-ok">' + esc(t('ok')) + '</button></div></div>'
+    overlay.innerHTML = '<div class="modal"><h3>' + esc(t('moveTo')) + '</h3><select id="pickFolder" aria-label="' + esc(t('folder')) + '"><option value="">' + esc(t('rootFolder')) + '</option>' + folders.map(f => '<option value="' + esc(f) + '"' + (f === currentPath ? ' selected' : '') + '>' + esc(f) + '</option>').join('') + '</select><div class="modal-actions"><button class="btn" data-act="pick-cancel">' + esc(t('cancel')) + '</button><button class="btn primary" data-act="pick-ok">' + esc(t('ok')) + '</button></div></div>'
     document.body.appendChild(overlay)
     const okBtn = overlay.querySelector('[data-act="pick-ok"]')
     // Scoped handles: never 'document.querySelector(.modal-overlay)' — with
     // stacked overlays the global selector removes the WRONG (first) one and
     // leaves the top overlay stuck (the "move dialog never closes" bug).
-    const done = (val) => { overlay.remove(); if (val !== undefined) cb(val) }
+    const dialog = mountDialog(overlay, { name: t('moveTo'), initialFocus: '#pickFolder', onCancel: () => done(undefined) })
+    const done = (val) => { dialog.close(); if (val !== undefined) cb(val) }
     overlay.querySelector('[data-act="pick-cancel"]').onclick = () => done(undefined)
     okBtn.onclick = () => { okBtn.disabled = true; done(overlay.querySelector('#pickFolder').value) }
     overlay.addEventListener('click', (e) => { if (e.target === overlay) done(undefined) })
@@ -2046,7 +2245,7 @@ function attFilteredList(){
 }
 function fmtStamp(iso){ return String(iso || '').slice(0, 16).replace('T', ' ') }
 function attIcon(a){
-  if (attTypeOf(a.mimeType) === 'image') return '<img class="att-thumb" src="/pkw/attachment/' + esc(a.attachmentId) + '" alt="" loading="lazy">'
+  if (attTypeOf(a.mimeType) === 'image') return '<img class="att-thumb" src="' + PKW_BASE + '/attachment/' + esc(a.attachmentId) + '" alt="" loading="lazy">'
   if (attTypeOf(a.mimeType) === 'document') return '<span class="att-ic">📄</span>'
   return '<span class="att-ic">📦</span>'
 }
@@ -2075,7 +2274,7 @@ function attCardHtml(a){
   const sel = state.attSelection.has(a.attachmentId)
   return '<div class="att-card ' + (sel ? 'selected' : '') + '" data-action="open-attachment" data-id="' + esc(a.attachmentId) + '">' +
     '<input type="checkbox" class="att-check" data-action="att-toggle" data-id="' + esc(a.attachmentId) + '"' + (sel ? ' checked' : '') + '>' +
-    '<div class="att-thumbwrap">' + (attTypeOf(a.mimeType) === 'image' ? '<img class="att-thumb" src="/pkw/attachment/' + esc(a.attachmentId) + '" alt="" loading="lazy">' : '<span class="att-ic big">📄</span>') + '</div>' +
+    '<div class="att-thumbwrap">' + (attTypeOf(a.mimeType) === 'image' ? '<img class="att-thumb" src="' + PKW_BASE + '/attachment/' + esc(a.attachmentId) + '" alt="" loading="lazy">' : '<span class="att-ic big">📄</span>') + '</div>' +
     '<div class="att-card-name">' + esc(a.filename) + '</div>' +
     '<div class="muted small">' + fmtSize(a.sizeBytes) + ' · ' + esc(fmtStamp(a.createdAt)) + '</div>' +
     '<div>' + procStateBadge(a.processingState, a) + sourceOwnerBadge(a) + '</div>' +
@@ -2230,11 +2429,11 @@ async function openCompanionForAttachment(id){
 }
 async function previewAttachment(id){
   // Mobile → browser native viewer (new tab). Desktop → right Inspector preview pane.
-  if (isMobile()) { window.open('/pkw/attachment/' + id + '/preview', '_blank'); return }
+  if (isMobile()) { window.open(PKW_BASE + '/attachment/' + id + '/preview', '_blank'); return }
   try {
     const d = await api('getAttachment', { attachmentId: id })
     const a = d.attachment
-    const url = '/pkw/attachment/' + id + '/preview'
+    const url = PKW_BASE + '/attachment/' + id + '/preview'
     const mime = a.mimeType || ''
     const isPdf = mime === 'application/pdf'
     const isImage = mime.indexOf('image/') === 0
@@ -2311,26 +2510,29 @@ async function uploadFilesWithCompanion(files, withNote, folder, index){
 function uploadDialog(){
   const overlay = document.createElement('div'); overlay.className = 'modal-overlay'
   overlay.innerHTML = '<div class="modal"><h3>' + esc(t('upload')) + '</h3>' +
-    '<input type="file" id="upFiles" multiple style="margin-bottom:10px">' +
+    '<input type="file" id="upFiles" aria-label="' + esc(t('upload')) + '" multiple style="margin-bottom:10px">' +
     '<label class="check-row"><input type="checkbox" id="upNote" checked> ' + esc(t('companionNote')) + '</label>' +
-    '<label class="form-label">' + esc(t('noteLocation')) + '</label><select id="upFolder" style="margin-bottom:10px"></select>' +
+    '<label for="upFolder" class="form-label">' + esc(t('noteLocation')) + '</label><select id="upFolder" style="margin-bottom:10px"></select>' +
     '<label class="check-row"><input type="checkbox" id="upIndex" checked> ' + esc(t('kbIndex')) + ' <span class="muted small">' + esc(t('kbIndexHint')) + '</span></label>' +
     '<div class="toolbar" style="margin-top:12px"><button class="btn" id="upCancel">' + esc(t('cancel')) + '</button><button class="btn primary" id="upOk">' + esc(t('upload')) + '</button></div></div>'
   document.body.appendChild(overlay)
   const q = (s) => overlay.querySelector(s)
+  const hasDraft = () => !!q('#upFiles').files.length
+  const cancel = () => { if (!hasDraft() || confirm(t('discardDraftConfirm'))) dialog.close() }
+  const dialog = mountDialog(overlay, { name: t('upload'), initialFocus: '#upFiles', onCancel: cancel, hasDraft })
   api('listFolders').then(folders => {
     const sel = q('#upFolder')
     if (sel) sel.innerHTML = '<option value="">' + esc(t('rootFolder')) + '</option>' + (folders || []).map(f => '<option value="' + esc(f) + '">' + esc(f) + '</option>').join('')
   }).catch(() => {})
-  q('#upCancel').addEventListener('click', () => overlay.remove())
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove() })
+  q('#upCancel').addEventListener('click', cancel)
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) cancel() })
   q('#upOk').addEventListener('click', () => {
     const files = Array.prototype.slice.call(q('#upFiles').files || [])
     if (!files.length) { toast(t('uploadFailed'), 'warn'); return }
     const withNote = q('#upNote').checked
     const folder = q('#upFolder').value || ''
     const index = q('#upIndex').checked
-    overlay.remove()
+    dialog.close()
     uploadFilesWithCompanion(files, withNote, folder, index)
   })
 }
@@ -2570,7 +2772,49 @@ function updateTrashSelectionUI(){
       '<button class="btn small" data-action="trash-clear-selection" ' + (state.trashBusy ? 'disabled' : '') + '>' + esc(t('trashClearSelection')) + '</button>'
     : ''
 }
-function renderTrashFrom(notes, atts, folders){
+function trashTasksHtml(tasks){
+  const readOnly = workspaceReadOnly(), busy = !!state.trashTaskBusy
+  const loadError = state.trashTasksLoadError
+    ? '<p class="muted" role="alert">' + esc(t('trashTasksReadFailed')) + ' ' + esc(state.trashTasksLoadError) + (tasks.length ? ' ' + esc(t('trashTasksStale')) : '') + '</p><button class="btn small" data-action="retry-trash-tasks">' + esc(t('retry')) + '</button>'
+    : ''
+  const restoreError = state.trashTaskError ? '<p role="alert">' + esc(state.trashTaskError) + '</p>' + (loadError ? '' : '<button class="btn small" data-action="retry-trash-tasks">' + esc(t('retry')) + '</button>') : ''
+  const rows = tasks.map(task => '<div class="tree-row trash-item">' +
+    '<span class="ic" aria-hidden="true">☑</span><span class="trash-main"><span class="trash-name">' + esc(task.title) + '</span>' +
+    '<span class="muted small">' + esc(t('trashDeletedTime', { t: task.deletedAt || '' })) + '</span></span>' +
+    '<button type="button" class="btn small" data-action="restore-task" data-id="' + esc(task.taskId) + '" aria-label="' + esc(t('trashTaskRestoreLabel', { title: task.title })) + '"' + (readOnly || busy ? ' disabled' : '') + '>' + esc(t(state.trashTaskBusy === task.taskId ? 'trashRestoring' : 'trashRestore')) + '</button></div>').join('')
+  return '<h3 id="trashTasksTitle" tabindex="-1">' + esc(t('trashTasks')) + '<span class="sub">' + tasks.length + '</span></h3>' +
+    '<p class="muted small">' + esc(t('trashTasksHint')) + '</p>' + (readOnly ? '<p class="muted small">' + esc(t('spaceReadOnly')) + '</p>' : '') +
+    loadError + restoreError + (rows || (loadError ? '' : '<p class="muted">' + esc(t('trashTasksEmpty')) + '</p>'))
+}
+function renderTrashTasksInto(){
+  const box = $('#trashTasks')
+  if (state.view === 'trash' && box) box.innerHTML = trashTasksHtml((state.trashCache && state.trashCache.tasks) || [])
+}
+async function restoreTrashedTask(taskId){
+  if (workspaceReadOnly() || state.trashTaskBusy) return false
+  const task = ((state.trashCache && state.trashCache.tasks) || []).find(item => item.taskId === taskId)
+  if (!task) return false
+  state.trashTaskBusy = taskId; state.trashTaskError = ''; renderTrashTasksInto()
+  try {
+    await api('restoreTask', { taskId })
+    if (state.trashCache) state.trashCache.tasks = (state.trashCache.tasks || []).filter(item => item.taskId !== taskId)
+    state.tasksCache = []; subtaskCache.clear()
+    invalidateLoad('listTasks'); invalidateLoad('listTrashTasks')
+    toast(t('trashTaskRestored'), 'ok')
+    if (state.view === 'trash') await refreshTrash()
+    else if (state.view === 'tasks') refreshTasks()
+    if (taskDetailRefreshSubtasks) taskDetailRefreshSubtasks()
+    return true
+  } catch (error) {
+    state.trashTaskError = t('trashTaskRestoreFailed') + ': ' + error.message
+    toast(state.trashTaskError, 'err')
+    return false
+  } finally {
+    state.trashTaskBusy = null
+    renderTrashTasksInto()
+  }
+}
+function renderTrashFrom(notes, atts, folders, tasks = []){
   const visible = trashVisible(notes, atts, folders)
   const keys = visible.map(x => x.key)
   state.trashSelection = trashReconcile(state.trashSelection, keys)
@@ -2580,11 +2824,12 @@ function renderTrashFrom(notes, atts, folders){
   $('#list').innerHTML = '<div class="list-head">' + esc(t('trash')) + '</div><div class="list-section">' + esc(t('trashTypeFilter')) + '</div>' + filterRows
   const sa = trashSelectAllState(state.trashSelection, keys)
   const rows = visible.map(it => trashItemRow(it, state.trashSelection.has(it.key))).join('')
-  $('#main').innerHTML = '<h2>' + esc(t('trash')) + '<span class="sub">' + counts.all + '</span></h2>' +
+  $('#main').innerHTML = '<h2>' + esc(t('trash')) + '</h2><h3>' + esc(t('trashDocuments')) + '<span class="sub">' + counts.all + '</span></h3>' +
     '<div class="toolbar"><label class="select-all"><input type="checkbox" id="trashSelectAll"' + (sa === 'all' ? ' checked' : '') + ' ' + (state.trashBusy ? 'disabled' : '') + '> ' + esc(t('trashSelectAll')) + '</label><span class="spacer"></span>' +
     '<button class="btn danger" data-action="empty-trash" ' + (counts.all === 0 || state.trashBusy ? 'disabled' : '') + '>' + esc(t('trashEmptyTrash')) + '</button></div>' +
     '<div id="trashSelBar" class="trash-selbar"></div>' +
-    (rows ? rows : '<div class="empty"><h3>' + esc(t('trashEmptyTitle')) + '</h3><p class="muted">' + esc(t('trashEmptyBody')) + '</p></div>')
+    (rows ? rows : '<div class="empty"><h3>' + esc(t('trashEmptyTitle')) + '</h3><p class="muted">' + esc(t('trashEmptyBody')) + '</p></div>') +
+    '<section id="trashTasks" aria-labelledby="trashTasksTitle" style="margin-top:28px">' + trashTasksHtml(tasks) + '</section>'
   const saEl = $('#trashSelectAll'); if (saEl) saEl.indeterminate = (sa === 'partial')
   updateTrashSelectionUI()
   restoreScroll()
@@ -2643,9 +2888,10 @@ function trashConfirmDialog(title, body, okLabel, onOk){
   overlay.innerHTML = '<div class="modal trash-confirm"><h3>' + esc(title) + '</h3><p class="muted">' + body + '</p><div class="toolbar"><button class="btn" id="tcCancel">' + esc(t('cancel')) + '</button><button class="btn danger" id="tcOk">' + esc(okLabel) + '</button></div></div>'
   document.body.appendChild(overlay)
   const q = (s) => overlay.querySelector(s)
-  q('#tcCancel').addEventListener('click', () => overlay.remove())
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove() })
-  q('#tcOk').addEventListener('click', () => { overlay.remove(); onOk() })
+  const dialog = mountDialog(overlay, { name: title, initialFocus: '#tcCancel', onCancel: () => dialog.close() })
+  q('#tcCancel').addEventListener('click', () => dialog.close())
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) dialog.close() })
+  q('#tcOk').addEventListener('click', () => { dialog.close(); onOk() })
 }
 function confirmBatchPurge(keys){
   trashConfirmDialog(t('trashPurgeConfirmTitle', { n: keys.length }), esc(t('trashPurgeConfirmBody')), t('trashPermanentDelete'), () => doBatchPurge(keys))
@@ -2662,19 +2908,23 @@ function confirmEmptyTrash(){
   })
 }
 async function renderTrash(){
-  const seq = viewSeq
+  const seq = viewSeq, request = ++trashSeq
   $('#detail').innerHTML = ''
-  if (state.trashCache) { renderTrashFrom(state.trashCache.notes, state.trashCache.atts, state.trashCache.folders); viewMark('warm-paint', 'cache=hit') }
+  if (state.trashCache) { renderTrashFrom(state.trashCache.notes, state.trashCache.atts, state.trashCache.folders, state.trashCache.tasks); viewMark('warm-paint', 'cache=hit') }
   else { $('#list').innerHTML = ''; $('#treeToolbar').innerHTML = ''; $('#main').innerHTML = '<div class="empty">' + esc(t('loading')) + '</div>'; viewMark('shell', 'cache=miss') }
   try {
-    const notes = await loadOnce('listTrash', {})
-    const atts = await loadOnce('listTrashAttachments', {})
-    const folders = await loadOnce('listTrashFolders', {})
-    if (seq !== viewSeq) return // stale navigation guard
-    state.trashCache = { notes, atts, folders }
-    renderTrashFrom(notes, atts, folders)
+    const [notes, atts, folders, taskResult] = await Promise.all([
+      loadOnce('listTrash', {}), loadOnce('listTrashAttachments', {}), loadOnce('listTrashFolders', {}),
+      loadOnce('listTrashTasks', {}).then(tasks => ({ tasks, error: '' }), error => ({ tasks: null, error: error.message }))
+    ])
+    if (seq !== viewSeq || request !== trashSeq) return // stale navigation guard
+    const tasks = taskResult.tasks || (state.trashCache && state.trashCache.tasks) || []
+    state.trashTasksLoadError = taskResult.error
+    if (!taskResult.error) state.trashTaskError = ''
+    state.trashCache = { notes, atts, folders, tasks }
+    renderTrashFrom(notes, atts, folders, tasks)
     viewMark('data-ready')
-  } catch (e) { if (seq === viewSeq) $('#main').innerHTML = '<div class="empty">' + esc(t('genericError')) + ': ' + esc(e.message) + '</div>' }
+  } catch (e) { if (seq === viewSeq && request === trashSeq) $('#main').innerHTML = '<div class="empty">' + esc(t('genericError')) + ': ' + esc(e.message) + '</div>' }
 }
 
 // ── Knowledge view: unified Discovery (browse + RAG retrieval). Search and
@@ -2716,12 +2966,13 @@ function renderKnowledgeSearchState(){
   } else {
     const results = state.searchResults || []
     if (status) status.textContent = t('searchResultsCount', { q: state.searchQuery, n: results.length })
-    box.innerHTML = results.length ? '<p class="kb-section-hint">' + esc(t('searchEvidenceHint')) + '</p>' + searchCardsHtml(results) : '<div class="empty">' + esc(t('noHits', { q: state.searchQuery })) + '</div>'
+    const warning = state.searchWarning ? '<p class="kb-section-hint" role="status">' + esc(state.searchWarning) + '</p>' : ''
+    box.innerHTML = warning + (results.length ? '<p class="kb-section-hint">' + esc(t(state.searchMode === 'local-keyword' ? 'searchLocalEvidenceHint' : 'searchEvidenceHint')) + '</p>' + searchCardsHtml(results) : '<div class="empty">' + esc(t('noHits', { q: state.searchQuery })) + '</div>')
   }
 }
 function clearKnowledgeSearch(){
   searchSeq++
-  state.searchQuery = ''; state.searchResults = null; state.searchStatus = 'idle'; state.searchError = ''
+  state.searchQuery = ''; state.searchResults = null; state.searchStatus = 'idle'; state.searchError = ''; state.searchWarning = ''; state.searchMode = null
   renderKnowledgeView()
   const input = $('#kbSearch'); if (input) input.focus()
 }
@@ -2803,17 +3054,19 @@ async function renderKnowledgeBrowseInto(){
 }
 function searchCardsHtml(results){
   return results.map(r => {
+    const attachmentReason = t(state.searchMode === 'local-keyword' ? 'attachmentNameMatch' : 'attMatch')
     const local = r.local
     const title = r.remote.title || r.remote.filename || (local && local.title) || (local && local.entityId) || t('untitled')
     const attName = r.remote.filename || (local && local.matchedAttachmentId) || ''
     let reason = ''
     let reasonValue = 'note'
     if (local) {
-      if (local.matchReason === 'both') { reason = t('noteBodyMatch') + ' · ' + t('attMatch') + ' · ' + esc(attName); reasonValue = 'both' }
-      else if (local.matchReason === 'attachment' || local.matchedAttachmentId) { reason = t('attMatch') + ' · ' + esc(attName); reasonValue = 'attachment' }
-      else if (local.entityType === 'attachment') { reason = t('attMatch') + ' · ' + esc(attName); reasonValue = 'attachment' }
+      if (local.matchReason === 'both') { reason = t('noteBodyMatch') + ' · ' + attachmentReason + ' · ' + esc(attName); reasonValue = 'both' }
+      else if (local.matchReason === 'attachment' || local.matchedAttachmentId) { reason = attachmentReason + ' · ' + esc(attName); reasonValue = 'attachment' }
+      else if (local.entityType === 'attachment') { reason = attachmentReason + ' · ' + esc(attName); reasonValue = 'attachment' }
       else reason = t('noteBodyMatch')
     }
+    if (state.searchMode === 'local-keyword' && reasonValue === 'attachment') reasonValue = 'attachment-name'
     const kindBadge = local
       ? (local.entityType === 'note' ? '<span class="badge">' + esc(t('noteLabel')) + '</span>' : '<span class="badge">' + esc(t('attachmentLabel')) + '</span>')
       : ''
@@ -2844,20 +3097,22 @@ async function runSearch(q){
   const request = ++searchSeq, view = viewSeq
   state.searchQuery = q
   state.searchResults = null
-  state.searchStatus = 'loading'; state.searchError = ''
+  state.searchStatus = 'loading'; state.searchError = ''; state.searchWarning = ''; state.searchMode = null
   renderKnowledgeSearchState()
   const current = () => request === searchSeq && view === viewSeq && state.view === 'knowledge' && state.searchQuery === q
   try {
     const payload = await api('search', { query: q, limit: 10 })
     if (!current()) return
     state.searchResults = payload && Array.isArray(payload.results) ? payload.results : (Array.isArray(payload) ? payload : [])
+    state.searchWarning = payload && typeof payload.warning === 'string' ? payload.warning : ''
+    state.searchMode = payload && payload.mode === 'local-keyword' ? 'local-keyword' : 'remote'
     state.searchStatus = 'success'
     // Dev-only retrieval trace: never render remote IDs or ranking scores.
     if (payload && payload.trace) console.debug('[pkw.retrieval]', payload.trace)
     renderKnowledgeSearchState()
   } catch (e) {
     if (!current()) return
-    state.searchResults = null; state.searchStatus = 'error'; state.searchError = String(e.message || '')
+    state.searchResults = null; state.searchStatus = 'error'; state.searchError = String(e.message || ''); state.searchWarning = ''; state.searchMode = null
     renderKnowledgeSearchState()
   }
 }
@@ -2872,23 +3127,25 @@ function quickSwitch(){
     collectNotes(tree.root, notes)
     const overlay = document.createElement('div')
     overlay.className = 'modal-overlay'
-    overlay.innerHTML = '<div class="modal"><h3>' + esc(t('quickSwitch')) + '</h3><input id="qsInput" placeholder="' + esc(t('typeToSearch')) + '" /><div id="qsList" style="max-height:300px;overflow:auto"></div></div>'
+    overlay.innerHTML = '<div class="modal"><h3>' + esc(t('quickSwitch')) + '</h3><input id="qsInput" aria-label="' + esc(t('typeToSearch')) + '" placeholder="' + esc(t('typeToSearch')) + '" /><div id="qsList" style="max-height:300px;overflow:auto"></div><button class="btn" id="qsCancel">' + esc(t('cancel')) + '</button></div>'
     document.body.appendChild(overlay)
-    const input = overlay.querySelector('#qsInput'); input.focus()
+    const input = overlay.querySelector('#qsInput')
+    const dialog = mountDialog(overlay, { name: t('quickSwitch'), initialFocus: '#qsInput', onCancel: () => dialog.close() })
+    overlay.querySelector('#qsCancel').addEventListener('click', () => dialog.close())
     const listEl = overlay.querySelector('#qsList')
     const render = () => {
       const q = input.value.trim().toLowerCase()
       const list = notes.filter(n => !q || n.title.toLowerCase().includes(q) || n.relativePath.toLowerCase().includes(q)).slice(0, 30)
-      listEl.innerHTML = list.map(n => '<div class="tree-row" data-qsid="' + esc(n.noteId) + '"><span class="ic">📄</span><span class="nm">' + esc(n.title) + '</span><span class="muted mono">' + esc(n.relativePath) + '</span></div>').join('') || '<div class="empty">' + esc(t('noHits', { q: '' })) + '</div>'
+      listEl.innerHTML = list.map(n => '<button type="button" class="tree-row row-action" data-qsid="' + esc(n.noteId) + '"><span class="ic">📄</span><span class="nm">' + esc(n.title) + '</span><span class="muted mono">' + esc(n.relativePath) + '</span></button>').join('') || '<div class="empty">' + esc(t('noHits', { q: '' })) + '</div>'
     }
     render()
     input.addEventListener('input', render)
     listEl.addEventListener('click', async (e) => {
       const row = e.target.closest('[data-qsid]')
-      if (row) { overlay.remove(); if (await setView('notes')) await openNote(row.dataset.qsid) }
+      if (row) { dialog.close(); if (await setView('notes')) await openNote(row.dataset.qsid) }
     })
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove() })
-  })
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) dialog.close() })
+  }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
 }
 function collectNotes(nodes, out){ for (const n of nodes) { if (n.kind === 'note') out.push(n); else collectNotes(n.children || [], out) } }
 
@@ -2896,7 +3153,7 @@ function collectNotes(nodes, out){ for (const n of nodes) { if (n.kind === 'note
 document.addEventListener('paste', async (e) => {
   // Vditor (Live mode) handles paste via its own upload hook; this manual handler
   // is for Source mode only (a raw textarea with no upload integration).
-  if (state.view !== 'notes' || state.selectedNoteId === null || state.editor.mode !== 'source') return
+  if (dialogStack.length || state.view !== 'notes' || state.selectedNoteId === null || state.editor.mode !== 'source') return
   const editor = state.editor, noteId = state.selectedNoteId, input = $('#editor')
   const items = Array.from((e.clipboardData && e.clipboardData.items) || []).filter(item => item.type.indexOf('image/') === 0)
   if (!items.length) return
@@ -2947,7 +3204,7 @@ function isMobile(){ return window.innerWidth <= 768 }
 let lastWasMobile = null
 window.addEventListener('resize', () => { const m = isMobile(); if (m !== lastWasMobile) { lastWasMobile = m; render() } })
 function mobileActionSheet(title, items){
-  document.querySelectorAll('.mobile-sheet-overlay').forEach(o => o.remove())
+  document.querySelectorAll('.mobile-sheet-overlay').forEach(closeMountedDialog)
   const ov = document.createElement('div')
   ov.className = 'mobile-sheet-overlay'
   ov.innerHTML = '<div class="mobile-sheet"><div class="ms-title">' + esc(title) + '</div>' +
@@ -2959,7 +3216,8 @@ function mobileActionSheet(title, items){
     }).join('') +
     '<button class="ms-cancel">' + esc(t('cancel')) + '</button></div>'
   document.body.appendChild(ov)
-  ov.addEventListener('click', (e) => { if (e.target === ov || e.target.closest('.ms-item') || e.target.closest('.ms-cancel')) ov.remove() })
+  const dialog = mountDialog(ov, { name: title, panel: ov.querySelector('.mobile-sheet'), onCancel: () => dialog.close() })
+  ov.addEventListener('click', (e) => { if (e.target === ov || e.target.closest('.ms-item') || e.target.closest('.ms-cancel')) dialog.close() })
 }
 function mobileNoteRow(n){
   const folder = (n.relativePath || '').includes('/') ? (n.relativePath).slice(0, (n.relativePath).lastIndexOf('/')) : ''
@@ -2971,7 +3229,7 @@ function mobileNoteRow(n){
 }
 function mobileSourceCard(a){
   const isImage = (a.mimeType || '').indexOf('image/') === 0
-  const thumb = isImage ? '<img class="msrc-thumb" src="/pkw/attachment/' + esc(a.attachmentId) + '" alt="" loading="lazy">' : '<span class="msrc-ic">📄</span>'
+  const thumb = isImage ? '<img class="msrc-thumb" src="' + PKW_BASE + '/attachment/' + esc(a.attachmentId) + '" alt="" loading="lazy">' : '<span class="msrc-ic">📄</span>'
   const summary = a.summary ? '<div class="msrc-summary">' + esc(String(a.summary).slice(0, 120)) + '</div>' : ''
   return '<div class="msrc" data-action="open-attachment" data-id="' + esc(a.attachmentId) + '">' +
     '<div class="msrc-thumbwrap">' + thumb + '</div>' +
@@ -2991,12 +3249,13 @@ function mobileTaskCard(x, matrices, inMatrix){
 }
 // Full-screen mobile detail (replaces the hidden desktop Inspector on mobile).
 function mobileDetail(title, bodyHtml){
-  document.querySelectorAll('.mobile-detail').forEach(o => o.remove())
+  document.querySelectorAll('.mobile-detail').forEach(closeMountedDialog)
   const ov = document.createElement('div')
   ov.className = 'mobile-detail'
   ov.innerHTML = '<div class="md-head"><button class="btn small" data-action="mobile-detail-back">← ' + esc(t('back')) + '</button><span class="md-title">' + esc(title) + '</span></div><div class="md-body">' + bodyHtml + '</div>'
   document.body.appendChild(ov)
-  ov.addEventListener('click', (e) => { if (e.target === ov) ov.remove() })
+  const dialog = mountDialog(ov, { name: title, panel: ov, initialFocus: '[data-action="mobile-detail-back"]', onCancel: () => dialog.close() })
+  ov.addEventListener('click', (e) => { if (e.target === ov) dialog.close() })
 }
 function showNoteContextMenu(x, y, noteId){
   showContextMenu(x, y, [
@@ -3133,8 +3392,10 @@ function matrixDeleteDialog(matrixId, name){
     '<div class="toolbar" id="mdActions" style="margin-top:12px"><button class="btn" id="mdCancel">' + esc(t('cancel')) + '</button><button class="btn danger" id="mdOk">' + esc(t('matrixRemove')) + '</button></div></div>'
   document.body.appendChild(overlay)
   const q = (s) => overlay.querySelector(s)
-  q('#mdCancel').addEventListener('click', () => { if (!matrixDeleting) overlay.remove() })
-  overlay.addEventListener('click', (e) => { if (e.target === overlay && !matrixDeleting) overlay.remove() })
+  const cancel = () => { if (!matrixDeleting) dialog.close() }
+  const dialog = mountDialog(overlay, { name: t('matrixRemove') + (name ? ': ' + name : ''), initialFocus: '#mdCancel', onCancel: cancel, hasDraft: () => matrixDeleting })
+  q('#mdCancel').addEventListener('click', cancel)
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) cancel() })
   q('#mdOk').addEventListener('click', () => {
     const disp = q('input[name="mdDisp"]:checked').value
     // Deleting state takes effect immediately; the visible busy state is delayed
@@ -3147,15 +3408,16 @@ function matrixDeleteDialog(matrixId, name){
     const showBusy = () => { q('#mdActions').innerHTML = '<div><span class="spinner"></span> <span class="muted">' + esc(t('matrixDeleting')) + '</span></div><p class="muted small">' + esc(busyText) + '</p>' }
     const busyTimer = setTimeout(showBusy, 200)
     api('removeMatrix', { matrixId, taskDisposition: disp }).then(r => {
-      clearTimeout(busyTimer); matrixDeleting = false; overlay.remove()
+      clearTimeout(busyTimer); matrixDeleting = false; dialog.close()
       const doneText = disp === 'delete-tasks' ? t('matrixDeletedTasks', { n: (r && r.deleted) || 0 }) : t('matrixDeleted', { n: (r && r.moved) || 0 })
       toast(doneText, 'ok')
       refreshTasks()
     }).catch(e => {
       clearTimeout(busyTimer); matrixDeleting = false
       q('#mdActions').innerHTML = '<p class="muted">' + esc(t('matrixDeleteFailed')) + ': ' + esc(e.message) + '</p><div class="toolbar"><button class="btn" id="mdClose">' + esc(t('taskClose')) + '</button><button class="btn danger" id="mdRetry">' + esc(t('retry')) + '</button></div>'
-      q('#mdClose').addEventListener('click', () => overlay.remove())
-      q('#mdRetry').addEventListener('click', () => { overlay.remove(); matrixDeleteDialog(matrixId, name) })
+      q('#mdClose').addEventListener('click', () => dialog.close())
+      q('#mdRetry').addEventListener('click', () => { dialog.close(); matrixDeleteDialog(matrixId, name) })
+      q('#mdClose').focus()
     })
   })
 }
@@ -3417,16 +3679,19 @@ function showFootnoteDefMenu(x, y, key){
 }
 function footnoteModal(title, initial, placeholder, onOk){
   const overlay = document.createElement('div'); overlay.className = 'modal-overlay'
-  overlay.innerHTML = '<div class="modal footnote-modal"><h3>' + esc(title) + '</h3><textarea id="fnContent" rows="4" placeholder="' + esc(placeholder) + '"></textarea><div class="toolbar"><button class="btn" id="fnCancel">' + esc(t('cancel')) + '</button><button class="btn primary" id="fnOk">' + esc(t('footnoteInsert')) + '</button></div></div>'
+  overlay.innerHTML = '<div class="modal footnote-modal"><h3>' + esc(title) + '</h3><textarea id="fnContent" aria-label="' + esc(placeholder) + '" rows="4" placeholder="' + esc(placeholder) + '"></textarea><div class="toolbar"><button class="btn" id="fnCancel">' + esc(t('cancel')) + '</button><button class="btn primary" id="fnOk">' + esc(t('footnoteInsert')) + '</button></div></div>'
   document.body.appendChild(overlay)
   const q = (s) => overlay.querySelector(s)
-  const ta = q('#fnContent'); ta.value = initial || ''; ta.focus()
-  q('#fnCancel').addEventListener('click', () => overlay.remove())
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove() })
+  const ta = q('#fnContent'); ta.value = initial || ''
+  const hasDraft = () => ta.value !== (initial || '')
+  const cancel = () => { if (!hasDraft() || confirm(t('discardDraftConfirm'))) dialog.close() }
+  const dialog = mountDialog(overlay, { name: title, initialFocus: '#fnContent', onCancel: cancel, hasDraft })
+  q('#fnCancel').addEventListener('click', cancel)
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) cancel() })
   q('#fnOk').addEventListener('click', () => {
     const content = ta.value.trim()
     if (!content) { ta.focus(); return }
-    overlay.remove(); onOk(content)
+    dialog.close(); onOk(content)
   })
 }
 function footnoteDialog(){
@@ -3526,14 +3791,19 @@ document.addEventListener('mouseup', (e) => {
 })
 
 // ── Task drag/drop (HTML5 DnD, client-side) ────
+let taskDragSnapshot = null
 document.addEventListener('dragstart', (e) => {
   const card = e.target.closest('.task-card[draggable="true"]')
   if (!card) return
+  if (workspaceReadOnly()) { e.preventDefault(); return }
+  const task = (state.tasksCache || []).find(item => item.taskId === card.dataset.id)
+  taskDragSnapshot = task ? { taskId: task.taskId, contentHash: task.contentHash } : null
   e.dataTransfer.setData('text/plain', card.dataset.id)
   e.dataTransfer.effectAllowed = 'move'
   card.classList.add('dragging')
 })
 document.addEventListener('dragend', () => {
+  taskDragSnapshot = null
   document.querySelectorAll('.dragging').forEach(el => el.classList.remove('dragging'))
   document.querySelectorAll('.drop-over').forEach(el => el.classList.remove('drop-over'))
 })
@@ -3549,28 +3819,29 @@ document.addEventListener('dragleave', (e) => {
   if (t) t.classList.remove('drop-over')
 })
 document.addEventListener('drop', (e) => {
-  const t = e.target.closest('[data-drop]')
-  if (!t) return
+  const target = e.target.closest('[data-drop]')
+  if (!target) return
   e.preventDefault()
-  t.classList.remove('drop-over')
+  target.classList.remove('drop-over')
   const taskId = e.dataTransfer.getData('text/plain')
   if (!taskId) return
-  const task = (state.tasksCache || []).find(x => x.taskId === taskId)
-  if (!task) return
+  const task = taskDragSnapshot
+  if (!task || task.taskId !== taskId || workspaceReadOnly()) return
+  taskDragSnapshot = null
   let patch = null
-  const kind = t.dataset.drop
+  const kind = target.dataset.drop
   if (kind === 'matrix-quadrant') {
-    const q = Number(t.dataset.quadrant)
-    patch = { matrixId: t.dataset.matrixid, important: q === 1 || q === 2, urgent: q === 1 || q === 3 }
+    const q = Number(target.dataset.quadrant)
+    patch = { matrixId: target.dataset.matrixid, important: q === 1 || q === 2, urgent: q === 1 || q === 3 }
   } else if (kind === 'matrix') {
-    patch = { matrixId: t.dataset.matrixid }
+    patch = { matrixId: target.dataset.matrixid }
   } else if (kind === 'inbox') {
     patch = { matrixId: null }
   } else if (kind === 'today') {
     patch = { scheduledAt: new Date().toISOString().slice(0, 10) }
   }
   if (!patch) return
-  api('updateTask', { taskId, patch }).then(() => refreshTasks()).catch(e => { toast(t('genericError') + ': ' + e.message, 'err'); renderTasks() })
+  api('updateTask', { taskId, expectedContentHash: task.contentHash, patch }).then(() => refreshTasks()).catch(e => { toast(e.code === 'PKW_TASK_CONFLICT' ? t('taskActionConflict') : t('genericError') + ': ' + e.message, 'err'); refreshTasks() })
 })
 
 // ── Delegated events ────────────────────────────────────────────────────────
@@ -3702,13 +3973,21 @@ document.addEventListener('click', async (e) => {
   else if (act === 'toggle-task') {
     const task = (state.tasksCache || []).find(x => x.taskId === id)
     const isSubtask = task && task.parentTaskId !== null
-    const t = el.dataset.completed === '1' ? api('reopenTask', { taskId: id }) : api('completeTask', { taskId: id })
-    t.then(() => { if (!isSubtask) refreshTasks(); if (taskDetailRefreshSubtasks) taskDetailRefreshSubtasks() }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
+    const operation = el.dataset.completed === '1' ? api('reopenTask', { taskId: id }) : api('completeTask', { taskId: id })
+    operation.then(() => { if (!isSubtask) refreshTasks(); if (taskDetailRefreshSubtasks) taskDetailRefreshSubtasks() }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
   }
   else if (act === 'subtask-edit') { inlineEditSubtask(el, id) }
   else if (act === 'subtask-toggle') { if (taskDetailToggleSubtask) taskDetailToggleSubtask(id) }
   else if (act === 'open-task-detail') taskDetailDialog(id)
-  else if (act === 'task-due') { const due = prompt(t('taskDue'), ''); if (due !== null) api('updateTask', { taskId: id, patch: { dueAt: due } }).then(() => refreshTasks()) }
+  else if (act === 'task-due') {
+    const task = (state.tasksCache || []).find(item => item.taskId === id)
+    if (!task) return
+    const expectedContentHash = task.contentHash
+    const due = prompt(t('taskDue'), task.dueAt || '')
+    if (due !== null) api('updateTask', { taskId: id, expectedContentHash, patch: { dueAt: due } }).then(() => refreshTasks()).catch(error => {
+      showTaskPatchDraft({ dueAt: due }, undefined, error.code === 'PKW_TASK_CONFLICT' ? t('taskConflict') : t('genericError') + ': ' + error.message)
+    })
+  }
   else if (act === 'task-delete') { const task = (state.tasksCache || []).find(x => x.taskId === id); const isSubtask = task && task.parentTaskId !== null; api('deleteTask', { taskId: id }).then(() => { if (!isSubtask) refreshTasks(); if (taskDetailRefreshSubtasks) taskDetailRefreshSubtasks() }).catch(e => toast(t('genericError') + ': ' + e.message, 'err')) }
   else if (act === 'task-duplicate') { const t = (state.tasksCache || []).find(x => x.taskId === id); if (t) api('createTask', { title: t.title + ' (copy)', ...(t.matrixId ? { matrixId: t.matrixId } : {}), important: t.important, urgent: t.urgent, ...(t.description ? { description: t.description } : {}), ...(t.dueAt ? { dueAt: t.dueAt } : {}), tags: t.tags || [] }).then(() => refreshTasks()) }
   else if (act === 'matrix-rename') { const name = prompt(t('folderRenamePrompt'), ''); if (name && name.trim()) api('renameMatrix', { matrixId: id, name: name.trim() }).then(() => refreshTasks()) }
@@ -3717,7 +3996,9 @@ document.addEventListener('click', async (e) => {
   else if (act === 'copy-wikilink') { api('getNote', { noteId: id }).then(d => navigator.clipboard.writeText('[[' + (d.note.title || id) + ']]')).then(() => toast(t('ok'), 'ok')).catch(e => toast(t('genericError') + ': ' + e.message, 'err')) }
   else if (act === 'task-up') moveTaskOrder(id, -1)
   else if (act === 'task-down') moveTaskOrder(id, 1)
-  else if (act === 'trash-filter') { state.trashFilter = el.dataset.filter || 'all'; if (state.trashCache) renderTrashFrom(state.trashCache.notes, state.trashCache.atts, state.trashCache.folders) }
+  else if (act === 'trash-filter') { state.trashFilter = el.dataset.filter || 'all'; if (state.trashCache) renderTrashFrom(state.trashCache.notes, state.trashCache.atts, state.trashCache.folders, state.trashCache.tasks) }
+  else if (act === 'restore-task') { await restoreTrashedTask(id) }
+  else if (act === 'retry-trash-tasks') { await refreshTrash() }
   else if (act === 'restore-one') { doBatchRestore([el.dataset.key]) }
   else if (act === 'purge-one') { confirmBatchPurge([el.dataset.key]) }
   else if (act === 'trash-restore') { doBatchRestore(Array.from(state.trashSelection)) }
@@ -3796,7 +4077,7 @@ document.addEventListener('click', async (e) => {
       { label: t('taskDelete'), action: 'task-delete', id: tid, danger: true },
     ])
   }
-  else if (act === 'mobile-detail-back') { document.querySelectorAll('.mobile-detail').forEach(o => o.remove()) }
+  else if (act === 'mobile-detail-back') { document.querySelectorAll('.mobile-detail').forEach(closeMountedDialog) }
   else if (act === 'mobile-back-notes') { state.selectedNoteId = null; state.selectedFolder = null; destroyVditor(); render() }
   else if (act === 'mobile-editor-menu') {
     const nid = state.selectedNoteId
@@ -3871,6 +4152,32 @@ let activeTaskDetailSession = 0
 let taskDetailRefreshSubtasks = null
 let taskDetailRequestClose = null
 let taskDetailToggleSubtask = null
+function taskDraftText(patch){
+  const labels = { title: 'taskTitle', description: 'description', status: 'taskStatus', matrixId: 'matrices', quadrant: 'taskQuadrant', important: 'taskQuadrant', urgent: 'taskPriority', scheduledAt: 'taskScheduled', dueAt: 'taskDue', tags: 'tags', subtaskDraft: 'subtaskAdd' }
+  return Object.entries(patch).map(([key, value]) => t(labels[key] || key) + ': ' + (Array.isArray(value) ? value.join(', ') : String(value ?? ''))).join('\\n')
+}
+function showTaskPatchDraft(patch, reload, message = t('taskConflict')){
+  const overlay = document.createElement('div'); overlay.className = 'modal-overlay'
+  overlay.innerHTML = '<div class="modal"><h3>' + esc(t('closeGuardTitle')) + '</h3><p role="alert">' + esc(message) + '</p><label for="taskPatchDraft">' + esc(t('manualCopyDraft')) + '</label><textarea id="taskPatchDraft" readonly></textarea><div class="toolbar"><button class="btn" id="taskPatchClose">' + esc(t('taskClose')) + '</button><button class="btn" id="taskPatchReload">' + esc(t('taskReload')) + '</button></div></div>'
+  document.body.appendChild(overlay)
+  const draft = overlay.querySelector('#taskPatchDraft'); draft.value = taskDraftText(patch)
+  let reloading = false
+  const cancel = () => { if (!reloading && confirm(t('discardDraftConfirm'))) dialog.close() }
+  const dialog = mountDialog(overlay, { name: t('closeGuardTitle'), initialFocus: '#taskPatchDraft', onCancel: cancel, hasDraft: () => true })
+  draft.select()
+  overlay.querySelector('#taskPatchClose').addEventListener('click', cancel)
+  overlay.querySelector('#taskPatchReload').addEventListener('click', async () => {
+    if (reloading || !confirm(t('taskReloadConfirm'))) return
+    reloading = true
+    try {
+      if (reload) await reload()
+      else { state.tasksCache = await api('listTasks'); refreshTasks() }
+      dialog.close()
+    } catch (error) { toast(t('reloadFailed') + ': ' + error.message, 'err') }
+    finally { reloading = false }
+  })
+  overlay.addEventListener('click', event => { if (event.target === overlay) cancel() })
+}
 // Subtask data cache (parentTaskId → Task[]) + request dedup map. UI-only fast
 // projection; the Task Store remains canonical authority.
 const subtaskCache = new Map()
@@ -3883,93 +4190,125 @@ function fetchSubtasks(parentTaskId){
 }
 function inlineEditSubtask(span, taskId){
   const cur = span.textContent
+  const expectedContentHash = span.dataset.contentHash
   const input = document.createElement('input')
   input.value = cur
   input.className = 'subtask-edit-input'
+  input.setAttribute('aria-label', t('taskTitle'))
+  input.setAttribute('data-dialog-escape', 'local')
   span.replaceWith(input)
   input.focus()
-  let done = false
+  let done = false, saving = false, conflicted = false
   const commit = () => {
-    if (done) return
-    done = true
+    if (done || saving || conflicted) return
     const v = input.value.trim()
     if (v && v !== cur) {
-      api('updateTask', { taskId, patch: { title: v } }).then(() => { if (taskDetailRefreshSubtasks) taskDetailRefreshSubtasks() }).catch(e => { toast(t('genericError') + ': ' + e.message, 'err'); input.value = cur })
+      saving = true; input.readOnly = true
+      api('updateTask', { taskId, expectedContentHash, patch: { title: v } }).then(updated => {
+        done = true; span.textContent = v
+        if (updated && updated.contentHash) span.dataset.contentHash = updated.contentHash
+        input.replaceWith(span)
+        if (taskDetailRefreshSubtasks) taskDetailRefreshSubtasks()
+      }).catch(e => {
+        saving = false; input.readOnly = false
+        conflicted = e.code === 'PKW_TASK_CONFLICT'
+        input.setAttribute('aria-invalid', 'true')
+        toast(conflicted ? t('taskConflict') : t('genericError') + ': ' + e.message, 'err')
+        // Preserve the typed title; conflict recovery is an explicit new read.
+        if (conflicted) showTaskPatchDraft({ title: input.value }, async () => {
+          if (taskDetailRefreshSubtasks) {
+            const tasks = await api('listSubtasks', { parentTaskId: span.closest('#taskDetailModal')?.dataset.taskId || input.closest('#taskDetailModal')?.dataset.taskId })
+            const latest = tasks.find(item => item.taskId === taskId)
+            if (!latest) throw new Error(t('taskNoTasks'))
+            span.textContent = latest.title; span.dataset.contentHash = latest.contentHash
+            input.replaceWith(span); done = true
+            await taskDetailRefreshSubtasks()
+          }
+        })
+        else input.focus()
+      })
     } else {
+      done = true
       input.replaceWith(span)
     }
   }
-  const cancel = () => { if (done) return; done = true; input.replaceWith(span) }
-  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); commit() } else if (e.key === 'Escape') { cancel() } })
+  const cancel = () => { if (done || saving) return; if (conflicted && !confirm(t('discardDraftConfirm'))) return; done = true; input.replaceWith(span); if (conflicted && taskDetailRefreshSubtasks) taskDetailRefreshSubtasks() }
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); commit() } else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancel(); span.focus() } })
   input.addEventListener('blur', commit)
 }
 function taskDetailDialog(taskId){
   const task = (state.tasksCache || []).find(t => t.taskId === taskId)
   if (!task) return
+  // An existing task's close guard owns its draft; never replace it silently.
+  if (document.getElementById('taskDetailModal')) { if (taskDetailRequestClose) taskDetailRequestClose(); return }
   // Explicit session identity: every async detail callback must verify it still
   // owns the active session before touching DOM/state. Opening/closing bumps this.
   const sessionId = ++taskDetailSessionSeq
   activeTaskDetailSession = sessionId
-  // Single-modal invariant: remove any previous dialog (and invalidate it).
-  const prev = document.getElementById('taskDetailModal'); if (prev) prev.remove()
   const quad = quadrantOf(task)
   const srcNote = task.sourceRefs && task.sourceRefs[0] ? '<div class="form"><label>' + esc(t('noteLabel')) + '</label><span class="v mono" data-action="open-task-source" data-id="' + esc(task.sourceRefs[0].noteId) + '" data-exact="' + esc(task.sourceRefs[0].exact || '') + '" style="cursor:pointer">📄 ' + esc(task.sourceRefs[0].noteId) + '</span></div>' : ''
   // Subtask completion draft: Store baseline + local draft = Detail projection.
   let subtaskBaseline = {}
   let subtaskDraft = {}
   let subtaskList = []
+  let subtaskRendered = false
   const proj = (s) => (s.taskId in subtaskDraft ? subtaskDraft[s.taskId] : (s.status === 'completed'))
-  const renderSubRows = (list) => list.map(s => '<div class="subtask-row" data-id="' + esc(s.taskId) + '"><span class="ic" data-action="subtask-toggle" data-id="' + esc(s.taskId) + '">' + (proj(s) ? '☑' : '☐') + '</span><span class="nm subtask-title" data-action="subtask-edit" data-id="' + esc(s.taskId) + '" title="' + esc(t('renameMove')) + '">' + esc(s.title) + '</span><span class="subtask-del" data-action="task-delete" data-id="' + esc(s.taskId) + '" title="' + esc(t('taskDelete')) + '">×</span></div>').join('')
+  const renderSubRows = (list) => list.map(s => '<div class="subtask-row" data-id="' + esc(s.taskId) + '"><button type="button" class="ic row-action" data-action="subtask-toggle" data-id="' + esc(s.taskId) + '" aria-label="' + esc(s.title) + '" aria-pressed="' + proj(s) + '">' + (proj(s) ? '☑' : '☐') + '</button><button type="button" class="nm subtask-title row-action" data-action="subtask-edit" data-id="' + esc(s.taskId) + '" data-content-hash="' + esc(s.contentHash || '') + '" title="' + esc(t('renameMove')) + '">' + esc(s.title) + '</button><button type="button" class="subtask-del row-action" data-action="task-delete" data-id="' + esc(s.taskId) + '" aria-label="' + esc(t('taskDelete') + ': ' + s.title) + '">×</button></div>').join('')
   // Shell renders immediately from the already-cached task object; matrices and
   // subtasks load async and patch their own sections (never block the shell).
   const mOpts = task.matrixId ? '<option value="' + esc(task.matrixId) + '" selected>' + esc(task.matrixId) + '</option>' : '<option value="" selected>' + esc(t('taskInbox')) + '</option>'
-  const subSection = '<div class="form"><div class="subtask-head"><span>' + esc(t('subtasks')) + '</span><span class="muted" id="tdSubCount"></span></div><div id="tdSubtasks"><span class="muted">' + esc(t('loading')) + '</span></div><div class="toolbar" style="margin-top:4px"><input id="tdNewSub" placeholder="' + esc(t('subtaskAdd')) + '" style="flex:1" /><button class="btn small" id="tdAddSub">+</button></div></div>'
+  const subSection = '<div class="form"><div class="subtask-head"><span>' + esc(t('subtasks')) + '</span><span class="muted" id="tdSubCount"></span></div><div id="tdSubtasks"><span class="muted">' + esc(t('loading')) + '</span></div><div class="toolbar" style="margin-top:4px"><input id="tdNewSub" aria-label="' + esc(t('subtaskAdd')) + '" placeholder="' + esc(t('subtaskAdd')) + '" style="flex:1" /><button class="btn small" id="tdAddSub" aria-label="' + esc(t('subtaskAdd')) + '">+</button></div></div>'
   const wrapper = document.createElement('div')
     const meta = '<div class="muted mono" style="font-size:11px">' + esc(t('taskCreated')) + ': ' + esc((task.createdAt || '').slice(0, 16)) + '<br>' + esc(t('updated')) + ': ' + esc((task.updatedAt || '').slice(0, 16)) + (task.completedAt ? '<br>' + esc(t('taskCompleted')) + ': ' + esc(task.completedAt.slice(0, 16)) : '') + '</div>'
     wrapper.innerHTML =
       '<div class="modal-overlay" id="taskDetailModal"><div class="modal task-detail-modal">' +
         '<div class="task-detail-header">' +
-          '<div class="task-detail-title-row"><input id="tdTitle" class="td-title-input" value="' + esc(task.title) + '" placeholder="' + esc(t('taskTitle')) + '" /></div>' +
+          '<div class="task-detail-title-row"><input id="tdTitle" aria-label="' + esc(t('taskTitle')) + '" class="td-title-input" value="' + esc(task.title) + '" placeholder="' + esc(t('taskTitle')) + '" /></div>' +
           '<div class="task-detail-controls">' +
-            '<select id="tdStatus" class="td-status"><option value="open"' + (task.status === 'open' ? ' selected' : '') + '>' + esc(t('taskOpen')) + '</option><option value="completed"' + (task.status === 'completed' ? ' selected' : '') + '>' + esc(t('taskCompleted')) + '</option></select>' +
+            '<select id="tdStatus" aria-label="' + esc(t('taskStatus')) + '" class="td-status"><option value="open"' + (task.status === 'open' ? ' selected' : '') + '>' + esc(t('taskOpen')) + '</option><option value="completed"' + (task.status === 'completed' ? ' selected' : '') + '>' + esc(t('taskCompleted')) + '</option></select>' +
             '<span class="spacer"></span>' +
-            '<button class="btn small" id="tdCloseX" title="' + esc(t('taskClose')) + '">×</button>' +
+            '<button class="btn small" id="tdCloseX" aria-label="' + esc(t('taskClose')) + '" title="' + esc(t('taskClose')) + '">×</button>' +
           '</div>' +
         '</div>' +
         '<div class="task-detail-body">' +
           '<div class="task-detail-main">' +
-            '<div class="form"><label>' + esc(t('description')) + '</label><textarea id="tdDesc" rows="8" placeholder="' + esc(t('descriptionPlaceholder')) + '">' + esc(task.description || '') + '</textarea></div>' +
+            '<div id="tdConflict" hidden><p role="alert">' + esc(t('taskConflict')) + '</p><div class="toolbar"><button class="btn" id="tdCopyDraft">' + esc(t('copyDraft')) + '</button><button class="btn" id="tdReload">' + esc(t('taskReload')) + '</button></div><textarea id="tdDraft" aria-label="' + esc(t('manualCopyDraft')) + '" readonly hidden></textarea></div>' +
+            '<div class="form"><label for="tdDesc">' + esc(t('description')) + '</label><textarea id="tdDesc" rows="8" placeholder="' + esc(t('descriptionPlaceholder')) + '">' + esc(task.description || '') + '</textarea></div>' +
             subSection +
             srcNote +
           '</div>' +
           '<div class="task-detail-properties">' +
             '<div class="prop-group"><div class="prop-title">' + esc(t('organization')) + '</div>' +
-              '<label>' + esc(t('matrices')) + '</label><select id="tdMatrix">' + mOpts + '</select>' +
-              '<label>' + esc(t('taskQuadrant')) + '</label><select id="tdQuad">' +
+              '<label for="tdMatrix">' + esc(t('matrices')) + '</label><select id="tdMatrix">' + mOpts + '</select>' +
+              '<label for="tdQuad">' + esc(t('taskQuadrant')) + '</label><select id="tdQuad">' +
                 '<option value="1"' + (quad === 1 ? ' selected' : '') + '>Q1 · ' + esc(t('q1')) + '</option><option value="2"' + (quad === 2 ? ' selected' : '') + '>Q2 · ' + esc(t('q2')) + '</option><option value="3"' + (quad === 3 ? ' selected' : '') + '>Q3 · ' + esc(t('q3')) + '</option><option value="4"' + (quad === 4 ? ' selected' : '') + '>Q4 · ' + esc(t('q4')) + '</option></select>' +
             '</div>' +
             '<div class="prop-group"><div class="prop-title">' + esc(t('time')) + '</div>' +
-              '<label>' + esc(t('taskScheduled')) + '</label><input type="date" id="tdSched" value="' + esc((task.scheduledAt || '').slice(0, 10)) + '" />' +
-              '<label>' + esc(t('taskDue')) + '</label><input type="date" id="tdDue" value="' + esc((task.dueAt || '').slice(0, 10)) + '" />' +
+              '<label for="tdSched">' + esc(t('taskScheduled')) + '</label><input type="date" id="tdSched" value="' + esc((task.scheduledAt || '').slice(0, 10)) + '" />' +
+              '<label for="tdDue">' + esc(t('taskDue')) + '</label><input type="date" id="tdDue" value="' + esc((task.dueAt || '').slice(0, 10)) + '" />' +
             '</div>' +
-            '<div class="prop-group"><div class="prop-title">' + esc(t('tags')) + '</div><input id="tdTags" placeholder="' + esc(t('tagsPlaceholder')) + '" value="' + esc((task.tags || []).join(', ')) + '" /></div>' +
+            '<div class="prop-group"><label for="tdTags" class="prop-title">' + esc(t('tags')) + '</label><input id="tdTags" placeholder="' + esc(t('tagsPlaceholder')) + '" value="' + esc((task.tags || []).join(', ')) + '" /></div>' +
             '<div class="prop-group"><div class="prop-title">' + esc(t('info')) + '</div>' + meta + '</div>' +
           '</div>' +
         '</div>' +
         '<div class="task-detail-footer">' +
-          '<span id="tdState" class="saved">✓ ' + esc(t('saved')) + '</span>' +
+          '<span id="tdState" class="saved" role="status" aria-live="polite">✓ ' + esc(t('saved')) + '</span>' +
           '<span class="spacer"></span>' +
           '<button class="btn" id="tdCancel">' + esc(t('taskClose')) + '</button>' +
           '<button class="btn primary" id="tdSave" disabled>' + esc(t('taskSaveEdit')) + '</button>' +
         '</div>' +
       '</div></div>'
     const modal = wrapper.firstElementChild
+    modal.dataset.taskId = taskId
     document.body.appendChild(modal)
     const qs = (sel) => modal.querySelector(sel)
     const isActive = () => sessionId === activeTaskDetailSession
     let parentDirty = false
     let editGeneration = 0
     let saving = false
+    let taskContentHash = task.contentHash
+    let taskConflict = false
+    let taskReloading = false
     let subtaskSubmitting = false
     const isDirty = () => parentDirty
     const updateState = () => {
@@ -3977,12 +4316,12 @@ function taskDetailDialog(taskId){
       const sv = qs('#tdSave')
       const d = isDirty()
       if (st) { st.className = saving ? 'saving' : (d ? 'dirty' : 'saved'); st.textContent = saving ? ('… ' + t('saving')) : (d ? ('● ' + t('unsaved')) : ('✓ ' + t('saved'))) }
-      if (sv) { sv.disabled = !d || saving; sv.textContent = saving ? t('saving') : t('taskSaveEdit') }
+      if (sv) { sv.disabled = !d || saving || taskConflict || taskReloading; sv.textContent = saving ? t('saving') : t('taskSaveEdit') }
     }
     const markDirty = () => { editGeneration++; if (!parentDirty) { parentDirty = true; updateState() } }
     const renderSubtaskSection = () => {
       const box = qs('#tdSubtasks')
-      if (box) box.innerHTML = renderSubRows(subtaskList) || '<span class="muted">' + esc(t('taskNoTasks')) + '</span>'
+      if (box && !box.querySelector('.subtask-edit-input')) { box.innerHTML = renderSubRows(subtaskList) || '<span class="muted">' + esc(t('taskNoTasks')) + '</span>'; subtaskRendered = true }
       const cnt = qs('#tdSubCount')
       if (cnt) cnt.textContent = subtaskList.filter(proj).length + ' / ' + subtaskList.length
     }
@@ -4001,6 +4340,7 @@ function taskDetailDialog(taskId){
         const c = subtaskCache.get(taskId)
         if (c) { const i = c.findIndex(x => x.taskId === subId); if (i >= 0) c[i] = { ...c[i], status: target ? 'completed' : 'open' } }
         renderSubtaskSection()
+        refreshSubtasks().catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
       }).catch(e => {
         if (!isActive()) return
         delete subtaskDraft[subId] // rollback optimistic flip
@@ -4009,19 +4349,25 @@ function taskDetailDialog(taskId){
       })
     }
     taskDetailToggleSubtask = toggleSubtask
-    let guardEl = null
-    const dismissGuard = () => { if (guardEl) { guardEl.remove(); guardEl = null } }
-    const close = () => { dismissGuard(); if (isActive()) activeTaskDetailSession = 0; taskDetailRefreshSubtasks = null; taskDetailRequestClose = null; taskDetailToggleSubtask = null; modal.remove() }
+    let guardEl = null, guardDialog = null
+    const hasSubtaskDraft = () => !!qs('#tdNewSub').value.trim()
+    const hasSubtaskEdit = () => !!qs('.subtask-edit-input')
+    const dismissGuard = () => { if (guardDialog) { guardDialog.close(); guardDialog = null; guardEl = null } }
+    const close = () => { dismissGuard(); if (isActive()) activeTaskDetailSession = 0; taskDetailRefreshSubtasks = null; taskDetailRequestClose = null; taskDetailToggleSubtask = null; dialog.close() }
     const requestClose = () => {
-      if (saving) return
+      if (saving || subtaskSubmitting || taskReloading) return
       if (guardEl) { dismissGuard(); return } // Esc/backdrop on the guard → cancel, stay
+      if (hasSubtaskEdit()) { toast(t('subtaskEditPending'), 'warn'); qs('.subtask-edit-input').focus(); return }
+      if (hasSubtaskDraft()) { toast(t('subtaskDraftPending'), 'warn'); qs('#tdNewSub').focus(); return }
       if (!isDirty()) { close(); return }
       // Custom three-way close guard (session-scoped element ref, no global id).
       const w = document.createElement('div')
       w.innerHTML = '<div class="modal-overlay close-guard-overlay"><div class="modal close-guard"><h3>' + esc(t('closeGuardTitle')) + '</h3><p class="muted">' + esc(t('closeGuardBody')) + '</p><div class="toolbar"><button class="btn" id="cgCancel">' + esc(t('cancel')) + '</button><button class="btn danger" id="cgDiscard">' + esc(t('discard')) + '</button><button class="btn primary" id="cgSaveClose">' + esc(t('saveAndClose')) + '</button></div></div></div>'
       guardEl = w.firstElementChild
       document.body.appendChild(guardEl)
+      guardDialog = mountDialog(guardEl, { name: t('closeGuardTitle'), initialFocus: '#cgCancel', onCancel: dismissGuard })
       const gq = (s) => guardEl.querySelector(s)
+      gq('#cgSaveClose').disabled = taskConflict
       gq('#cgCancel').addEventListener('click', dismissGuard)
       gq('#cgDiscard').addEventListener('click', () => { dismissGuard(); close() })
       gq('#cgSaveClose').addEventListener('click', () => { dismissGuard(); doSave(true) })
@@ -4030,14 +4376,14 @@ function taskDetailDialog(taskId){
     taskDetailRequestClose = requestClose
     // Re-fetch + patch ONLY the #tdSubtasks section (never the whole modal).
     const applyList = (list) => {
-      const prevKey = subtaskList.map(s => s.taskId + ':' + s.status + ':' + s.title).join('|')
-      const nextKey = list.map(s => s.taskId + ':' + s.status + ':' + s.title).join('|')
+      const prevKey = subtaskList.map(s => s.taskId + ':' + s.status + ':' + s.title + ':' + s.contentHash).join('|')
+      const nextKey = list.map(s => s.taskId + ':' + s.status + ':' + s.title + ':' + s.contentHash).join('|')
       subtaskList = list
       subtaskBaseline = {}
       for (const s of list) subtaskBaseline[s.taskId] = (s.status === 'completed')
       // Prune pending entries for children that no longer exist (deleted).
       for (const k of Object.keys(subtaskDraft)) if (!(k in subtaskBaseline)) delete subtaskDraft[k]
-      if (prevKey !== nextKey) renderSubtaskSection()
+      if (!subtaskRendered || prevKey !== nextKey) renderSubtaskSection()
     }
     // Cache-first + first-open tasksCache seed + stale-while-revalidate + dedup.
     const refreshSubtasks = () => {
@@ -4063,12 +4409,12 @@ function taskDetailDialog(taskId){
     }
     taskDetailRefreshSubtasks = refreshSubtasks
     const doSave = (andClose) => {
-      if (!isActive() || saving) return
+      if (!isActive() || saving || taskConflict || taskReloading) return
       saving = true
       const submittedGeneration = editGeneration
       updateState()
       const q = Number(qs('#tdQuad').value)
-      api('updateTask', { taskId, patch: {
+      api('updateTask', { taskId, expectedContentHash: taskContentHash, patch: {
         title: qs('#tdTitle').value.trim(),
         description: qs('#tdDesc').value,
         status: qs('#tdStatus').value,
@@ -4078,19 +4424,21 @@ function taskDetailDialog(taskId){
         scheduledAt: qs('#tdSched').value || '',
         dueAt: qs('#tdDue').value || '',
         tags: (qs('#tdTags').value || '').split(',').map(s => s.trim()).filter(Boolean),
-      } }).then(() => {
+      } }).then(updated => {
         if (!isActive()) return
+        if (updated && updated.contentHash) taskContentHash = updated.contentHash
         parentDirty = editGeneration !== submittedGeneration
         saving = false
         updateState()
         refreshTasks()
         if (parentDirty) toast(t('taskNewerEdits'), 'warn')
-        else if (andClose) close()
+        else if (andClose) requestClose()
       }).catch(e => {
         if (!isActive()) return
         saving = false
+        if (e.code === 'PKW_TASK_CONFLICT') { taskConflict = true; parentDirty = true; qs('#tdConflict').hidden = false }
         updateState()
-        toast(t('genericError') + ': ' + e.message, 'err')
+        toast(taskConflict ? t('taskConflict') : t('genericError') + ': ' + e.message, 'err')
       })
     }
     // Subtask create is an INDEPENDENT Task Store mutation: it must never
@@ -4116,12 +4464,42 @@ function taskDetailDialog(taskId){
         })
         .then(() => {
           if (!isActive()) return
-          input.value = ''
+          // A successful create only acknowledges the submitted child title.
+          if (input.value.trim() === title) input.value = ''
           input.focus()
         })
         .catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
         .finally(() => { subtaskSubmitting = false })
     }
+    const currentTaskDraft = () => ({ title: qs('#tdTitle').value, description: qs('#tdDesc').value, status: qs('#tdStatus').value, matrixId: qs('#tdMatrix').value, quadrant: qs('#tdQuad').value, scheduledAt: qs('#tdSched').value, dueAt: qs('#tdDue').value, tags: qs('#tdTags').value, subtaskDraft: qs('#tdNewSub').value })
+    qs('#tdCopyDraft').addEventListener('click', async () => {
+      const text = taskDraftText(currentTaskDraft())
+      try { await navigator.clipboard.writeText(text); toast(t('attCopied'), 'ok') }
+      catch (error) { const field = qs('#tdDraft'); field.value = text; field.hidden = false; field.focus(); field.select(); toast(t('copyDraftFailed'), 'warn') }
+    })
+    qs('#tdReload').addEventListener('click', async () => {
+      if (saving || taskReloading || !confirm(t('taskReloadConfirm'))) return
+      const snapshot = JSON.stringify(currentTaskDraft())
+      taskReloading = true; qs('#tdReload').disabled = true; updateState()
+      try {
+        const tasks = await api('listTasks')
+        if (!isActive()) return
+        if (JSON.stringify(currentTaskDraft()) !== snapshot) { toast(t('reloadDraftChanged'), 'warn'); return }
+        const latest = tasks.find(item => item.taskId === taskId)
+        if (!latest) throw new Error(t('taskNoTasks'))
+        const matrix = qs('#tdMatrix'), matrixId = latest.matrixId || ''
+        if (!Array.from(matrix.querySelectorAll('option')).some(option => option.value === matrixId)) {
+          const option = document.createElement('option'); option.value = matrixId; option.textContent = matrixId || t('taskInbox'); matrix.appendChild(option)
+        }
+        const values = { tdTitle: latest.title, tdDesc: latest.description || '', tdStatus: latest.status, tdMatrix: matrixId, tdQuad: String(quadrantOf(latest)), tdSched: (latest.scheduledAt || '').slice(0, 10), tdDue: (latest.dueAt || '').slice(0, 10), tdTags: (latest.tags || []).join(', ') }
+        for (const key in values) qs('#' + key).value = values[key]
+        taskContentHash = latest.contentHash; taskConflict = false; parentDirty = false; editGeneration++
+        qs('#tdConflict').hidden = true; qs('#tdDraft').hidden = true
+        state.tasksCache = tasks
+        qs('#tdTitle').focus()
+      } catch (error) { toast(t('reloadFailed') + ': ' + error.message, 'err') }
+      finally { taskReloading = false; qs('#tdReload').disabled = false; updateState() }
+    })
     // Parent-field edits mark dirty (async loads do NOT).
     for (const sel of ['#tdTitle', '#tdDesc', '#tdStatus', '#tdMatrix', '#tdQuad', '#tdSched', '#tdDue', '#tdTags']) { const f = qs(sel); if (f) f.addEventListener('input', markDirty); if (f) f.addEventListener('change', markDirty) }
     qs('#tdAddSub').addEventListener('click', submitSubtask)
@@ -4130,45 +4508,59 @@ function taskDetailDialog(taskId){
     qs('#tdCloseX').addEventListener('click', requestClose)
     qs('#tdSave').addEventListener('click', () => doSave(false))
     modal.addEventListener('click', (e) => { if (e.target === modal) requestClose() })
+    const dialog = mountDialog(modal, { name: t('taskDetail') + ': ' + task.title, initialFocus: '#tdTitle', onCancel: requestClose, onSave: () => doSave(false), hasDraft: () => parentDirty || saving || subtaskSubmitting || hasSubtaskDraft() || hasSubtaskEdit() })
     // Async (non-blocking) secondary data: patch their own sections when ready.
     api('listMatrices').then(matrices => {
       if (!isActive()) return
       const sel = qs('#tdMatrix')
-      if (sel) sel.innerHTML = '<option value="">' + esc(t('taskInbox')) + '</option>' + matrices.map(m => '<option value="' + esc(m.matrixId) + '"' + (m.matrixId === task.matrixId ? ' selected' : '') + '>' + esc(m.name) + '</option>').join('')
+      if (sel) { const selected = sel.value; sel.innerHTML = '<option value="">' + esc(t('taskInbox')) + '</option>' + matrices.map(m => '<option value="' + esc(m.matrixId) + '"' + (m.matrixId === selected ? ' selected' : '') + '>' + esc(m.name) + '</option>').join('') }
     }).catch(() => {})
     refreshSubtasks().catch(() => {})
 }
 function quickTaskDialog(matrixId, sourceRefs, prefill, defaultQuad){
+  if (document.getElementById('taskModal')) return
   const lastMatrix = localStorage.getItem('pkw-task-last-matrix') || ''
   const pre = prefill || {}
   const defQ = defaultQuad || 1
   api('listMatrices').then(matrices => {
+    if (document.getElementById('taskModal')) return
     const opts = '<option value="">' + esc(t('taskInbox')) + '</option>' + matrices.map(m => '<option value="' + esc(m.matrixId) + '"' + (m.matrixId === (matrixId || lastMatrix) ? ' selected' : '') + '>' + esc(m.name) + '</option>').join('')
     const srcNote = sourceRefs && sourceRefs[0] ? '<div class="form"><label>' + esc(t('noteLabel')) + '</label><span class="v mono">' + esc(sourceRefs[0].noteId) + '</span></div>' : ''
-    document.body.insertAdjacentHTML('beforeend',
+    const wrapper = document.createElement('div')
+    wrapper.innerHTML =
       '<div class="modal-overlay" id="taskModal"><div class="modal"><h3>' + esc(t('taskQuickAdd')) + '</h3>' +
-      '<div class="form"><label>' + esc(t('taskTitle')) + '</label><input id="tkTitle" value="' + esc(pre.title || '') + '" /></div>' +
-      '<div class="form"><label>' + esc(t('description')) + '</label><textarea id="tkDesc" rows="3">' + esc(pre.description || '') + '</textarea></div>' +
-      '<div class="form"><label>' + esc(t('matrices')) + '</label><select id="tkMatrix">' + opts + '</select></div>' +
-      '<div class="form"><label>' + esc(t('taskQuadrant')) + '</label><select id="tkQuad">' +
+      '<div class="form"><label for="tkTitle">' + esc(t('taskTitle')) + '</label><input id="tkTitle" value="' + esc(pre.title || '') + '" /></div>' +
+      '<div class="form"><label for="tkDesc">' + esc(t('description')) + '</label><textarea id="tkDesc" rows="3">' + esc(pre.description || '') + '</textarea></div>' +
+      '<div class="form"><label for="tkMatrix">' + esc(t('matrices')) + '</label><select id="tkMatrix">' + opts + '</select></div>' +
+      '<div class="form"><label for="tkQuad">' + esc(t('taskQuadrant')) + '</label><select id="tkQuad">' +
         '<option value="1">Q1 · ' + esc(t('q1')) + '</option><option value="2">Q2 · ' + esc(t('q2')) + '</option><option value="3">Q3 · ' + esc(t('q3')) + '</option><option value="4">Q4 · ' + esc(t('q4')) + '</option></select></div>' +
-      '<div class="form"><label>' + esc(t('taskDue')) + '</label><input type="date" id="tkDue" /></div>' +
-      '<div class="form"><label>' + esc(t('tags')) + '</label><input id="tkTags" placeholder="tag1, tag2" /></div>' +
+      '<div class="form"><label for="tkDue">' + esc(t('taskDue')) + '</label><input type="date" id="tkDue" /></div>' +
+      '<div class="form"><label for="tkTags">' + esc(t('tags')) + '</label><input id="tkTags" placeholder="tag1, tag2" /></div>' +
       srcNote +
       '<div class="toolbar"><button class="btn primary" id="tkSave">' + esc(t('taskSave')) + '</button><button class="btn" id="tkCancel">' + esc(t('taskCancel')) + '</button></div></div></div>'
-    )
-    const modal = $('#taskModal')
-    $('#tkQuad').value = String(defQ)
-    $('#tkCancel').addEventListener('click', () => modal.remove())
-    $('#tkSave').addEventListener('click', () => {
-      const title = $('#tkTitle').value.trim()
-      if (!title) { toast(t('taskTitle'), 'warn'); return }
-      const m = $('#tkMatrix').value
-      const quad = Number($('#tkQuad').value)
-      const due = $('#tkDue').value
-      const tags = ($('#tkTags').value || '').split(',').map(s => s.trim()).filter(Boolean)
-      const description = $('#tkDesc').value
+    const modal = wrapper.firstElementChild
+    document.body.appendChild(modal)
+    const q = (selector) => modal.querySelector(selector)
+    q('#tkQuad').value = String(defQ)
+    let saving = false
+    const fields = Array.from(modal.querySelectorAll('input, textarea, select'))
+    const initial = JSON.stringify(fields.map(field => field.value))
+    const hasDraft = () => saving || !!q('#tkTitle').value.trim() || !!q('#tkDesc').value.trim() || JSON.stringify(fields.map(field => field.value)) !== initial
+    const cancel = () => { if (!saving && (!hasDraft() || confirm(t('discardDraftConfirm')))) dialog.close() }
+    const save = () => {
+      if (saving) return
+      const title = q('#tkTitle').value.trim()
+      if (!title) { toast(t('taskTitle'), 'warn'); q('#tkTitle').focus(); return }
+      const m = q('#tkMatrix').value
+      const quad = Number(q('#tkQuad').value)
+      const due = q('#tkDue').value
+      const tags = (q('#tkTags').value || '').split(',').map(s => s.trim()).filter(Boolean)
+      const description = q('#tkDesc').value
       if (m) localStorage.setItem('pkw-task-last-matrix', m)
+      saving = true
+      fields.forEach(field => { field.disabled = true })
+      q('#tkSave').disabled = true; q('#tkCancel').disabled = true
+      q('#tkSave').textContent = t('saving')
       api('createTask', {
         title,
         ...(description ? { description } : {}),
@@ -4178,14 +4570,22 @@ function quickTaskDialog(matrixId, sourceRefs, prefill, defaultQuad){
         ...(due ? { dueAt: due } : {}),
         ...(tags.length ? { tags } : {}),
         ...(sourceRefs && sourceRefs.length ? { sourceRefs } : {}),
-      }).then(() => { modal.remove(); refreshTasks() }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
-    })
-    modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove() })
-    $('#tkTitle').focus()
+      }).then(() => { dialog.close(); refreshTasks() }).catch(e => {
+        saving = false
+        fields.forEach(field => { field.disabled = false })
+        q('#tkSave').disabled = false; q('#tkCancel').disabled = false; q('#tkSave').textContent = t('taskSave')
+        toast(t('genericError') + ': ' + e.message, 'err'); q('#tkTitle').focus()
+      })
+    }
+    q('#tkCancel').addEventListener('click', cancel)
+    q('#tkSave').addEventListener('click', save)
+    modal.addEventListener('click', (e) => { if (e.target === modal) cancel() })
+    const dialog = mountDialog(modal, { name: t('taskQuickAdd'), initialFocus: '#tkTitle', onCancel: cancel, onSave: save, hasDraft })
   }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
 }
 // Header global search removed (Search is now the unified Knowledge entry).
 document.addEventListener('keydown', (e) => {
+  if (dialogStack.length) return // Dialog capture handlers own shortcuts and Escape.
   if (e.key === 'Escape') { if (taskDetailRequestClose) { taskDetailRequestClose(); return } dismissContextMenu(); dismissSelButton(); dismissWikiSuggest(); if (state.explorerSel.size) explorerClearSel(); return }
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') { e.preventDefault(); if (state.view === 'notes' && state.selectedNoteId !== null) saveNote() }
   else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'o') { e.preventDefault(); quickSwitch() }
@@ -4204,7 +4604,7 @@ $('#mobileMoreBtn').addEventListener('click', () => { mobileActionSheet(t('mobil
   { label: t('themeDark'), action: 'theme-dark' },
 ]) })
 $('#pageTitle').addEventListener('click', () => { if (isMobile() && state.view === 'notes' && state.selectedNoteId === null && state.mobileNotesFolder === null) mobileNotesScopeSheet() })
-window.addEventListener('beforeunload', (e) => { if ((state.editor.dirty || state.editor.saving) && state.selectedNoteId !== null) { e.preventDefault(); e.returnValue = '' } })
+window.addEventListener('beforeunload', (e) => { if (dialogHasDraft() || ((state.editor.dirty || state.editor.saving) && state.selectedNoteId !== null)) { e.preventDefault(); e.returnValue = '' } })
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { refreshHeader(); if (state.view === 'notes') { renderTree(); if (state.selectedNoteId) kickSyncPoll({ pending: true }) } } })
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (currentThemeMode() === 'system') applyTheme('system') })
 applyTheme()
@@ -4220,6 +4620,26 @@ function syncInspector(){
 function toggleInspector(){ state.inspectorCollapsed = !state.inspectorCollapsed; syncInspector() }
 if ($('#detail')) new MutationObserver(syncInspector).observe($('#detail'), { childList: true, subtree: true, characterData: true })
 syncInspector()
+if (PKW_BASE !== '/pkw') {
+  $('#spaceBack').addEventListener('click', async (event) => {
+    event.preventDefault()
+    if (dialogHasDraft()) { toast(t('spaceDraftPending'), 'warn'); return }
+    if (!await flushNoteEdits()) return
+    window.location.assign('/pkw')
+  })
+  $('#spaceRetry').addEventListener('click', async (event) => {
+    const button = event.currentTarget; button.disabled = true
+    workspaceSessionPromise = null
+    try { await ensureWorkspaceSession() } catch (error) { toast(error.message, 'err') }
+    finally { button.disabled = false }
+  })
+  document.addEventListener('click', event => {
+    const control = event.target.closest('[data-action]')
+    if (control && workspaceActionDenied(control)) { event.preventDefault(); event.stopImmediatePropagation(); toast(t('spaceDenied'), 'warn') }
+  }, true)
+  new MutationObserver(applyWorkspacePermissions).observe(document.body, { childList: true, subtree: true })
+  applyWorkspacePermissions()
+}
 
 render()
 </script>

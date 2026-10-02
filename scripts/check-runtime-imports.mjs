@@ -30,6 +30,8 @@ for (const entry of await readdir(root, { withFileTypes: true })) {
   await verifyTree(join(root, entry.name, 'lib'), join(packageRoot, 'lib'))
   await import(pathToFileURL(modulePath).href)
   if (entry.name === 'web') {
+    const { CollaborationGateway } = await import(pathToFileURL(join(packageRoot, 'lib/collaboration/index.js')).href)
+    if (typeof CollaborationGateway.open !== 'function') throw new Error('Collaboration runtime entry missing')
     const { renderMarkdownToHtml } = await import(pathToFileURL(join(packageRoot, 'lib/lute.js')).href)
     if (!(await renderMarkdownToHtml('# PKW smoke')).includes('PKW smoke')) throw new Error('Vditor/Lute render failed')
   }

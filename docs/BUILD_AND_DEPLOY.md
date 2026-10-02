@@ -4,6 +4,11 @@ This pipeline upgrades an **existing** PKW profile. It does not provision a new
 Harness, change the extension bundle, migrate data, or infer service commands.
 Production patch backflow (P0-3) is a prerequisite to activating a different UI.
 
+For the new private/team-space gateway, use the separate
+[collaboration deployment and operations guide](upgrade/COLLABORATION_DEPLOYMENT.md)
+and [data preservation/import procedure](upgrade/DATA_MIGRATION.md). The existing
+deployment command does not enable authentication, migrate data or change routes.
+
 ## Local prerequisites and build
 
 Use the repository's `pnpm@11.7.0` and Node 22.19+ or Node 24. The Harness checkout

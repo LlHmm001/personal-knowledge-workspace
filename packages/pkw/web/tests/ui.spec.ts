@@ -155,7 +155,8 @@ describe('PKW web UI (served page)', () => {
     expect(js).toContain('rewriteLiveAttachmentImgs')
     expect(js).toContain('setupLiveAttachmentRewrite')
     expect(js).toContain('managedAttachmentUrl')
-    expect(js).toContain("'/pkw/attachment/'")
+    expect(js).toContain("PKW_BASE + '/attachment/'")
+    expect(js).toContain('const PKW_BASE = "/pkw"')
     expect(js).toContain("'data-src'")
     // Live media rewriter must be installed via Vditor's `after` hook (async init),
     // not synchronously after `new Vditor()` when v.vditor.ir does not exist yet.
@@ -423,7 +424,7 @@ describe('PKW web UI (served page)', () => {
     // OPTION C: mobile is read-first — no Vditor/textarea on mobile.
     expect(js).toContain('mobileEditDesktopOnly')
     expect(js).toContain('mobile-readonly-hint')
-    expect(js).toContain("mode: isMobile() ? 'reading'")
+    expect(js).toContain("mode: isMobile() || workspaceReadOnly() ? 'reading'")
     expect(page).toContain('.mobile-readonly-hint')
   })
 })
@@ -454,7 +455,7 @@ function editorHarness() {
     getEditorValue: () => ({ kind: 'markdown', value: env.draft }),
     updateSaveStatus: vi.fn(), refreshHeader: vi.fn(), renderTree: vi.fn(), kickSyncPoll: vi.fn(),
     toast: vi.fn(), t: (key: string) => key, esc: (value: string) => value, saveScroll: vi.fn(), destroyVditor: vi.fn(),
-    performance: { now: () => 0 }, render: vi.fn(),
+    performance: { now: () => 0 }, render: vi.fn(), workspaceReadOnly: () => false,
   }
   runInNewContext(browserSection('// A save owns', '// ── Adaptive remote-sync polling') +
     browserSection('async function setView(v)', 'function render(){'), env)
@@ -832,6 +833,7 @@ describe('browser revision conflict recovery', () => {
     const env: Record<string, any> = {
       fetch: async () => ({ ok: false, status: 409, json: async () => ({ ok: false, error: 'note changed', code: 'PKW_NOTE_CONFLICT' }) }),
     }
+    env.PKW_BASE = '/pkw'; env.ensureWorkspaceSession = async () => null
     runInNewContext(browserSection('const api = async', 'const $ =') + '\nglobalThis.callApi = api', env)
     await expect(env.callApi('saveNote', {})).rejects.toMatchObject({ code: 'PKW_NOTE_CONFLICT', message: 'note changed' })
   })
@@ -934,7 +936,9 @@ function taskSaveHarness() {
   ].map(([key, value]) => [key, { value }]))
   const env: Record<string, any> = {
     taskId: 'task-a', editGeneration: 1, parentDirty: true, saving: false, fields, qs: (key: string) => fields[key],
+    taskConflict: false, taskReloading: false, taskContentHash: 'a'.repeat(64),
     isActive: () => true, updateState: vi.fn(), api: vi.fn(), refreshTasks: vi.fn(), close: vi.fn(), toast: vi.fn(), t: (key: string) => key,
+    requestClose: () => env.close(),
   }
   runInNewContext(browserSection('const doSave = (andClose)', '// Subtask create is an INDEPENDENT') +
     '\nglobalThis.saveTask = doSave\n' + browserSection('const markDirty = () =>', 'const renderSubtaskSection =') +
@@ -1152,5 +1156,712 @@ describe('rendered navigation action boundaries', () => {
         for (let ancestor = node.parent; ancestor; ancestor = ancestor.parent) expect(ancestor.tag).not.toBe('button')
       }
     }
+  })
+})
+
+// A small deterministic DOM/event model for the emitted dialog code. It checks
+// explicit markup, focus ownership and event routing; real layout/AT remain a
+// browser acceptance layer, not something this model claims to emulate.
+function dialogHarness() {
+  const listeners: Record<string, { callback: any; capture: boolean }[]> = {}
+  const observers = new Set<any>()
+  let document: any, scheduled = false
+  const mutate = () => {
+    if (scheduled) return
+    scheduled = true
+    Promise.resolve().then(() => { scheduled = false; for (const observer of [...observers]) observer.callback() })
+  }
+  const decode = (s: string) => s.replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+  class Element {
+    tagName: string; attrs: Record<string, string> = {}; children: Element[] = []; parentElement: Element | null = null
+    style: Record<string, string> = {}; events: Record<string, any[]> = {}; dataset: Record<string, string> = {}
+    inert = false; disabled = false; hidden = false; checked = false; files: any[] = []; ownText = ''; valueOverride: string | undefined; tabOverride: number | undefined
+    constructor(tag: string) { this.tagName = tag.toUpperCase() }
+    get id() { return this.attrs.id || '' } set id(value: string) { this.attrs.id = value }
+    get className() { return this.attrs.class || '' } set className(value: string) { this.attrs.class = value }
+    get isConnected(): boolean { return this === document.body || !!this.parentElement?.isConnected }
+    get firstElementChild(): Element | null { return this.children[0] || null }
+    get tabIndex() { return this.tabOverride ?? (['BUTTON', 'INPUT', 'SELECT', 'TEXTAREA', 'A'].includes(this.tagName) ? 0 : -1) }
+    set tabIndex(value: number) { this.tabOverride = value }
+    get value(): string { return this.valueOverride ?? this.attrs.value ?? (this.tagName === 'SELECT' ? (this.querySelector('option[selected]') || this.querySelector('option'))?.value || '' : this.tagName === 'TEXTAREA' ? this.textContent : '') }
+    set value(value: string) { this.valueOverride = value }
+    get textContent(): string { return this.ownText + this.children.map(child => child.textContent).join('') }
+    set textContent(value: string) { for (const child of this.children) child.parentElement = null; this.children = []; this.ownText = value; mutate() }
+    set innerHTML(html: string) {
+      navigationFragment(html)
+      for (const child of this.children) child.parentElement = null
+      this.children = []; this.ownText = ''
+      const stack: Element[] = [this]
+      for (const token of html.matchAll(/<\/?[a-z][^>]*>|[^<]+/gi)) {
+        const raw = token[0]
+        if (raw.startsWith('</')) { stack.pop(); continue }
+        if (!raw.startsWith('<')) { stack.at(-1)!.ownText += decode(raw); continue }
+        const tag = /^<([\w-]+)/.exec(raw)![1]!, el = new Element(tag)
+        const attrText = raw.slice(tag.length + 1).replace(/\/?\s*>$/, '')
+        for (const attr of attrText.matchAll(/([\w-]+)(?:="([^"]*)")?/g)) el.setAttribute(attr[1]!, decode(attr[2] || ''))
+        stack.at(-1)!.appendChild(el)
+        if (!['input', 'img', 'br', 'hr', 'meta', 'link'].includes(tag) && !raw.endsWith('/>')) stack.push(el)
+      }
+      mutate()
+    }
+    get innerHTML(): string { return '' }
+    setAttribute(key: string, value: string) {
+      this.attrs[key] = value
+      if (key.startsWith('data-')) this.dataset[key.slice(5).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase())] = value
+      if (key === 'disabled') this.disabled = true
+      if (key === 'hidden') this.hidden = true
+      if (key === 'checked') this.checked = true
+      if (key === 'tabindex') this.tabIndex = Number(value)
+    }
+    getAttribute(key: string) { return this.attrs[key] ?? null }
+    removeAttribute(key: string) { delete this.attrs[key] }
+    appendChild(el: Element) { if (el.parentElement) el.remove(); el.parentElement = this; this.children.push(el); mutate(); return el }
+    remove() {
+      if (this.contains(document.activeElement)) document.activeElement = document.body
+      if (this.parentElement) this.parentElement.children = this.parentElement.children.filter(child => child !== this)
+      this.parentElement = null; mutate()
+    }
+    replaceWith(el: Element) {
+      const parent = this.parentElement; if (!parent) return
+      const index = parent.children.indexOf(this); this.parentElement = null
+      el.parentElement = parent; parent.children[index] = el; mutate()
+    }
+    select() { this.attrs['data-selected'] = 'true' }
+    contains(el: Element | null): boolean { return !!el && (el === this || this.children.some(child => child.contains(el))) }
+    matches(selector: string): boolean {
+      return selector.split(',').some(part => {
+        let sel = part.trim()
+        if (sel.includes(' ')) { const pieces = sel.split(/\s+/); const tail = pieces.pop()!; return this.matches(tail) && !!this.parentElement?.closest(pieces.join(' ')) }
+        if (sel.endsWith(':checked')) { if (!this.checked) return false; sel = sel.slice(0, -8) }
+        for (const match of sel.matchAll(/\[([\w-]+)(?:="([^"]*)")?\]/g)) {
+          const name = match[1]!, value = name === 'inert' ? (this.inert ? '' : null) : name === 'hidden' ? (this.hidden ? '' : null) : this.getAttribute(name)
+          if (value === null || (match[2] !== undefined && match[2] !== value)) return false
+        }
+        sel = sel.replace(/\[[^\]]+\]/g, '')
+        const id = /#([\w-]+)/.exec(sel); if (id && id[1] !== this.id) return false
+        for (const match of sel.matchAll(/\.([\w-]+)/g)) if (!this.className.split(' ').includes(match[1]!)) return false
+        const tag = /^[a-z][\w-]*/i.exec(sel); return !tag || tag[0].toUpperCase() === this.tagName
+      })
+    }
+    closest(selector: string): Element | null { return this.matches(selector) ? this : this.parentElement?.closest(selector) || null }
+    querySelectorAll(selector: string): Element[] { return this.children.flatMap(child => [...(child.matches(selector) ? [child] : []), ...child.querySelectorAll(selector)]) }
+    querySelector(selector: string): Element | null { return this.querySelectorAll(selector)[0] || null }
+    getClientRects() { return this.isConnected && !this.closest('[hidden]') ? [{}] : [] }
+    focus() { if (!this.isConnected || this.disabled || this.closest('[inert]')) return; document.activeElement = this; dispatch('focusin', this) }
+    addEventListener(type: string, callback: any) { (this.events[type] ||= []).push(callback) }
+    click() { if (!this.disabled && !this.closest('[inert]')) dispatch('click', this) }
+  }
+  const dispatch = (type: string, target: any, extra: any = {}) => {
+    const event: any = { type, target, currentTarget: target, ...extra, defaultPrevented: false, stopped: false,
+      preventDefault() { this.defaultPrevented = true }, stopImmediatePropagation() { this.stopped = true }, stopPropagation() { this.stopped = true } }
+    for (const item of listeners[type] || []) if (item.capture && !event.stopped) item.callback(event)
+    for (let current = target; current && !event.stopped; current = current.parentElement) {
+      event.currentTarget = current
+      for (const callback of current.events[type] || []) if (!event.stopped) callback(event)
+      if (!event.stopped && current['on' + type]) current['on' + type](event)
+    }
+    for (const item of listeners[type] || []) if (!item.capture && !event.stopped) item.callback(event)
+    return event
+  }
+  document = {
+    body: new Element('body'), activeElement: null,
+    createElement: (tag: string) => new Element(tag),
+    getElementById: (id: string) => document.body.querySelector('#' + id),
+    querySelector: (selector: string) => document.body.querySelector(selector), querySelectorAll: (selector: string) => document.body.querySelectorAll(selector),
+    addEventListener: (type: string, callback: any, capture = false) => (listeners[type] ||= []).push({ callback, capture }),
+  }
+  document.activeElement = document.body
+  document.body.innerHTML = '<div id="app"><button id="opener">Open</button><main id="main" tabindex="-1"></main></div><div id="toast" role="status"></div>'
+  document.getElementById('opener').focus()
+  const env: Record<string, any> = {
+    document, dispatch, MutationObserver: class { constructor(public callback: any) {} observe() { observers.add(this) } disconnect() { observers.delete(this) } },
+    t: (key: string) => key, esc: (value: any) => String(value ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!)),
+    $: document.querySelector, toast: vi.fn(), confirm: vi.fn().mockReturnValue(false), api: vi.fn().mockResolvedValue([]),
+    localStorage: { getItem: () => null, setItem: vi.fn() }, window: { location: { assign: vi.fn() } }, refreshTasks: vi.fn(),
+    console: { debug: vi.fn() }, performance: { now: () => 0 }, setTimeout: vi.fn(), clearTimeout: vi.fn(),
+    state: { tasksCache: [{ taskId: 'task-a', title: 'Task <A>', status: 'open', tags: [], parentTaskId: null, contentHash: 'a'.repeat(64) }] },
+    navigator: { clipboard: { writeText: vi.fn().mockRejectedValue(new Error('clipboard unavailable')) } },
+    quadrantOf: () => 1, subtaskCache: new Map(), fetchSubtasks: vi.fn().mockResolvedValue([]), taskDetailSessionSeq: 0, activeTaskDetailSession: 0,
+    taskDetailRefreshSubtasks: null, taskDetailRequestClose: null, taskDetailToggleSubtask: null,
+  }
+  runInNewContext(browserSection('// ── Dialog lifecycle:', '// ── View switching:') +
+    browserSection('function showFolderPicker(', '// ── Attachments:') +
+    browserSection('function trashConfirmDialog(', 'function confirmBatchPurge(') +
+    browserSection('function mobileActionSheet(', 'function mobileNoteRow(') +
+    browserSection('function footnoteModal(', 'function footnoteDialog(') +
+    browserSection('function uploadDialog()', 'async function downloadAttachment(') +
+    browserSection('function matrixDeleteDialog(', 'function showTrashContextMenu(') +
+    browserSection('function quickSwitch()', '// ── Paste image') +
+    browserSection('function mobileDetail(', 'function showNoteContextMenu(') +
+    browserSection('function taskDraftText(', '// Subtask data cache') +
+    browserSection('function inlineEditSubtask(', 'function taskDetailDialog(') +
+    browserSection('function taskDetailDialog(', '// Header global search removed'), env)
+  env.key = (key: string, extra = {}) => dispatch('keydown', document.activeElement, { key, ...extra })
+  return env
+}
+
+describe('dialog keyboard and draft lifecycle', () => {
+  it('replaces the initial subtask loading state with an empty result even when both lists are empty', async () => {
+    const env = dialogHarness()
+    env.taskDetailDialog('task-a'); await microtasks()
+    expect(env.document.querySelector('#tdSubtasks').textContent).toBe('taskNoTasks')
+    expect(env.document.querySelector('#tdSubCount').textContent).toBe('0 / 0')
+  })
+  it('starts destructive confirmation on cancel, traps Tab and restores the opener without deleting on Escape', async () => {
+    const env = dialogHarness(), doc = env.document, remove = vi.fn(), opener = doc.activeElement
+    env.trashConfirmDialog('Delete permanently?', 'Cannot restore.', 'Delete', remove)
+    const panel = doc.querySelector('.trash-confirm')
+    expect(panel.getAttribute('role')).toBe('dialog'); expect(panel.getAttribute('aria-modal')).toBe('true')
+    expect(panel.getAttribute('aria-label')).toBe('Delete permanently?')
+    expect(doc.activeElement.id).toBe('tcCancel'); expect(doc.getElementById('app').inert).toBe(true)
+    expect(doc.getElementById('toast').inert).toBe(false)
+    expect(env.key('Tab', { shiftKey: true }).defaultPrevented).toBe(true); expect(doc.activeElement.id).toBe('tcOk')
+    env.key('Tab'); expect(doc.activeElement.id).toBe('tcCancel')
+    env.key('Escape'); await microtasks()
+    expect(remove).not.toHaveBeenCalled(); expect(doc.querySelector('.modal-overlay')).toBeNull()
+    expect(doc.activeElement).toBe(opener); expect(doc.getElementById('app').inert).toBe(false)
+    expect(doc.body.style.overflow).toBeUndefined()
+  })
+
+  it('keeps a folder selection independent and invokes its action only after confirmation', async () => {
+    const env = dialogHarness(), moved = vi.fn()
+    env.api.mockResolvedValue(['work', 'work/archive'])
+    env.showFolderPicker('work', moved); await microtasks()
+    expect(env.document.activeElement.id).toBe('pickFolder')
+    env.key('Escape'); expect(moved).not.toHaveBeenCalled()
+    env.showFolderPicker('work', moved); await microtasks()
+    env.document.querySelector('#pickFolder').value = 'work/archive'
+    env.document.querySelector('[data-act="pick-ok"]').click()
+    expect(moved).toHaveBeenCalledExactlyOnceWith('work/archive')
+    expect(env.document.getElementById('app').inert).toBe(false)
+  })
+
+  it('keeps mobile actions as balanced independent buttons and lets the selected action bubble once', () => {
+    const env = dialogHarness(), actions: string[] = []
+    env.document.addEventListener('click', (e: any) => { const action = e.target.closest('[data-action]'); if (action) actions.push(action.dataset.action) })
+    env.mobileActionSheet('Note actions', [{ label: 'Rename', action: 'rename-note', id: 'note-a' }, { label: 'Trash', action: 'delete-note', id: 'note-a', danger: true }])
+    expect(env.document.querySelector('.mobile-sheet').getAttribute('aria-label')).toBe('Note actions')
+    env.document.querySelector('[data-action="rename-note"]').click()
+    expect(actions).toEqual(['rename-note']); expect(env.document.querySelector('.mobile-sheet-overlay')).toBeNull()
+    expect(env.document.activeElement.id).toBe('opener')
+  })
+
+  it('preserves nested task drafts and returns focus to the task after cancelling the close guard', async () => {
+    const env = dialogHarness(), doc = env.document
+    env.taskDetailDialog('task-a'); await microtasks()
+    const title = doc.querySelector('#tdTitle'); title.value = 'Unsent title'; env.dispatch('input', title)
+    expect(env.dialogHasDraft()).toBe(true)
+    env.key('Escape')
+    expect(doc.activeElement.id).toBe('cgCancel'); expect(doc.querySelector('#taskDetailModal').inert).toBe(true)
+    env.key('Escape')
+    expect(doc.querySelector('.close-guard-overlay')).toBeNull(); expect(doc.activeElement).toBe(title)
+    expect(title.value).toBe('Unsent title'); expect(env.dialogHasDraft()).toBe(true)
+    env.key('Escape'); doc.querySelector('#cgDiscard').click(); await microtasks()
+    expect(doc.querySelector('#taskDetailModal')).toBeNull(); expect(env.dialogHasDraft()).toBe(false)
+    expect(doc.activeElement.id).toBe('opener'); expect(env.api.mock.calls.every(([method]: string[]) => method !== 'updateTask')).toBe(true)
+  })
+
+  it('does not close over a pending save or new task input, and retains the draft after failed save-and-close', async () => {
+    const env = dialogHarness(), doc = env.document, save = deferred<any>()
+    env.api.mockImplementation((method: string) => method === 'updateTask' ? save.promise : Promise.resolve([]))
+    env.taskDetailDialog('task-a'); await microtasks()
+    const title = doc.querySelector('#tdTitle'); title.value = 'Draft A'; env.dispatch('input', title)
+    env.key('Escape'); doc.querySelector('#cgSaveClose').click()
+    env.key('Escape'); expect(doc.querySelector('#taskDetailModal')).not.toBeNull()
+    title.value = 'Draft B'; env.dispatch('input', title)
+    save.reject(new Error('offline')); await microtasks()
+    expect(title.value).toBe('Draft B'); expect(env.dialogHasDraft()).toBe(true)
+    expect(doc.querySelector('#tdSave').disabled).toBe(false); expect(doc.querySelector('#taskDetailModal')).not.toBeNull()
+  })
+
+  it('preserves an unsubmitted child and newer child text typed during create', async () => {
+    const env = dialogHarness(), doc = env.document, create = deferred<any>()
+    env.api.mockImplementation((method: string) => method === 'createTask' ? create.promise : Promise.resolve([]))
+    env.taskDetailDialog('task-a'); await microtasks()
+    const input = doc.querySelector('#tdNewSub'); input.value = 'Child A'; input.focus()
+    env.key('Escape'); expect(doc.querySelector('#taskDetailModal')).not.toBeNull()
+    expect(env.toast).toHaveBeenCalledWith('subtaskDraftPending', 'warn')
+    doc.querySelector('#tdAddSub').click(); input.value = 'Child B'
+    env.key('Escape'); expect(doc.querySelector('#taskDetailModal')).not.toBeNull()
+    create.resolve({ taskId: 'child-a', title: 'Child A' }); await microtasks()
+    expect(input.value).toBe('Child B'); expect(env.dialogHasDraft()).toBe(true)
+  })
+
+  it('requires explicit draft discard for quick creation, prevents duplicate creates, and keeps failed values', async () => {
+    const env = dialogHarness(), doc = env.document, create = deferred<any>()
+    env.api.mockImplementation((method: string) => method === 'createTask' ? create.promise : Promise.resolve([]))
+    env.quickTaskDialog(); await microtasks()
+    const title = doc.querySelector('#tkTitle'); title.value = 'New task'
+    env.key('Escape'); expect(env.confirm).toHaveBeenCalledWith('discardDraftConfirm'); expect(title.isConnected).toBe(true)
+    doc.querySelector('#tkSave').click(); env.key('s', { ctrlKey: true }); env.key('Escape')
+    expect(env.api.mock.calls.filter(([method]: string[]) => method === 'createTask')).toHaveLength(1)
+    expect(title.disabled).toBe(true); expect(title.isConnected).toBe(true)
+    create.reject(new Error('offline')); await microtasks()
+    expect(title.disabled).toBe(false); expect(title.value).toBe('New task'); expect(doc.activeElement).toBe(title)
+    env.confirm.mockReturnValue(true); env.key('Escape'); expect(title.isConnected).toBe(false)
+  })
+
+  it('does not discard edited footnote content on an unconfirmed Escape or steal background save shortcuts', () => {
+    const env = dialogHarness(), insert = vi.fn()
+    env.footnoteModal('Footnote', 'Original', 'Content', insert)
+    const input = env.document.querySelector('#fnContent'); input.value = 'Updated'
+    const save = env.key('s', { ctrlKey: true }); expect(save.defaultPrevented).toBe(true); expect(save.stopped).toBe(true)
+    env.key('Escape'); expect(input.isConnected).toBe(true); expect(input.value).toBe('Updated')
+    env.document.querySelector('#fnOk').click(); expect(insert).toHaveBeenCalledExactlyOnceWith('Updated')
+    expect(env.document.activeElement.id).toBe('opener')
+  })
+
+  it('restores pre-existing inert state, contains programmatic focus, and cleans up externally removed dialogs', async () => {
+    const env = dialogHarness(), doc = env.document, inert = doc.createElement('div')
+    inert.inert = true; doc.body.appendChild(inert)
+    env.trashConfirmDialog('Confirm', '', 'Delete', vi.fn())
+    env.dispatch('focusin', doc.getElementById('opener'))
+    expect(doc.activeElement.id).toBe('tcCancel')
+    doc.querySelector('.modal-overlay').remove(); await microtasks()
+    expect(doc.activeElement.id).toBe('opener'); expect(doc.getElementById('app').inert).toBe(false); expect(inert.inert).toBe(true)
+  })
+
+  it('keeps upload choices when cancellation is refused and submits selected files once', async () => {
+    const env = dialogHarness(), doc = env.document
+    env.uploadFilesWithCompanion = vi.fn(); env.uploadDialog(); await microtasks()
+    const files = doc.querySelector('#upFiles'); files.files = [{ name: 'file.pdf' }]
+    env.key('Escape'); expect(files.isConnected).toBe(true); expect(env.dialogHasDraft()).toBe(true)
+    doc.querySelector('#upOk').click()
+    expect(env.uploadFilesWithCompanion).toHaveBeenCalledExactlyOnceWith(files.files, true, '', true)
+    expect(doc.activeElement.id).toBe('opener')
+  })
+
+  it('does not cancel an in-flight matrix deletion and returns focus to the retryable failure action', async () => {
+    const env = dialogHarness(), doc = env.document, remove = deferred<any>()
+    env.matrixDeleting = false; env.api.mockReturnValue(remove.promise)
+    env.matrixDeleteDialog('matrix-a', 'Matrix A')
+    expect(doc.activeElement.id).toBe('mdCancel')
+    doc.querySelector('#mdOk').click(); env.key('Escape')
+    expect(doc.querySelector('.modal-overlay')).not.toBeNull()
+    remove.reject(new Error('offline')); await microtasks()
+    expect(doc.activeElement.id).toBe('mdClose')
+    env.key('Escape'); expect(doc.activeElement.id).toBe('opener')
+  })
+
+  it('renders keyboard-operable quick-switch results and restores a mobile detail opener', async () => {
+    const env = dialogHarness(), doc = env.document
+    env.api.mockResolvedValue({ root: [{ kind: 'note', noteId: 'note-a', title: 'Note A', relativePath: 'a.md' }] })
+    env.setView = vi.fn().mockResolvedValue(true); env.openNote = vi.fn()
+    env.quickSwitch(); await microtasks()
+    const row = doc.querySelector('[data-qsid="note-a"]')
+    expect(row.tagName).toBe('BUTTON'); row.click(); await microtasks()
+    expect(env.openNote).toHaveBeenCalledExactlyOnceWith('note-a')
+    env.mobileDetail('Attachment', '<p>Details</p>')
+    const detail = doc.querySelector('.mobile-detail')
+    expect(detail.getAttribute('aria-label')).toBe('Attachment')
+    expect(doc.activeElement.dataset.action).toBe('mobile-detail-back')
+    env.key('Escape'); expect(doc.activeElement.id).toBe('opener')
+  })
+
+  it('warns before leaving a page with a modal draft even when no note is dirty', () => {
+    const env = dialogHarness(); let beforeUnload!: (event: any) => void
+    env.window.addEventListener = (_name: string, callback: any) => { beforeUnload = callback }
+    env.state.editor = { dirty: false, saving: false }; env.state.selectedNoteId = null
+    runInNewContext(browserSection("window.addEventListener('beforeunload'", "document.addEventListener('visibilitychange'"), env)
+    env.footnoteModal('Footnote', '', 'Content', vi.fn()); env.document.querySelector('#fnContent').value = 'Draft'
+    const event = { preventDefault: vi.fn(), returnValue: undefined }
+    beforeUnload(event); expect(event.preventDefault).toHaveBeenCalledOnce(); expect(event.returnValue).toBe('')
+  })
+})
+
+function workspaceApiHarness(basePath = '/pkw/spaces/team-a') {
+  const env: Record<string, any> = { PKW_BASE: basePath, fetch: vi.fn(), t: (key: string) => key, paintWorkspaceSession: vi.fn() }
+  runInNewContext(browserSection('let workspaceSessionPromise =', 'const $ =') + '\nglobalThis.callApi = api', env)
+  return env
+}
+const jsonResponse = (status: number, data: any) => ({ ok: status >= 200 && status < 300, status, json: async () => data })
+const sessionResponse = (id = 'team-a', role = 'editor', csrf = 'csrf-test') => jsonResponse(200, { ok: true, value: { username: 'alice', csrf, spaces: [{ id, name: 'Team A', kind: 'shared', role }] } })
+
+describe('isolated workspace page and session bridge', () => {
+  it.each(['/pkw/spaces/team-a', '/pkw/spaces/private_1', '/pkw'])('keeps RPC, editor assets, attachment images and previews in %s', async basePath => {
+    const page = renderPage('test-version', basePath)
+    const env: Record<string, any> = {
+      PKW_BASE: basePath, ensureWorkspaceSession: async () => basePath === '/pkw' ? null : ({ csrf: 'csrf' }),
+      fetch: vi.fn().mockResolvedValue(jsonResponse(200, { ok: true, value: { done: true } })),
+      window: { Vditor: null, open: vi.fn() }, vditorLoadPromise: null,
+      loadCss: vi.fn().mockResolvedValue(undefined), loadScript: vi.fn().mockImplementation(async () => { env.window.Vditor = {} }),
+      isMobile: () => true, esc: (value: string) => value, attTypeOf: () => 'image',
+    }
+    runInNewContext(browserSection('const api = async', 'const $ =') + '\nglobalThis.callApi = api\n' +
+      browserSection('function ensureVditorLoaded()', 'function rewriteLiveAttachmentImgs(') +
+      browserSection('async function previewAttachment(', 'async function copyAttachmentRef(') +
+      browserSection('function attIcon(', 'function attCompanionHtml('), env)
+    await env.callApi('getNote', { noteId: 'n1' })
+    expect(env.fetch).toHaveBeenCalledWith(basePath + '/api', expect.objectContaining({ method: 'POST' }))
+    await env.ensureVditorLoaded()
+    expect(env.loadCss).toHaveBeenCalledWith(basePath + '/assets/vditor/3.11.3/dist/index.css')
+    expect(env.loadScript.mock.calls.map(([url]: string[]) => url)).toEqual([basePath + '/assets/vditor/3.11.3/dist/js/lute/lute.min.js', basePath + '/assets/vditor/3.11.3/dist/index.min.js'])
+    expect(env.managedAttachmentUrl('attachments/att-1/report.pdf')).toBe(basePath + '/attachment/att-1')
+    expect(env.attIcon({ attachmentId: 'att-1', mimeType: 'image/png' })).toContain('src="' + basePath + '/attachment/att-1"')
+    await env.previewAttachment('att-1'); expect(env.window.open).toHaveBeenCalledWith(basePath + '/attachment/att-1/preview', '_blank')
+    expect(page).toContain('const PKW_BASE = ' + JSON.stringify(basePath))
+    expect(() => new Function(/<script>([\s\S]*?)<\/script>/.exec(page)![1]!)).not.toThrow()
+    expect(page.includes('id="spaceBack"')).toBe(basePath !== '/pkw')
+  })
+
+  it.each(['/pkw/', '/pkw/spaces/../admin', '/pkw/spaces/a/b', '//evil.example', '/pkw/spaces/a?x', '/pkw/spaces/<script>', '/other', '/pkw\n'])('rejects unsafe base path %s', basePath => {
+    expect(() => renderPage('version', basePath)).toThrow('Invalid PKW base path')
+  })
+
+  it('shares one initial session fetch across concurrent calls and sends the scoped CSRF header', async () => {
+    const env = workspaceApiHarness(), session = deferred<any>()
+    env.fetch.mockImplementation((url: string) => url === '/pkw/session' ? session.promise : Promise.resolve(jsonResponse(200, { ok: true, value: 'ok' })))
+    const a = env.callApi('getTree'), b = env.callApi('getSummary')
+    expect(env.fetch).toHaveBeenCalledTimes(1)
+    session.resolve(sessionResponse()); await Promise.all([a, b])
+    const posts = env.fetch.mock.calls.filter(([url]: [string]) => url.endsWith('/api'))
+    expect(posts).toHaveLength(2)
+    for (const [, options] of posts) expect(options.headers['X-PKW-CSRF']).toBe('csrf-test')
+  })
+
+  it.each([401, 403])('does not automatically replay a rejected write on HTTP %s and requires a fresh session for the next manual attempt', async status => {
+    const env = workspaceApiHarness()
+    env.fetch.mockResolvedValueOnce(sessionResponse())
+      .mockResolvedValueOnce(jsonResponse(status, { ok: false, code: status === 401 ? 'PKW_AUTH_REQUIRED' : 'PKW_FORBIDDEN', error: 'rejected' }))
+      .mockResolvedValueOnce(sessionResponse('team-a', 'editor', 'csrf-new'))
+      .mockResolvedValueOnce(jsonResponse(200, { ok: true, value: { saved: true } }))
+    await expect(env.callApi('saveNote', { markdown: 'draft A' })).rejects.toMatchObject({ code: status === 401 ? 'PKW_AUTH_REQUIRED' : 'PKW_FORBIDDEN' })
+    expect(env.fetch).toHaveBeenCalledTimes(2)
+    await env.callApi('saveNote', { markdown: 'draft A' })
+    expect(env.fetch.mock.calls[2][0]).toBe('/pkw/session')
+    expect(env.fetch.mock.calls[3][1].headers['X-PKW-CSRF']).toBe('csrf-new')
+  })
+
+  it('fails before posting when the session is expired or the current space is absent', async () => {
+    for (const response of [jsonResponse(401, { ok: false, code: 'PKW_AUTH_REQUIRED' }), sessionResponse('another-space')]) {
+      const env = workspaceApiHarness(); env.fetch.mockResolvedValue(response)
+      await expect(env.callApi('saveNote', { markdown: 'draft' })).rejects.toThrow()
+      expect(env.fetch).toHaveBeenCalledTimes(1)
+    }
+    const legacy = workspaceApiHarness('/pkw'); legacy.fetch.mockResolvedValue(jsonResponse(200, { ok: true, value: {} }))
+    await legacy.callApi('getSummary'); expect(legacy.fetch.mock.calls[0][0]).toBe('/pkw/api')
+    expect(legacy.fetch.mock.calls[0][1].headers).not.toHaveProperty('X-PKW-CSRF')
+  })
+
+  it('distinguishes viewer write controls from editor permanent deletion while preserving read actions', () => {
+    const env = dialogHarness()
+    Object.assign(env, { PKW_BASE: '/pkw/spaces/team-a', workspaceAccess: { role: 'viewer' } })
+    runInNewContext(browserSection('function workspaceReadOnly()', 'const state ='), env)
+    const app = env.document.getElementById('app')
+    app.innerHTML = '<button data-action="new-note">New</button><button data-action="set-mode" data-mode="live">Edit</button><button data-action="set-mode" data-mode="reading">Read</button><button data-action="open-note">Open</button><button data-action="purge-one">Purge</button><button data-action="delete-note">Trash</button>'
+    env.applyWorkspacePermissions()
+    for (const action of ['new-note', 'purge-one', 'delete-note']) expect(app.querySelector('[data-action="' + action + '"]').disabled).toBe(true)
+    expect(app.querySelector('[data-mode="live"]').disabled).toBe(true); expect(app.querySelector('[data-mode="reading"]').disabled).toBe(false)
+    expect(app.querySelector('[data-action="open-note"]').disabled).toBe(false)
+    env.workspaceAccess.role = 'editor'; env.applyWorkspacePermissions()
+    expect(app.querySelector('[data-action="new-note"]').disabled).toBe(false); expect(app.querySelector('[data-action="purge-one"]').disabled).toBe(true)
+    env.workspaceAccess.role = 'owner'; env.applyWorkspacePermissions()
+    expect(app.querySelector('[data-action="purge-one"]').disabled).toBe(false)
+  })
+
+  it('blocks space navigation on an open dialog draft or failed note flush, and leaves only after a successful flush', async () => {
+    const env = dialogHarness(), doc = env.document
+    doc.body.innerHTML = '<a id="spaceBack" href="/pkw">Back</a><button id="spaceRetry">Retry</button>'
+    Object.assign(env, { PKW_BASE: '/pkw/spaces/team-a', applyWorkspacePermissions: vi.fn(), workspaceActionDenied: () => false, ensureWorkspaceSession: vi.fn(), flushNoteEdits: vi.fn().mockResolvedValue(false) })
+    env.pendingDraft = true; env.dialogHasDraft = () => env.pendingDraft
+    runInNewContext(browserSection("if (PKW_BASE !== '/pkw') {\n  $('#spaceBack')", '\nrender()'), env)
+    doc.querySelector('#spaceBack').click(); await microtasks()
+    expect(env.flushNoteEdits).not.toHaveBeenCalled(); expect(env.window.location.assign).not.toHaveBeenCalled()
+    env.pendingDraft = false; doc.querySelector('#spaceBack').click(); await microtasks()
+    expect(env.window.location.assign).not.toHaveBeenCalled()
+    env.flushNoteEdits.mockResolvedValue(true); doc.querySelector('#spaceBack').click(); await microtasks()
+    expect(env.window.location.assign).toHaveBeenCalledExactlyOnceWith('/pkw')
+  })
+})
+
+describe('task version ownership and conflict recovery', () => {
+  it('retains the displayed task hash across background refresh and advances only after its own successful save', async () => {
+    const env = dialogHarness(), doc = env.document, first = deferred<any>(), second = deferred<any>()
+    let writes = 0
+    env.api.mockImplementation((method: string) => method === 'updateTask' ? (++writes === 1 ? first.promise : second.promise) : Promise.resolve([]))
+    env.taskDetailDialog('task-a'); await microtasks()
+    const title = doc.querySelector('#tdTitle'); title.value = 'Draft A'; env.dispatch('input', title)
+    env.state.tasksCache = [{ ...env.state.tasksCache[0], contentHash: 'f'.repeat(64) }]
+    doc.querySelector('#tdSave').click()
+    expect(env.api).toHaveBeenLastCalledWith('updateTask', expect.objectContaining({ expectedContentHash: 'a'.repeat(64) }))
+    title.value = 'Draft B'; env.dispatch('input', title)
+    first.resolve({ contentHash: 'b'.repeat(64) }); await microtasks()
+    expect(env.dialogHasDraft()).toBe(true)
+    doc.querySelector('#tdSave').click()
+    expect(env.api).toHaveBeenLastCalledWith('updateTask', expect.objectContaining({ expectedContentHash: 'b'.repeat(64), patch: expect.objectContaining({ title: 'Draft B' }) }))
+    second.resolve({ contentHash: 'c'.repeat(64) }); await microtasks()
+    expect(env.dialogHasDraft()).toBe(false)
+  })
+
+  it('keeps conflicted fields, stops repeated saves, allows manual copying, and retains the draft when reloading fails', async () => {
+    const env = dialogHarness(), doc = env.document
+    env.api.mockImplementation((method: string) => method === 'updateTask' ? Promise.reject(Object.assign(new Error('changed'), { code: 'PKW_TASK_CONFLICT' })) : method === 'listTasks' ? Promise.reject(new Error('offline')) : Promise.resolve([]))
+    env.taskDetailDialog('task-a'); await microtasks()
+    const title = doc.querySelector('#tdTitle'); title.value = 'My conflicting draft'; env.dispatch('input', title)
+    doc.querySelector('#tdSave').click(); await microtasks()
+    expect(title.value).toBe('My conflicting draft'); expect(doc.querySelector('#tdConflict').hidden).toBe(false)
+    expect(doc.querySelector('#tdSave').disabled).toBe(true); expect(env.dialogHasDraft()).toBe(true)
+    env.key('s', { ctrlKey: true }); await microtasks()
+    expect(env.api.mock.calls.filter(([method]: string[]) => method === 'updateTask')).toHaveLength(1)
+    doc.querySelector('#tdCopyDraft').click(); await microtasks()
+    expect(doc.querySelector('#tdDraft').value).toContain('My conflicting draft'); expect(doc.querySelector('#tdDraft').hidden).toBe(false)
+    env.confirm.mockReturnValue(true); doc.querySelector('#tdReload').click(); await microtasks()
+    expect(title.value).toBe('My conflicting draft'); expect(doc.querySelector('#tdConflict').hidden).toBe(false)
+    expect(env.dialogHasDraft()).toBe(true)
+  })
+
+  it('rejects a reload that would replace newer task input and accepts a later explicit unchanged reload', async () => {
+    const env = dialogHarness(), doc = env.document, read = deferred<any>()
+    env.api.mockImplementation((method: string) => method === 'updateTask' ? Promise.reject(Object.assign(new Error('changed'), { code: 'PKW_TASK_CONFLICT' })) : method === 'listTasks' ? read.promise : Promise.resolve([]))
+    env.taskDetailDialog('task-a'); await microtasks()
+    const title = doc.querySelector('#tdTitle'); title.value = 'Draft A'; env.dispatch('input', title)
+    doc.querySelector('#tdSave').click(); await microtasks(); env.confirm.mockReturnValue(true)
+    doc.querySelector('#tdReload').click(); title.value = 'Draft B'; env.dispatch('input', title)
+    const latest = { taskId: 'task-a', title: 'Server version', status: 'open', contentHash: 'c'.repeat(64) }
+    read.resolve([latest]); await microtasks()
+    expect(title.value).toBe('Draft B'); expect(env.dialogHasDraft()).toBe(true)
+    doc.querySelector('#tdReload').click(); await microtasks()
+    expect(title.value).toBe('Server version'); expect(doc.querySelector('#tdConflict').hidden).toBe(true)
+    title.value = 'Merged manually'; env.dispatch('input', title); doc.querySelector('#tdSave').click()
+    expect(env.api).toHaveBeenLastCalledWith('updateTask', expect.objectContaining({ expectedContentHash: 'c'.repeat(64) }))
+  })
+
+  it('keeps an inline child title and its observed hash through a conflict and asynchronous subtree refresh', async () => {
+    const env = dialogHarness(), doc = env.document, update = deferred<any>()
+    const child = { taskId: 'child-a', parentTaskId: 'task-a', title: 'Child A', status: 'open', contentHash: 'd'.repeat(64) }
+    env.fetchSubtasks.mockResolvedValue([child]); env.api.mockImplementation((method: string) => method === 'updateTask' ? update.promise : Promise.resolve([]))
+    env.taskDetailDialog('task-a'); await microtasks()
+    const button = doc.querySelector('[data-action="subtask-edit"]')
+    expect(button.tagName).toBe('BUTTON'); expect(button.dataset.contentHash).toBe('d'.repeat(64))
+    env.inlineEditSubtask(button, 'child-a')
+    const input = doc.querySelector('.subtask-edit-input'); input.value = 'My child draft'
+    env.dispatch('keydown', input, { key: 'Enter' })
+    expect(env.api).toHaveBeenLastCalledWith('updateTask', { taskId: 'child-a', expectedContentHash: 'd'.repeat(64), patch: { title: 'My child draft' } })
+    env.fetchSubtasks.mockResolvedValue([{ ...child, title: 'Other child title', contentHash: 'e'.repeat(64) }])
+    await env.taskDetailRefreshSubtasks()
+    expect(input.isConnected).toBe(true); expect(input.value).toBe('My child draft')
+    update.reject(Object.assign(new Error('changed'), { code: 'PKW_TASK_CONFLICT' })); await microtasks()
+    expect(input.value).toBe('My child draft'); expect(doc.querySelector('#taskPatchDraft').value).toContain('My child draft')
+    expect(env.dialogHasDraft()).toBe(true)
+  })
+
+  it.each(['PKW_TASK_CONFLICT', 'NETWORK_ERROR'])('captures the date-edit hash before the prompt and preserves a rejected date for copying (%s)', async code => {
+    const env = dialogHarness(), doc = env.document
+    Object.assign(env, { dismissWikiSuggest: vi.fn(), dismissContextMenu: vi.fn(), dismissSelButton: vi.fn(), prompt: () => {
+      env.state.tasksCache = [{ ...env.state.tasksCache[0], contentHash: 'f'.repeat(64) }]; return '2026-12-31'
+    } })
+    env.api.mockRejectedValue(Object.assign(new Error('changed'), { code }))
+    runInNewContext(browserSection('// ── Delegated events', '// Trash selection is pure local state'), env)
+    const button = doc.createElement('button'); button.setAttribute('data-action', 'task-due'); button.setAttribute('data-id', 'task-a'); doc.body.appendChild(button)
+    button.click(); await microtasks()
+    expect(env.api).toHaveBeenCalledExactlyOnceWith('updateTask', { taskId: 'task-a', expectedContentHash: 'a'.repeat(64), patch: { dueAt: '2026-12-31' } })
+    expect(doc.querySelector('#taskPatchDraft').value).toContain('2026-12-31')
+  })
+
+  it.each([false, true])('binds a drag operation to the task version at drag start rather than a later cache refresh (conflict=%s)', async conflict => {
+    const env = dialogHarness(), doc = env.document
+    env.workspaceReadOnly = () => false
+    if (conflict) env.api.mockRejectedValue(Object.assign(new Error('changed'), { code: 'PKW_TASK_CONFLICT' }))
+    else env.api.mockResolvedValue({})
+    runInNewContext(browserSection('// ── Task drag/drop', '// ── Delegated events'), env)
+    const card = doc.createElement('div'); card.className = 'task-card'; card.setAttribute('draggable', 'true'); card.setAttribute('data-id', 'task-a'); card.classList = { add: vi.fn(), remove: vi.fn() }
+    const target = doc.createElement('div'); target.setAttribute('data-drop', 'inbox'); target.classList = { add: vi.fn(), remove: vi.fn() }
+    doc.body.appendChild(card); doc.body.appendChild(target)
+    let id = ''; const dataTransfer = { setData: (_type: string, value: string) => { id = value }, getData: () => id }
+    env.dispatch('dragstart', card, { dataTransfer })
+    env.state.tasksCache = [{ ...env.state.tasksCache[0], contentHash: 'f'.repeat(64) }]
+    env.dispatch('drop', target, { dataTransfer }); await microtasks()
+    expect(env.api).toHaveBeenCalledExactlyOnceWith('updateTask', { taskId: 'task-a', expectedContentHash: 'a'.repeat(64), patch: { matrixId: null } })
+    if (conflict) expect(env.toast).toHaveBeenCalledWith('taskActionConflict', 'err')
+  })
+})
+
+describe('search scope and fallback disclosure', () => {
+  it.each([{ results: [] }, { results: [{ remote: { title: 'Local note' }, local: { entityType: 'note', entityId: 'n1' } }] }])('persistently renders escaped scope warnings beside successful results, including no hits (%j)', async ({ results }) => {
+    const env = searchHarness()
+    env.esc = (value: string) => String(value).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]!))
+    env.searchCardsHtml = vi.fn().mockReturnValue('<article>Result</article>')
+    runInNewContext(browserSection('function renderKnowledgeSearchState()', 'function clearKnowledgeSearch()'), env)
+    env.api.mockResolvedValue({ results, mode: 'local-keyword', warning: '仅本地文件名 <img src=x onerror=alert(1)>' })
+    await env.runSearch('query')
+    expect(env.box.innerHTML).toContain('仅本地文件名 &lt;img src=x onerror=alert(1)&gt;')
+    expect(env.box.innerHTML).not.toContain('<img')
+    if (results.length) expect(env.box.innerHTML).toContain('searchLocalEvidenceHint')
+    else expect(env.box.innerHTML).toContain('noHits')
+    env.renderKnowledgeSearchState(); expect(env.box.innerHTML).toContain('仅本地文件名')
+  })
+
+  it('does not let a late old warning replace a newer query, and clears disclosure on new query, failure or clear', async () => {
+    const env = searchHarness(), old = deferred<any>(), current = deferred<any>()
+    env.state.searchWarning = 'Previous warning'; env.state.searchMode = 'remote'
+    env.api.mockReturnValueOnce(old.promise).mockReturnValueOnce(current.promise)
+    const a = env.runSearch('old'); expect(env.state.searchWarning).toBe('')
+    const b = env.runSearch('new')
+    current.resolve({ results: [], mode: 'remote', warning: 'Some attachment text is unavailable' }); await b
+    old.resolve({ results: [], mode: 'local-keyword', warning: 'Old fallback' }); await a
+    expect(env.state.searchWarning).toBe('Some attachment text is unavailable'); expect(env.state.searchMode).toBe('remote')
+    env.clearKnowledgeSearch(); expect(env.state.searchWarning).toBe(''); expect(env.state.searchMode).toBeNull()
+    env.api.mockRejectedValue(new Error('offline')); await env.runSearch('failed')
+    expect(env.state.searchWarning).toBe(''); expect(env.state.searchMode).toBeNull()
+  })
+
+  it('labels fallback attachment matches as filenames instead of attachment content', () => {
+    const env = searchHarness(); env.state.searchMode = 'local-keyword'
+    env.knowledgeCardHtml.mockImplementation((card: any) => card.reason + card.reasonAttrs)
+    runInNewContext(browserSection('function searchCardsHtml(', 'function renderSearchResults('), env)
+    const html = env.searchCardsHtml([{ remote: { title: 'File', filename: 'report.pdf' }, local: { entityType: 'attachment', entityId: 'a1', companionNoteId: 'n1' } }])
+    expect(html).toContain('attachmentNameMatch'); expect(html).toContain('data-reason="attachment-name"'); expect(html).not.toContain('attMatch')
+  })
+})
+
+function trashTaskHarness() {
+  const env = dialogHarness(), doc = env.document
+  for (const id of ['list', 'treeToolbar', 'detail']) {
+    const node = doc.createElement('div'); node.id = id; doc.body.appendChild(node)
+  }
+  Object.assign(env.state, {
+    view: 'trash', trashSelection: new Set(), trashFilter: 'all', trashBusy: false,
+    trashTaskBusy: null, trashTaskError: '', trashTasksLoadError: '',
+    trashCache: { notes: [], atts: [], folders: [], tasks: [{ taskId: 'task-deleted', title: 'Deleted <task>', deletedAt: '2026-10-02T12:00:00Z' }] },
+  })
+  Object.assign(env, {
+    viewSeq: 1, trashSeq: 0, workspaceReadOnly: () => false,
+    restoreScroll: vi.fn(), viewMark: vi.fn(), invalidateLoad: vi.fn(),
+    dismissWikiSuggest: vi.fn(), dismissContextMenu: vi.fn(), dismissSelButton: vi.fn(),
+    loadOnce: vi.fn(async (method: string) => method === 'listTrashTasks' ? env.state.trashCache.tasks : []),
+  })
+  runInNewContext(browserSection('function trashReconcile(', '// ── Knowledge view:') +
+    browserSection('function refreshTrash(', 'function viewMark(') +
+    browserSection('// ── Delegated events', '// Trash selection is pure local state'), env)
+  env.renderTrashFrom([], [], [], env.state.trashCache.tasks)
+  return env
+}
+
+describe('deleted task recovery in Trash', () => {
+  it('renders a separately named task section with a native restore action and escaped user text', () => {
+    const env = trashTaskHarness(), doc = env.document
+    const section = doc.querySelector('#trashTasks'), restore = section.querySelector('[data-action="restore-task"]')
+    expect(section.getAttribute('aria-labelledby')).toBe('trashTasksTitle')
+    expect(section.querySelector('#trashTasksTitle').textContent).toContain('trashTasks')
+    expect(section.textContent).toContain('Deleted <task>')
+    expect(section.querySelector('task')).toBeNull()
+    expect(restore.tagName).toBe('BUTTON')
+    expect(restore.dataset.id).toBe('task-deleted')
+    expect(section.querySelectorAll('input')).toHaveLength(0)
+    expect(section.querySelector('[data-action="purge-one"]')).toBeNull()
+    expect(env.trashItems([], [], [])).toHaveLength(0)
+    expect(env.trashTasksHtml(env.state.trashCache.tasks)).toContain('Deleted &lt;task&gt;')
+    navigationFragment(env.trashTasksHtml(env.state.trashCache.tasks))
+  })
+
+  it('routes the rendered restore button to one restore request and refreshes after success', async () => {
+    const env = trashTaskHarness(), restore = deferred<any>()
+    env.api.mockReturnValueOnce(restore.promise)
+    env.document.querySelector('[data-action="restore-task"]').click(); await microtasks()
+    expect(env.api).toHaveBeenCalledExactlyOnceWith('restoreTask', { taskId: 'task-deleted' })
+    expect(env.document.querySelector('[data-action="restore-task"]').disabled).toBe(true)
+    await env.restoreTrashedTask('task-deleted')
+    expect(env.api).toHaveBeenCalledTimes(1)
+    restore.resolve({ taskId: 'task-deleted', title: 'Deleted <task>' }); await microtasks()
+    expect(env.state.trashCache.tasks).toEqual([])
+    expect(env.document.querySelector('[data-action="restore-task"]')).toBeNull()
+    expect(env.document.querySelector('#trashTasks').textContent).toContain('trashTasksEmpty')
+    expect(env.invalidateLoad).toHaveBeenCalledWith('listTasks')
+    expect(env.invalidateLoad).toHaveBeenCalledWith('listTrashTasks')
+    expect(env.loadOnce).toHaveBeenCalledWith('listTrashTasks', {})
+    expect(env.state.tasksCache).toEqual([])
+    expect(env.toast).toHaveBeenCalledWith('trashTaskRestored', 'ok')
+    expect(env.state.trashTaskBusy).toBeNull()
+  })
+
+  it('keeps a failed restore visible with a retryable error, without claiming deletion or success', async () => {
+    const env = trashTaskHarness()
+    env.api.mockRejectedValueOnce(new Error('network <uncertain>'))
+    expect(await env.restoreTrashedTask('task-deleted')).toBe(false)
+    const section = env.document.querySelector('#trashTasks')
+    expect(env.state.trashCache.tasks).toHaveLength(1)
+    expect(section.querySelector('[data-action="restore-task"]').disabled).toBe(false)
+    expect(section.querySelector('[role="alert"]').textContent).toContain('network <uncertain>')
+    expect(section.querySelector('uncertain')).toBeNull()
+    expect(section.querySelector('[data-action="retry-trash-tasks"]')).not.toBeNull()
+    expect(env.toast).not.toHaveBeenCalledWith('trashTaskRestored', 'ok')
+    expect(env.loadOnce).not.toHaveBeenCalled()
+    section.querySelector('[data-action="retry-trash-tasks"]').click(); await microtasks()
+    expect(env.state.trashTaskError).toBe('')
+  })
+
+  it('lets viewers read deleted tasks while denying both UI and direct restore requests', async () => {
+    const env = trashTaskHarness()
+    env.workspaceReadOnly = () => true; env.renderTrashTasksInto()
+    const button = env.document.querySelector('[data-action="restore-task"]')
+    expect(button.disabled).toBe(true)
+    expect(env.document.querySelector('#trashTasks').textContent).toContain('spaceReadOnly')
+    button.click(); await microtasks()
+    expect(await env.restoreTrashedTask('task-deleted')).toBe(false)
+    expect(env.api).not.toHaveBeenCalled()
+    expect(env.state.trashCache.tasks).toHaveLength(1)
+  })
+
+  it('preserves deleted documents when task loading fails, labels stale tasks, and supports retry', async () => {
+    const env = trashTaskHarness()
+    env.loadOnce.mockImplementation(async (method: string) => {
+      if (method === 'listTrashTasks') throw new Error('task read unavailable')
+      if (method === 'listTrash') return [{ noteId: 'note-trash', title: 'Deleted note' }]
+      return []
+    })
+    await env.renderTrash()
+    expect(env.document.querySelector('#main').textContent).toContain('Deleted note')
+    expect(env.document.querySelector('#trashTasks').textContent).toContain('trashTasksReadFailed')
+    expect(env.document.querySelector('#trashTasks').textContent).toContain('trashTasksStale')
+    expect(env.document.querySelector('[data-action="restore-task"]')).not.toBeNull()
+    env.loadOnce.mockResolvedValue([])
+    env.document.querySelector('[data-action="retry-trash-tasks"]').click(); await microtasks()
+    expect(env.state.trashTasksLoadError).toBe('')
+    expect(env.document.querySelector('#trashTasks').textContent).toContain('trashTasksEmpty')
+  })
+
+  it('ignores old same-view reads after a restore refresh and old reads after navigation', async () => {
+    const env = trashTaskHarness(), old = deferred<any>()
+    let taskReads = 0
+    env.loadOnce.mockImplementation(async (method: string) => method === 'listTrashTasks' && ++taskReads === 1 ? old.promise : [])
+    const earlier = env.renderTrash()
+    await env.renderTrash()
+    old.resolve([{ taskId: 'old', title: 'Outdated deleted task' }]); await earlier
+    expect(env.state.trashCache.tasks).toEqual([])
+    expect(env.document.querySelector('#main').textContent).not.toContain('Outdated deleted task')
+    const afterNavigation = deferred<any>()
+    env.loadOnce.mockImplementation(async (method: string) => method === 'listTrashTasks' ? afterNavigation.promise : [])
+    const pending = env.renderTrash()
+    env.state.view = 'overview'; env.viewSeq++
+    env.document.querySelector('#main').innerHTML = '<p>Current overview</p>'
+    afterNavigation.resolve([{ taskId: 'old', title: 'Late task' }]); await pending
+    expect(env.document.querySelector('#main').textContent).toBe('Current overview')
+  })
+
+  it('does not overwrite another view when a pending restore finishes', async () => {
+    const env = trashTaskHarness(), restore = deferred<any>()
+    env.api.mockReturnValueOnce(restore.promise)
+    const pending = env.restoreTrashedTask('task-deleted')
+    env.state.view = 'overview'; env.viewSeq++
+    env.document.querySelector('#main').innerHTML = '<p>Current overview</p>'
+    restore.resolve({ taskId: 'task-deleted' }); await pending
+    expect(env.state.trashCache.tasks).toEqual([])
+    expect(env.document.querySelector('#main').textContent).toBe('Current overview')
+    expect(env.loadOnce).not.toHaveBeenCalled()
+    expect(env.refreshTasks).not.toHaveBeenCalled()
+  })
+
+  it('excludes deleted tasks from the existing permanent deletion flow and document filters', () => {
+    const env = trashTaskHarness()
+    env.state.trashCache.notes = [{ noteId: 'note-deleted', title: 'Note' }]
+    env.trashConfirmDialog = vi.fn()
+    env.confirmEmptyTrash()
+    env.doBatchPurge = vi.fn()
+    env.trashConfirmDialog.mock.calls[0][3]()
+    expect(env.doBatchPurge).toHaveBeenCalledWith(['note:note-deleted'])
+    env.state.trashFilter = 'note'
+    env.renderTrashFrom(env.state.trashCache.notes, [], [], env.state.trashCache.tasks)
+    expect(env.document.querySelector('#trashTasks').textContent).toContain('Deleted <task>')
+    expect(env.document.querySelectorAll('.trash-check')).toHaveLength(1)
   })
 })

@@ -65,7 +65,8 @@ async function loadLute(): Promise<LuteGlobal> {
  * Live parity, except `mark` is enabled so `==highlight==` keeps rendering
  * (the toolbar offers it and the prior Reading renderer rendered it).
  */
-export async function renderMarkdownToHtml(markdown: string): Promise<string> {
+export async function renderMarkdownToHtml(markdown: string, basePath = '/pkw'): Promise<string> {
+  if (!/^\/pkw(?:\/spaces\/[a-zA-Z0-9_-]+)?$/.test(basePath)) throw new Error('Invalid PKW basePath')
   const Lute = await loadLute()
   // Display projection: hide machine-managed summary markers (canonical untouched),
   // and neutralize only UNMATCHED tilde fences (a bare ~{3,} with no closer) so
@@ -83,5 +84,5 @@ export async function renderMarkdownToHtml(markdown: string): Promise<string> {
   const html = lute.Md2HTML(protectedText)
   const restored = restoreWikiLinks(html, tokens)
   // Managed attachments (`attachments/<id>/<file>`) → served byte URL.
-  return rewriteAttachmentUrls(restored, (id, _filename) => '/pkw/attachment/' + encodeURIComponent(id))
+  return rewriteAttachmentUrls(restored, (id, _filename) => basePath + '/attachment/' + encodeURIComponent(id))
 }

@@ -12,7 +12,10 @@
     "deploy": "node scripts/deploy-pkw.mjs",
     "verify:build": "node scripts/verify-build.mjs",
     "verify:packed": "node scripts/verify-packed.mjs",
-    "preview": "node scripts/build.mjs && node scripts/verify-packed.mjs --preview"
+    "preview": "node scripts/build.mjs && node scripts/verify-packed.mjs --preview",
+    "serve:collaboration": "node scripts/serve-collaboration.mjs",
+    "data": "node scripts/pkw-data.mjs",
+    "evaluate:retrieval": "node scripts/evaluate-retrieval.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.20.0",

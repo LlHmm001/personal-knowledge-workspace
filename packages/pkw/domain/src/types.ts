@@ -454,7 +454,7 @@ export interface PkwTasksService {
   listTasks(filter?: { matrixId?: TaskMatrixId | null; status?: TaskStatus; includeDeleted?: boolean }): Task[]
   listSubtasks(parentTaskId: TaskId): Task[]
   createTask(input: CreateTaskInput): Promise<Task>
-  updateTask(taskId: TaskId, patch: Partial<Omit<Task, 'taskId' | 'workspaceId' | 'createdAt'>>): Promise<Task>
+  updateTask(taskId: TaskId, patch: Partial<Omit<Task, 'taskId' | 'workspaceId' | 'createdAt'>>, options?: { expectedContentHash?: string }): Promise<Task>
   completeTask(taskId: TaskId): Promise<Task>
   reopenTask(taskId: TaskId): Promise<Task>
   moveTaskToMatrix(taskId: TaskId, matrixId: TaskMatrixId | null): Promise<Task>

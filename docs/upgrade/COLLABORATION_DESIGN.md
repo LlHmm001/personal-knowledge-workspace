@@ -1,119 +1,89 @@
-# PKW 个人空间与团队共享空间方案
+# PKW 个人空间与团队共享空间：实现与验收
 
-日期：2026-10-02。状态：**产品与技术设计，尚未实现多人鉴权或空间隔离，不能据此开放多人生产使用。**
+更新：2026-10-02。**多人身份、空间隔离、角色、邀请和显式复制已有源码及本机专项证据；目标服务器尚未据此完成上线验收。** 最终整合测试、安装包、浏览器、CI 与生产结果以 [UPGRADE_DELIVERY.md](UPGRADE_DELIVERY.md) 为准。本页不沿用早期“仅研究、未实现”的结论，也不把本机通过写成生产可用。
 
-用户已确认：既要个人使用，也要多人使用；采用“每人有私人空间，另建团队共享空间”。本方案按这个决定展开，不再要求用户重选。现有可靠性修复继续推进；多人能力作为单独的实施阶段，有自己的验收门槛。
+用户已确认：首批约 **15 人**；每人私人空间，另建团队共享空间；**旧资料全部先归本人私人空间**；现有入口为 `https://ddmind.duckdns.org/pkw`。网址已知不代表服务器版本、目录、备份或当前匿名访问状态已经核验。不再要求用户重选这些已确认事项。
 
-## 用户会怎样使用
+## 日常使用及范围
 
-登录后看到“我的空间”和自己加入的团队。私人笔记默认只有本人可访问；团队管理员的身份只在对应团队生效，不自动获得别人的私人空间权限。团队共享资料由该团队成员按角色使用；退出或被移除后，后续请求不再获得团队内容。
+登录后选择自己的私人空间或已加入的团队。团队 owner/admin 不因此获得其他人的私人空间权限。私人内容要给团队使用时，先预览“复制笔记到团队”的正文、元数据、实际引用附件及目标，再确认创建独立副本；来源不删除，以后修改原稿不会自动更新副本。首版没有匿名公开链接、逐段权限、跨空间实时引用或协同光标。
 
-例如，你先在私人空间写一份方案，决定给同事看时选择“复制到团队”，确认正文、附件和引用范围后产生团队内独立资料。原私人笔记仍保留；修改私人原稿不会悄悄更新团队副本。首版不做匿名公开链接、跨空间实时引用或文档逐段权限，先把空间边界做完整。已经被合法下载或手工复制的内容无法通过撤权追回，界面不会承诺这种能力。
+这是应用内隔离，不是端到端加密。拥有服务器文件和备份权限的运维人员仍可能接触资料；已被合法下载的副本无法靠撤权追回。viewer 可以阅读与下载，“只读”不代表防复制。
 
-这是一种应用内权限隔离，不是对服务器运维人员的端到端加密承诺。拥有服务器文件和备份权限的人仍可能接触内容；运维访问、备份恢复权限和审计应单独管理，不能伪装成普通团队管理员功能。
+## 实际实现与证据
 
-## 实际现状与缺口
+源码行号是本次定位，后续以函数名和最终提交为准。
 
-以下来自本轮工作区源码；行号用于定位，最终以函数名与提交为准。宿主检查使用本机 Harness `0.1.5-rc.2` 源码目录，尚未证明与生产版本相同。
-
-| 方面 | 当前已有 | 多人使用缺什么 | 源码依据 |
+| 方面 | 当前实现 | 已有证据与剩余边界 | 源码依据 |
 | --- | --- | --- | --- |
-| 工作区 | `workspaceRegistry` 与 `WorkspaceId` 已有；文件句柄会检查路径包含关系 | `PkwWebService` 每个实例固定一个 workspacePath 和服务集合，没有请求级成员上下文或空间切换 | `packages/pkw/web/src/index.ts:244–303`；`workspace/src/index.ts:58–103` |
-| HTTP 入口 | `/pkw` 页面、`/pkw/api` RPC、附件字节/预览路径 | PKW handler 未取得登录身份，未按角色/空间/对象授权；有登录代理也不能代替资源权限 | `web/src/index.ts:306–344`、`:419–438` |
-| 本机宿主 | WebServer 按路径匹配并调用 handler | 所检宿主这段分发链没有统一身份中间件；生产反向代理和网络入口未核验，不能推断线上是否匿名可达 | 本机 Harness `packages/host/webserver/src/index.ts:220–236` |
-| 本地存储 | Note Markdown、附件二进制和 Task Store 保持各自 canonical；部分记录含 workspaceId | domain 名固定，部分键/列表没有空间过滤；单加 workspaceId 参数或重复挂载插件不能证明隔离 | `domain/src/spec.ts:117–139`、`:191–198`；`notes/src/index.ts:115–122`；`tasks/src/index.ts:listTasks` |
-| 检索 | 当前工作区的 Main/Processing → Business 聚合、active canonical 过滤 | 没有按登录成员选择可查空间；投影、缓存、后台任务和结果都需空间绑定 | `web/src/index.ts:listKnowledge/enrichRetrievalResults`；`weknora-sync/src/index.ts:searchWithTrace` |
-| 附件 | 按 AttachmentId 查原文件，支持预览/下载；本轮已加受控inline类型、危险类型下载、nosniff/no-store及受限CSP | ID 不是权限；字节、预览、缓存均需成员授权；MIME加固不代表租户隔离或完整内容安全 | `web/src/index.ts:serveAttachment`，约346行；本轮Web50项通过，实际安装包验证另计 |
-| 审计 | Durable Event Log 已有 workspaceId、actor、operationId | 一般用户操作仍写 `{type:'user'}`，未绑定可验证的具体成员；需记录授权主体及策略结果 | `domain/src/types.ts:33–45`；`tasks/src/index.ts:110–118`；`events/src/index.ts:97–107` |
-| 并发编辑 | Note 条件保存与冲突保稿本轮已实现 | 这是内容版本保护，不是身份鉴权；Task 仍无多人版本冲突协议，外部写入仍有独立风险 | `web/src/index.ts:noteWriteOptions/saveNoteBody`；[DEBT O13](../DEBT.md) |
+| 登录与恢复 | 本地 identity SQLite、真实 scrypt、服务端会话；改密或离线恢复撤销该账号全部会话，无公共恢复 action | identity 测试使用真实 SQLite/scrypt；离线恢复专项验证相同账号 ID、角色、旧会话失效及既有文件保持；生产恢复未执行 | `web/src/collaboration/identity.ts:49`、`:174`；`scripts/recover-account.mjs` |
+| HTTP 授权 | session、管理入口、空间 RPC、页面与附件均经 gateway；未知 RPC 默认拒绝 | 真实 HTTP 与受控 startup/body 等待测试覆盖匿名、跨空间、CSRF、撤权与会话失效；目标反向代理仍待验 | `web/src/collaboration/index.ts:48`；`policy.ts:22` |
+| 空间运行时 | 每空间独立 Context、state SQLite、canonical 目录、服务与 worker；内部 runtime 不开 socket | 真实三空间集成、同名文件、跨 ID 与附件访问测试；单 gateway 排他锁；不是多实例分布式部署 | `web/src/collaboration/runtime.ts:19`；`collaboration.spec.ts` |
+| 操作身份 | HTTP 调用以验证后的账号作为事件 actor；管理审计按空间授权 | 基础成功操作/成员审计；不能宣称所有失败、下载、请求关联与完整审计平台均已覆盖 | `events/src/index.ts:withRequestActor`；`identity.ts:auditLog` |
+| 内容冲突 | Note 与 Task 内容保存有哈希条件；冲突保留草稿并提供恢复 | 服务及 UI 定向测试；真实安装包、多窗口浏览器完成范围由协调者登记；不承诺实时合并 | `web/src/index.ts:saveNote/saveNoteBody/updateTask`；`ui.ts:saveNote/showTaskDetail` |
+| 搜索 | 当前空间、独立 KB；未配置或远程主查询不可用时显式本地关键词；Processing 异常带标志 | 本机行为回归已有；真实解析、索引与质量未验。关键词只查笔记正文、附件文件名 | `web/src/index.ts:797`；`weknora-sync/src/index.ts:searchWithTrace`；[检索验收](RETRIEVAL_ACCEPTANCE.md) |
+| 附件 | 授权后按本空间 AttachmentId 取字节；危险 MIME 下载、nosniff/no-store、受限 CSP | 本机 HTTP 有原字节与响应头检查；不是杀毒或对已下载文件的撤回能力 | `web/src/index.ts:serveAttachment`；`collaboration.spec.ts` |
+| 显式复制 | 本人 private → 可写 team；10 分钟预览、双方权限/会话复验、源内容及实际字节校验、新业务 ID | sharing 测试有真实双空间与故障注入；界面/HTTP 接线最终验收另计；部分失败需 receipt 核对，不盲重放 | `web/src/collaboration/sharing.ts:94`；`portal-ui.ts` |
+| 旧资料保全 | 单空间保全、明确 owner 的空私人空间导入、协作整根冷备/新根恢复 gate 均已实现 | 开发团队已报告工具与真实 Harness 恢复专项通过；仅受控本地数据，真实服务器仍待验 | `scripts/pkw-data.mjs`、`adopt-private-space.mjs`、`collaboration-backup.mjs`；[迁移说明](DATA_MIGRATION.md) |
 
-因此，“能从两台电脑打开页面”不等于“多人隔离与权限已完成”。本轮仅研究，不偷偷修改现有 schema 或把历史资料分配给假设出来的成员。
+## 当前角色与操作
 
-## 首版角色与操作建议
-
-角色绑定到**一个空间的成员关系**，不是全局头衔。同一人可以是私人空间所有者、团队 A 管理员、团队 B 只读成员。私人空间不开放团队邀请；需要协作时显式复制到团队。
-
-下表是建议的默认权限；不是当前代码已支持。所有者（owner）负责空间归属，管理员（admin）负责成员和维护，编辑者（editor）负责内容，只读成员（viewer）负责阅读。团队共享内容允许编辑者修改他人创建的内容，因此历史与冲突保护必须可用。
+角色只绑定一个空间。同一人可为私人 owner、团队 A 的 admin、团队 B 的 viewer。所有已登录账号可以新建自己的团队。下表依据当前服务端策略；浏览器隐藏按钮只是辅助，不能代替授权。
 
 | 操作 | owner | admin | editor | viewer |
 | --- | --- | --- | --- | --- |
-| 阅读、搜索本空间内容；查看原附件 | 允许 | 允许 | 允许 | 允许 |
-| 下载单个可读文件、复制可读正文 | 允许 | 允许 | 允许 | 允许；只读不等于防复制 |
-| 创建/编辑笔记、上传附件、管理任务 | 允许 | 允许 | 允许 | 禁止 |
-| 移动/重命名本空间内容 | 允许 | 允许 | 允许 | 禁止 |
-| 将单项内容移入回收站、恢复内容 | 允许 | 允许 | 允许 | 禁止 |
-| 整文件夹/批量删除 | 允许，预览范围 | 允许，预览范围 | 首版禁止 | 禁止 |
-| 永久清除回收资料 | 允许，二次确认 | 允许，二次确认 | 禁止 | 禁止 |
-| 导出整个空间 | 允许，审计 | 允许，审计 | 首版禁止 | 禁止 |
-| 邀请/移除 editor、viewer，调整这两种角色 | 允许 | 允许；不能给自己提权 | 禁止 | 禁止 |
-| 授予/撤销 admin | 允许 | 禁止 | 禁止 | 禁止 |
-| 转移 owner、删除空间 | 允许，重新验证身份；不得无 owner | 禁止 | 禁止 | 禁止 |
-| 修改团队索引/模型配置、触发重建 | 允许 | 允许；不返回凭据值 | 禁止 | 禁止 |
-| 查看空间成员及操作历史 | 允许 | 允许 | 内容历史可见，成员管理细节受限 | 只读内容历史；敏感管理事件受限 |
-| 复制到另一个空间 | 源空间可读且目标可写，单独授权与预览 | 同左 | 同左 | 源可读且目标可写时才允许 |
-| 生成匿名公开分享链接 | 首版不提供 | 首版不提供 | 首版不提供 | 首版不提供 |
+| 阅读/搜索本空间、下载附件、复制可读正文 | 允许 | 允许 | 允许 | 允许 |
+| 创建/编辑 Note、上传附件、管理 Task、整理目录 | 允许 | 允许 | 允许 | 拒绝 |
+| 单项/文件夹软删除、批量恢复 | 允许 | 允许 | 允许 | 拒绝 |
+| 永久清理回收站；全局同步/reconcile 管理动作 | 允许 | 允许 | 拒绝 | 拒绝 |
+| 邀请、移除或调整 editor/viewer | 允许 | 允许 | 拒绝 | 拒绝 |
+| 授予或撤销 admin | 允许 | 拒绝 | 拒绝 | 拒绝 |
+| 转让 owner 给现有成员 | 允许，原 owner 变 admin | 拒绝 | 拒绝 | 拒绝 |
+| 私人空间邀请其他人；直接删除最后 owner | 拒绝 | 拒绝 | 拒绝 | 拒绝 |
+| 查看团队成员与管理审计 | 允许 | 允许 | 拒绝 | 拒绝 |
+| 从本人的私人空间复制到此团队 | 允许 | 允许 | 允许 | 拒绝 |
+| 整空间用户导出、删除空间、匿名公开链接、在线修改模型/凭据 | 尚未提供 | 尚未提供 | 尚未提供 | 尚未提供 |
 
-移除成员与角色降级对**下一次请求及尚未执行的导出任务**生效，不能依赖旧页面按钮是否隐藏。邀请建议使用有期限、一次性、绑定目标身份的邀请记录；接受邀请不自动加入其他空间，普通管理员不能绕过 owner 规则。
+邀请是 **24 小时有效、一次性的随机 bearer 链接**，不是绑定邮箱或实名收件人的邀请。拿到链接的人可按其指定角色加入；UI 明示仅发给希望邀请的人。接受、过期、撤销、邀请者降权及 scrypt 期间变化均重验；邀请不会把私人资料变为团队资料。管理员不能邀请 admin，不能管理 owner 或其他 admin。转让后旧邀请失效，始终保留一个 owner。
 
-角色矩阵只是易懂的操作清单；最终判断还要同时检查当前成员关系、资源所属空间和操作类型。默认拒绝、每次请求验证、在服务端统一执行，是本方案采用的授权原则。[OWASP Authorization Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Authorization_Cheat_Sheet.html)
+## 入口与隔离部署
 
-## 服务端与存储边界
+推荐 [serve-collaboration.mjs](../../scripts/serve-collaboration.mjs) 独立进程，仅监听 `127.0.0.1`，由 HTTPS 反向代理把 `/pkw` 转入；`/healthz` 只说明进程可响应，不代表数据与权限验收通过。这样不把 Harness 的其他应用/RPC 路由一并暴露给团队。精确 publicOrigin、Host、Origin 和会话 CSRF 校验必须与代理一致；生产使用 Secure/HttpOnly/SameSite Cookie。
 
-建议请求链路为：验证登录身份 → 读取所选空间 → 验证有效成员关系 → 建立不可由请求体改写的 RequestContext → 按操作策略授权 → 查资源并确认所属空间 → 执行领域操作与审计。
+每个空间的固定领域表名被独立 Context/数据库隔开，不依靠请求体 workspaceId 过滤。前端伪造 actor、workspaceId 或空间 ID 不能改写已授权运行时。Note/Attachment/Task 保持原 canonical；身份库只保存账号、空间、成员、邀请、会话和审计。
 
-RequestContext 至少携带 `principalId`、`workspaceId`、角色/成员版本、`requestId` 和已验证的认证来源。前端传来的 workspaceId 只用于选择空间；不能当成授权证明。不要在全局可变的“当前空间”字段里切换，以免两个请求交错时串空间。此处是 PKW 的设计选择；请求级空间上下文、对象授权与后台上下文传播参考 OWASP 多租户指南。[OWASP Multi Tenant Security Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Multi_Tenant_Security_Cheat_Sheet.html)
+**切换时必须移除旧匿名 PKW 入口。** Host 路由注册冲突会使插件失败，但旧插件先加载时不保证整个服务器自动关闭。部署必须检查旧 `/pkw/api`、旧附件路径及 Harness 其他路由不能绕过新 gateway；不能以“新插件报重复路由”代替停用旧入口。单 gateway/共享根排他锁是当前边界，不能启动两个写入者后宣称已有分布式锁。
 
-每个 RPC 都必须登记 action，新增但未登记的 RPC 默认拒绝。NoteId/AttachmentId/TaskId 继续稳定，但查对象时必须同时处在已授权空间；拒绝请求不返回其他空间的名称、正文、对象数量、绝对路径或存在性细节。附件 URL、preview、download、导出文件和后台管理入口同样执行授权，不能只保护 `/pkw/api`。
+## 检索、复制与失败边界
 
-**第一版建议按空间隔离 canonical 目录与结构化存储作用域。** 不直接把多套 Notes/Tasks 服务挂到同一个全局 provider。先用两个个人空间与一个团队空间的测试样本，证明 storageDomain、服务引用、事件、缓存和 worker 均隔离；若宿主不能安全提供独立作用域，则采用每空间独立运行单元，由统一入口验证身份并路由，内部请求仍验证可信主体和授权上下文。隔离单元的端口不能绕过统一入口直接公开。是否同进程以实际 Harness 能力验证决定，不先承诺“一行配置支持多人”。
+每空间配置独立远端 KB，gateway 拒绝同一规范化地址/KB 被多个空间复用；部署方还须检查不同地址别名是否实际指向同一投影。业务检索继续 Main/Processing → Business 聚合与 active canonical 过滤，remote ID 不成为授权依据。没有真实 WeKnora 样本前，不能由目录隔离测试推导远端链路与解析质量全部通过。
 
-可新增成员、邀请、会话和策略存储，作为权限事实来源；不得把 Note 正文、Attachment 二进制或 Task 当前状态另存为一套新 canonical。后续若采用共享表，所有查找、唯一键、引用、分页、批量操作、回收站、事件、修复扫描都要携带空间范围，并有迁移方案。不能只补列表的 WHERE 条件。
+RPC 的 `mode=local-keyword` 限制为当前空间笔记正文和附件文件名，不包含附件内部全文或语义；`mode=remote` 且 `trace.processingUnavailable=true` 表示远程结果不完整。界面保留范围提示，评测记录模式、partial 比例及未知旧证据。空结果不证明未被检索的附件里没有答案。
 
-## 检索、附件与后台处理
+复制预览包含正文、frontmatter、引用附件清单和目标范围；来源 SHA/附件真实字节变化会拒绝原确认。常规 Markdown 图片/文件链接会重建引用，其他私人笔记、Task、目录和历史不连带复制。无法可靠枚举的附件格式明确拒绝，不静默丢附件。当前单次上限：正文 1 MiB、40 个附件、每个 16 MiB、合计 32 MiB；限制不是 15 人容量承诺。
 
-以下是针对 PKW 现有 A2 聚合和文件服务制定的实施要求，并非宣称 WeKnora 已提供这些权限：
+复制 receipt 存在私有 shares 目录，仅记录身份、哈希与进度，不存原文或凭据。每个副作用前落盘；重复确认成功记录返回同一结果。上传/建笔记确认丢失或中断时标记/解释为 needs_review，返回记录编号、唯一路径与已确认 ID，避免自动产生重复附件；管理员核对后决定保留或移入回收站。这不是跨 SQLite/文件的原子事务，也不会自动 purge 团队资料。
 
-- 首版默认只搜当前空间。“全部可访问空间”作为后续可选功能，由服务端枚举有效成员空间后分别检索，再合并；前端不能任意指定 KB 列表。
-- 每空间绑定独立的 Main/Processing 投影集合与凭据作用域。WeKnora 仍是派生索引；不能把 KB 名称或 remote ID 当作权限或业务身份。
-- 检索召回、重排、摘要、关联图、来源/片段展示都验证空间归属及 active canonical；越权片段不能先送入模型或日志，再在 UI 隐藏。投影更新延迟时仍由本地授权边界拒绝访问。
-- 私人 Note 中的附件不会因为复制笔记到团队而自动全部开放。复制预览列出正文、要复制的二进制与引用；创建目标对象使用新的业务 ID，记录来源关系。原对象的移动/重命名仍保持原 ID。未获授权的引用拒绝复制或明确移除，不能留下可取回私人内容的 URL。
-- 任务 sourceRefs、Wiki/relatedKnowledge、附件 owners 和 Companion Note 都遵循同空间原则；任何跨空间关联必须经过显式分享设计，不默默追溯到私有源。
-- 动态响应与导出缓存按空间、身份/权限版本区分；注销、撤权、切空间时清理客户端缓存和未完成读取。首版敏感字节可采用 `private, no-store`，后续缓存优化必须单独验撤权边界。
-- 上传 HTML/SVG 等可执行内容不在主应用源直接 inline 运行。本轮已将受控常用图片/PDF及TXT预览之外的类型保持下载，并补nosniff/no-store/受限CSP；这是有限响应加固。上传MIME来自用户，完整内容验证、隔离预览源以及共享Markdown的原始HTML/URL/扩展仍需多人阶段验收；HttpOnly不能替代内容隔离。[OWASP File Upload](https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html)、[MDN CSP sandbox](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Content-Security-Policy/sandbox)、[MDN nosniff](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/X-Content-Type-Options)
-- worker 的 intent、重试、reconcile、摘要、远端删除必须绑定空间，并以限权系统主体执行；导出等代表用户的延迟任务在执行/交付前复验当前授权。不同空间的相同文件名、同正文和缓存 key 不可混淆。
+## 迁移、账号恢复与发布门槛
 
-这些要求保留“服务端本地读写不依赖 WeKnora”；认证与本地权限存储可用时，WeKnora 停止仍能管理本空间资料。它仍不承诺浏览器与 PKW 断网后的离线编辑。
+旧资料先完整保全到经指纹绑定的备份，再在**本人空私人空间**副本演练；ID、正文、二进制、Task 关系、回收站与事件对账，团队从空开始。未知格式、引用不一致或校验失败时停止，不猜 owner、不公开、不覆盖旧根。正式切换需停写及排他维护；回滚先保全切换后新写入和最新权限，不能直接恢复旧快照丢内容、恢复失效会话或重新开放撤销成员。
 
-## 身份、会话与请求保护
+账号遗失使用离线运维恢复工具；无公共 resetPassword 接口。恢复只改该账号密码并撤销其全部旧会话，不重建用户、空间或角色。恢复后的账号与其他成员仍须在目标副本验权；如何停止服务和保管新密码属于目标环境流程。
 
-优先复用经过验证的宿主身份提供方或成熟登录组件。若通过反向代理接收身份，只信任受控代理传来的、可验证的主体；删除客户端伪造身份头，阻断绕过代理的入口。不要把现有 WeKnora API key 或 GitHub token 当用户登录凭据。此轮不预选收费服务或自建密码系统。
-
-建议浏览器使用服务端会话与 `Secure`、`HttpOnly`、明确 `SameSite` 的 Cookie；登录、权限提升、身份恢复后更新会话，注销及管理员撤销可使会话失效，设置闲置与绝对超时。会话标识不包含角色和私人数据，也不写进 URL。这部分采用 OWASP 会话管理建议。[OWASP Session Management Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html)
-
-写操作限定合适的 HTTP 方法与 JSON 类型，使用会话绑定的 CSRF token，并校验受信任 Origin；严格配置 CORS，不将通配来源与凭据请求组合。SameSite 是补充层，不能据此省略 CSRF 设计；JSON 字符串和“浏览器报跨域”也不代表服务器没有执行写操作。[OWASP CSRF Prevention Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html)
-
-审计记录主体、空间、动作、对象 ID、结果、时间、关联请求和关键角色变更。不要记录密码、会话 token、原文或全部附件；管理员日志也按空间授权。团队邀请、撤权、导出和永久清除须可追溯。基础限速、上传/导出大小、每空间工作队列与总资源上限，防止一个空间占满其他人的服务。
-
-## 迁移与回退
-
-1. 先确认真实目标宿主、入口鉴权、现有资料所有者、结构化存储位置、UI 手改补丁及 WeKnora 投影绑定；通过 GitHub 交接脱敏信息，不要求用户贴凭据。
-2. 对现有工作区默认建立**明确指定所有者的私人空间**，不能自动变成全员共享。保留其 NoteId、AttachmentId、TaskId、正文、二进制、Task 关系及事件；新团队空间从空开始。
-3. 先在副本演练，记录文件哈希、对象/事件数量、引用关系、权限清单和索引归属。旧单空间数据缺少权限事实时停止迁移并报告，不能猜所有者或默认公开。
-4. 正式切换采用维护窗口/一致性快照；新旧版本不可同时对同一 canonical/结构化存储写入。迁移器必须可重复检测，验证失败不切流量。
-5. 多人开启后，旧版无鉴权页面不允许直接重新对外开放。回退先封闭/停写、保留切换后的新写入与权限数据，再决定回到隔离旧版或向前修复。恢复旧备份不能无声丢弃新内容或重新开放已撤销成员。
-6. WeKnora 可按空间重建投影，但不能以“重建索引”为由删除 canonical；远端清理只针对确认归属的投影。整个阶段不执行历史 OPTION A 转换，除非另有独立验收范围。
-
-## 分期交付与多人验收
+协作整根冷备工具 `scripts/collaboration-backup.mjs` 的 backup/verify/verify-source/restore/approve-recovery 已实现；开发团队已报告工具及真实 Harness 整根恢复专项通过。恢复到全新根，逐空间保持 workspaceId 并重定位 registry.path，撤销旧 sessions/invitations，生成 recovery-pending.json 阻止直接启动；离线核对成员权限、文件与 schema/引用门槛后才批准移除 gate。测试包括已有空间和未初始化空间、gate拒绝/批准及恢复后权限内容读取。它不是目标服务器已备份/恢复的证据；不能以恢复旧身份文件重新激活已撤销访问。
 
 | Task | Status | Next step | Completion standard | Verification evidence | Risk | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| C0 确认私人 + 团队模型 | 已完成：用户确认；角色表为建议设计 | 与团队规模、真实部署身份链核对 | 私人默认不共享，团队角色只在对应空间生效 | 本文及会话确认 | 中 | 不再重复询问已定方向 |
-| C1 身份与服务端授权骨架 | 未实施 | 确认宿主身份接口，建立 RequestContext 和 action 清单 | 所有 RPC/附件/导出先认证授权；未知动作默认拒绝 | 匿名、过期、伪造主体、角色不足的 HTTP 负例 | 高 | 仅隐藏按钮不通过 |
-| C2 双私人 + 团队隔离垂直验证 | 未实施 | 测试环境建立 A 私人、B 私人、团队 T | 目录、结构化存储、事件、缓存、worker、检索无串空间 | 三空间同名/同正文/跨 ID/交错请求和重启测试 | 高 | 先验证服务作用域，后迁移生产 |
-| C3 成员与内容流程 | 未实施 | 邀请、接受、降级、移除、复制、导出、回收站 | 角色表每格允许/拒绝明确；撤权下一请求生效；失败不泄露内容 | 角色 × 操作 × 空间的自动化权限矩阵和真实浏览器 | 高 | 不含匿名共享、协同光标、实时合并 |
-| C4 旧数据演练与有限试用 | 待目标信息；不阻断本轮个人版修复 | 副本迁移、备份恢复，指定少量成员试用 | 身份/内容/附件/任务对账通过；复原不丢新写入、不复活权限 | 迁移及回退报告、目标宿主集成和人工场景记录 | 高 | 测试通过才开启多人入口 |
-| C5 扩容与更细分享 | 后续候选 | 用真实团队与数据规模排序 | 查询延迟、资源公平性及成本有基线；新分享规则有负例 | 规模/质量评测，权限回归持续运行 | 中 | 不承诺人数或吞吐量，未测前不报指标 |
+| C0 产品范围与归属 | 已确认 | 保持约 15 人、旧资料本人私有 | 不自动扩大共享范围 | 用户确认、本文 | 中 | ddmind 已知不等于服务器已验 |
+| C1 身份、会话、角色 | 源码已实现；本机专项已验证 | 最终包/浏览器与生产代理复验 | 正向可用；匿名/过期/伪 CSRF/未知动作拒绝；改密/恢复撤销会话 | identity/security/HTTP 集成测试 | 高 | 总数由协调者统计 |
+| C2 独立空间与对象授权 | 源码已实现；真实本机多空间集成已验证 | 安装包及部署副本验证 | 私人相互不可见，附件/搜索/Task/事件不串空间，撤权后新请求拒绝 | collaboration/migration 测试 | 高 | 尚非生产或多实例容量证据 |
+| C3 邀请、成员与复制 | 源码已实现；局部流程和故障专项已验证 | 门户浏览器闭环及凭据过期/撤权 | 邀请一次性；正确空间/角色；预览准确、原件保留、重试不重复 | sharing/portal/安全测试；浏览器另记 | 高 | 不含公开分享或整空间用户导出 |
+| C4 旧数据导入 | 工具与本机运行时演练已实现；生产待验 | 收集目标存储/配置/手改补丁与停写方式 | 原件/备份对账后导入本人空间，其他账号拒绝访问 | DATA_MIGRATION、迁移测试及目标 receipt | 高 | synthetic 数据不是服务器备份 |
+| C5 协作全根备份恢复 | 已实现；开发团队报告工具及真实Harness恢复gate专项通过 | 对目标备份进行独立新根恢复和成员复核 | 不覆盖旧根、旧会话/邀请失效；审批前拒启动；runtime权限及内容对账 | DATA_MIGRATION、工具/迁移集成；目标待验 | 高 | 单空间 pkw-data 不能代替 |
+| C6 约 15 人试用与真实检索 | 15合成账号本地HTTP功能并发已过；目标/真实质量待验 | 真实问题/金标准、代表性负载、手机真机 | 质量/时延/容量与设备证据可复核，退化可见 | collaboration.spec.ts的30写/45读；真实报告另验 | 高 | 本地功能用例不承诺生产吞吐/质量 |
 
-多人测试必须包含 A 访问 B 私人空间、viewer 直接调用写 API、猜 AttachmentId、旧预览链接、搜索/摘要/关联图泄漏、成员撤销、缓存命中与备份恢复等负例，并进入 CI 的必跑门禁。采用“主体—资源—动作”的测试矩阵，正向能用和反向确实被拒绝都要验。[OWASP Authorization Regression Testing Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Authorization_Regression_Testing_Cheat_Sheet.html)
+完整 CI 的 verify job 仍受 HARNESS_REPO_URL、HARNESS_REPO_TOKEN、HARNESS_REF 和实际运行状态门禁约束；只看到 repo/tooling 绿色不能宣称 Harness、安装包与集成 CI 全通过。目标服务器与真实语料仍需部署方提供并实际核验，不再要求用户重复解释已定产品模式。
 
-当前可对用户承诺的是：已有个人产品的可靠性升级源码与本机自动化已通过；最终安装包/浏览器及发布由协调者收尾；私人 + 团队方案已形成。登录、成员、权限隔离、迁移与多人上线仍未完成，不能由本轮354项Vitest、7项工具测试或双窗口冲突测试推导出来；5项真实WeKnora集成仍跳过。
+具体配置、独立loopback启动、反向代理、旧资料导入与离线账号恢复步骤见 [COLLABORATION_DEPLOYMENT.md](COLLABORATION_DEPLOYMENT.md)。该指引是部署交接，不是已经在ddmind执行的日志。
+
+设计依据沿用本轮一手研究：[OWASP 授权](https://cheatsheetseries.owasp.org/cheatsheets/Authorization_Cheat_Sheet.html)、[多租户安全](https://cheatsheetseries.owasp.org/cheatsheets/Multi_Tenant_Security_Cheat_Sheet.html)、[会话管理](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html)、[CSRF](https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html)、[授权回归](https://cheatsheetseries.owasp.org/cheatsheets/Authorization_Regression_Testing_Cheat_Sheet.html)。引用说明设计原则，不代替工程与生产证据。

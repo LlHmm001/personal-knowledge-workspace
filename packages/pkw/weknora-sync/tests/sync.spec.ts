@@ -28,9 +28,11 @@ const contexts: Context[] = []
 const servers: Server[] = []
 
 afterEach(async () => {
-  await Promise.all(contexts.splice(0).map(c => c.fiber.dispose().catch(() => {})))
-  await Promise.all(servers.splice(0).map(s => new Promise<void>(resolve => s.close(() => resolve()))))
-  await Promise.all(dirs.splice(0).map(d => rm(d, { recursive: true, force: true })))
+  try {
+    await Promise.all(contexts.splice(0).map(c => c.fiber.dispose().catch(() => {})))
+    await Promise.all(servers.splice(0).map(s => new Promise<void>(resolve => s.close(() => resolve()))))
+    await Promise.all(dirs.splice(0).map(d => rm(d, { recursive: true, force: true })))
+  } finally { vi.useRealTimers() }
 })
 
 function sha256Hex(s: string): string {
@@ -51,6 +53,10 @@ interface FakeWeKnora {
   files: Map<string, FileRec>
   listPageSize: number
   hidden: Set<string>
+  manualUpdateApplications: number
+  manualContentReads: number
+  /** One-shot request barrier, before the PUT is applied or its response lost. */
+  manualUpdateGate?: { entered: () => void; release: Promise<void> }
   /** One-shot failure behaviors, cleared after the matching request. */
   next: {
     commitThenDrop?: 'create-manual' | 'update-manual' | 'upload'
@@ -99,6 +105,8 @@ function startFakeServer(): Promise<FakeWeKnora> {
     files: new Map(),
     listPageSize: 1,
     hidden: new Set(),
+    manualUpdateApplications: 0,
+    manualContentReads: 0,
     next: {},
   }
   let counter = 0
@@ -152,6 +160,10 @@ function startFakeServer(): Promise<FakeWeKnora> {
         const body = JSON.parse((await readBody()).toString('utf8')) as { title: string; content: string }
         const existing = fake.manuals.get(up[1]!)
         if (existing === undefined) { res.writeHead(404); res.end('{}'); return }
+        const gate = fake.manualUpdateGate
+        fake.manualUpdateGate = undefined
+        if (gate) { gate.entered(); await gate.release }
+        fake.manualUpdateApplications++
         existing.content = body.content; existing.title = body.title
         if (fake.next.respond !== undefined) {
           const r = fake.next.respond; fake.next.respond = undefined
@@ -199,7 +211,7 @@ function startFakeServer(): Promise<FakeWeKnora> {
       const dl = /\/knowledge\/([^/]+)\/download$/.exec(url.pathname)
       if (req.method === 'GET' && dl) {
         const m = fake.manuals.get(dl[1]!)
-        if (m !== undefined) { res.writeHead(200, { 'Content-Type': 'text/markdown' }); res.end(m.content); return }
+        if (m !== undefined) { fake.manualContentReads++; res.writeHead(200, { 'Content-Type': 'text/markdown' }); res.end(m.content); return }
         const f = fake.files.get(dl[1]!)
         if (f !== undefined) { res.writeHead(200, { 'Content-Type': 'application/octet-stream' }); res.end(f.content); return }
         res.writeHead(404); res.end('{}'); return
@@ -273,9 +285,14 @@ interface BootOptions {
   /** In-memory credential provider values (only when apiKeyRef is used). */
   credentials?: Record<string, string>
   pollMs?: number
+  /** Hold periodic ticks; tests drive the real durable worker through drain(). */
+  manualWorker?: boolean
 }
 
 async function boot(opts: BootOptions = {}) {
+  // Only interval scheduling is controlled. HTTP, SQLite, filesystem, Date and
+  // timeout behavior remain real, and no sync outcome or storage method is mocked.
+  if (opts.manualWorker) vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
   const fake = await startFakeServer()
   const dir = await mkdtemp(join(tmpdir(), 'pkw-'))
   dirs.push(dir)
@@ -312,6 +329,8 @@ async function boot(opts: BootOptions = {}) {
   await ctx.plugin(AttachmentsService, { workspaceId: ws.id })
   await ctx.plugin(WeKnoraClient, { baseUrl: fake.baseUrl, apiKey: opts.apiKey ?? 'test-key', apiKeyRef: opts.apiKeyRef ?? '' })
   await ctx.plugin(WeKnoraSyncService, { kbId: 'kb-1', workspaceId: ws.id, pollMs: opts.pollMs ?? 25, retryBaseMs: 5, retryMaxMs: 10, recoveryGraceAttempts: 2 })
+  // Let the startup resume pass finish on an empty workspace before test events.
+  if (opts.manualWorker) await ctx.pkwWeKnoraSync.drain()
   return { ctx, dir, workspaceId: ws.id, notes: ctx.pkwNotes, attachments: ctx.pkwAttachments, adapter: ctx.pkwWeKnora, sync: ctx.pkwWeKnoraSync, fake }
 }
 
@@ -561,17 +580,62 @@ describe('manual create distributed failures', () => {
 
 describe('manual update distributed failures', () => {
   it('applied + lost response → recovery reads remote content and converges without re-apply', async () => {
-    const { notes, sync, fake } = await boot()
+    const { notes, sync, fake } = await boot({ manualWorker: true })
     const note = await notes.create({ relativePath: 'a.md', markdown: '# v1\n' })
     const knowledgeId = await sync.syncNote(note.noteId)
+    const previousFingerprint = sync.getMapping(note.noteId)!.remoteFingerprint
     await notes.update(note.noteId, `---\nid: ${note.noteId}\n---\n\n# v2\n`)
     fake.next.commitThenDrop = 'update-manual'
     await expect(sync.syncNote(note.noteId)).rejects.toThrow()
 
-    await vi.waitFor(() => {
-      const mapping = sync.getMapping(note.noteId)
-      expect(mapping?.remoteFingerprint).toBe(sha256Hex((fake.manuals.get(knowledgeId)!.content)))
-    }, { timeout: 2000 })
+    expect(fake.next.commitThenDrop).toBeUndefined()
+    expect(fake.manuals.get(knowledgeId)!.content).toContain('# v2')
+    expect(fake.manualUpdateApplications).toBe(1)
+    expect(fake.manualContentReads).toBe(0)
+    expect(sync.getMapping(note.noteId)!.remoteFingerprint).toBe(previousFingerprint)
+    const intent = sync.listIntents().find(i => i.operationKind === 'update')!
+    expect(intent).toMatchObject({ state: 'unknown', errorCertainty: 'unknown' })
+    expect(sync.listDirty().find(i => i.entityId === note.noteId)).toMatchObject({ dirty: true, pendingOperationId: intent.operationId })
+
+    await sync.drain()
+    expect(sync.getMapping(note.noteId)).toMatchObject({ knowledgeId, remoteFingerprint: sha256Hex(fake.manuals.get(knowledgeId)!.content) })
+    expect(sync.listIntents().find(i => i.operationId === intent.operationId)!.state).toBe('completed')
+    expect(sync.listDirty().find(i => i.entityId === note.noteId)!.dirty).toBe(false)
+    expect(fake.manualContentReads).toBe(1)
+    // Repeated worker passes must not replay an already-applied PUT.
+    await sync.drain()
+    await sync.drain()
+    expect(fake.manualUpdateApplications).toBe(1)
+    expect(fake.manuals.size).toBe(1)
+  })
+
+  it('worker consumes a lost update response before a queued explicit sync, which recovers without re-apply', async () => {
+    const { notes, sync, fake } = await boot({ manualWorker: true })
+    const note = await notes.create({ relativePath: 'worker-first.md', markdown: '# v1\n' })
+    const knowledgeId = await sync.syncNote(note.noteId)
+    await notes.update(note.noteId, `---\nid: ${note.noteId}\n---\n\n# v2\n`)
+    expect(sync.listDirty().find(i => i.entityId === note.noteId)!.dirty).toBe(true)
+    const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+    fake.manualUpdateGate = { entered: entered.resolve, release: release.promise }
+    fake.next.commitThenDrop = 'update-manual'
+    const worker = sync.drain()
+    await entered.promise // Worker now owns the entity lock and the in-flight PUT.
+    const explicit = sync.syncNote(note.noteId)
+    release.resolve()
+    await worker
+    // The worker records its unknown outcome; the queued caller observes the
+    // resulting durable intent and legitimately returns the recovered identity.
+    await expect(explicit).resolves.toBe(knowledgeId)
+    expect(fake.next.commitThenDrop).toBeUndefined()
+    expect(fake.manualUpdateApplications).toBe(1)
+    expect(fake.manualContentReads).toBe(1)
+    expect(fake.manuals.get(knowledgeId)!.content).toContain('# v2')
+    const intent = sync.listIntents().find(i => i.operationKind === 'update')!
+    expect(intent).toMatchObject({ state: 'completed', errorCertainty: 'unknown' })
+    expect(sync.getMapping(note.noteId)).toMatchObject({ knowledgeId, remoteFingerprint: sha256Hex(fake.manuals.get(knowledgeId)!.content) })
+    expect(sync.listDirty().find(i => i.entityId === note.noteId)!.dirty).toBe(false)
+    await sync.drain()
+    expect(fake.manualUpdateApplications).toBe(1)
     expect(fake.manuals.size).toBe(1)
   })
 
@@ -785,6 +849,26 @@ describe('full reconcile', () => {
 // ── retrieval + source ref ────────────────────────────────────────────────────
 
 describe('retrieval + SourceRef', () => {
+  it('distinguishes unavailable attachment processing from a healthy empty search', async () => {
+    const { sync, adapter, notes } = await boot()
+    const note = await notes.create({ relativePath: 'partial-search.md', markdown: '# searchable\n' })
+    await sync.syncNote(note.noteId)
+    const healthy = await sync.searchWithTrace('searchable')
+    expect(healthy.trace.processingUnavailable).toBeUndefined()
+    const original = adapter.hybridSearch.bind(adapter)
+    const kb = vi.spyOn(sync as any, 'reqProcessingKb').mockReturnValue({ get: () => ({ processingKbId: 'processing-offline' }) })
+    const remote = vi.spyOn(adapter, 'hybridSearch').mockImplementation((id, input) => {
+      if (id === 'processing-offline') return Promise.reject(new Error('processing unavailable'))
+      return original(id, input)
+    })
+    try {
+      const partial = await sync.searchWithTrace('searchable')
+      expect(partial.trace.processingUnavailable).toBe(true)
+      expect(partial.trace.processingRaw).toBe(0)
+      expect(partial.results.map(r => r.local?.entityId)).toContain(String(note.noteId))
+    } finally { kb.mockRestore(); remote.mockRestore() }
+  })
+
   it('attaches workspace-correct local SourceRef for mapped PKW knowledge', async () => {
     const { notes, sync, workspaceId } = await boot()
     const note = await notes.create({ relativePath: 'a.md', markdown: '# searchable\n' })

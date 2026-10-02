@@ -12,6 +12,7 @@
 
 import { Service, type Context } from '@deepseek-ai/cordis'
 import { randomUUID } from 'node:crypto'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import {
   EventId,
   pkwDomainSpec,
@@ -25,6 +26,12 @@ import {
   type PkwEventCommitted,
 } from '@deepseek-ai/dsh-pkw-domain'
 import type { KvTable } from '@deepseek-ai/dsh-storage-domain'
+
+const requestActor = new AsyncLocalStorage<string>()
+/** The trusted HTTP boundary supplies identity; RPC arguments cannot impersonate it. */
+export function withRequestActor<T>(userId: string, operation: () => T): T {
+  return requestActor.run(userId, operation)
+}
 
 export class PkwEventStoreService extends Service {
   static inject = ['storageDomain']
@@ -58,6 +65,10 @@ export class PkwEventStoreService extends Service {
   }
 
   commit(req: CommitRequest): Promise<OperationCommit> {
+    // Capture before queuing, so overlapping users keep their own actor.
+    const userId = requestActor.getStore()
+    const actor = userId && ['user', 'system'].includes(req.operationContext.actor.type)
+      ? { type: 'user' as const, id: userId } : req.operationContext.actor
     return this.enqueue(async () => {
       if (req.events.length === 0) {
         throw new Error('pkw: a commit requires at least one event')
@@ -97,7 +108,7 @@ export class PkwEventStoreService extends Service {
       const commit: OperationCommit = {
         operationId: req.operationContext.operationId,
         workspaceId: req.operationContext.workspaceId,
-        actor: req.operationContext.actor,
+        actor,
         correlationId: req.operationContext.correlationId,
         ...(req.operationContext.causationId === undefined ? {} : { causationId: req.operationContext.causationId }),
         committedAt,

@@ -8,7 +8,7 @@
 
 import { Service, type Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import { randomUUID } from 'node:crypto'
+import { randomUUID, createHash } from 'node:crypto'
 import {
   TaskId,
   TaskMatrixId,
@@ -27,6 +27,12 @@ declare module '@deepseek-ai/cordis' {
 }
 
 export interface Config { workspaceId: string }
+
+export const taskContentHash = (task: Task): string => createHash('sha256').update(JSON.stringify(task)).digest('hex')
+export class TaskUpdateConflictError extends Error {
+  readonly code = 'PKW_TASK_CONFLICT'
+  constructor() { super('任务已被其他人修改。请保留当前输入，重新读取任务后再保存。') }
+}
 
 const TASK_AGG = 'task'
 const MATRIX_AGG = 'taskMatrix'
@@ -359,12 +365,16 @@ export class TasksService extends Service {
     return task
   }
 
-  async updateTask(taskId: TaskId, patch: Partial<Omit<Task, 'taskId' | 'workspaceId' | 'createdAt'>>): Promise<Task> {
-    return this.withMutation(() => this.updateTaskLocked(taskId, patch))
+  async updateTask(taskId: TaskId, patch: Partial<Omit<Task, 'taskId' | 'workspaceId' | 'createdAt'>>, options: { expectedContentHash?: string } = {}): Promise<Task> {
+    return this.withMutation(() => this.updateTaskLocked(taskId, patch, options.expectedContentHash))
   }
 
-  private async updateTaskLocked(taskId: TaskId, patch: Partial<Omit<Task, 'taskId' | 'workspaceId' | 'createdAt'>>): Promise<Task> {
+  private async updateTaskLocked(taskId: TaskId, patch: Partial<Omit<Task, 'taskId' | 'workspaceId' | 'createdAt'>>, expectedContentHash?: string): Promise<Task> {
     const t = this.activeTask(taskId)
+    if (expectedContentHash !== undefined) {
+      if (!/^[a-f0-9]{64}$/.test(expectedContentHash)) throw new Error('Invalid expectedContentHash')
+      if (taskContentHash(t) !== expectedContentHash) throw new TaskUpdateConflictError()
+    }
     for (const key of ['taskId', 'workspaceId', 'createdAt'] as const) {
       if (key in patch) throw new Error(`pkwTasks: ${key} is immutable`)
     }

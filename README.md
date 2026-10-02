@@ -1,10 +1,14 @@
 # Personal Knowledge Workspace (PKW)
 
-一个运行在 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/dsh) 上的**个人知识工作区**宿主插件 bundle。
+基于 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/dsh) 的**个人与团队知识工作区**，保留宿主插件模式，并提供独立的协作网关入口。
 以 **Markdown Note 为唯一真相源（canonical）**，围绕 Notes / Folders / Tasks / Attachments / WeKnora RAG
 构建一套**本地优先（local-first）**的知识管理能力。
 
-> **状态：Phase 1 CLOSED / ACCEPTED。**
+> **当前升级候选**：私人/团队空间、成员角色、主动分享、条件保存、本地检索降级与旧数据保全已经实现，生产迁移仍待目标验收。
+> 当前证据见 [三团队交付记录](docs/upgrade/UPGRADE_DELIVERY.md)；启用多人入口前阅读
+> [协作部署指南](docs/upgrade/COLLABORATION_DEPLOYMENT.md)。旧资料先导入原所有者私人空间。
+>
+> 历史基线：Phase 1 CLOSED / ACCEPTED。
 > 产品面：Workspace / Notes / Folders / 桌面编辑器 / 移动端只读优先 / Knowledge Home /
 > 统一 RAG 检索 / Sources（附件）/ Tasks（Q1–Q4）/ Trash。
 > 架构边界与已拒绝方向见 [`docs/PHASE_1_CLOSURE.md`](docs/PHASE_1_CLOSURE.md)。
@@ -67,6 +71,8 @@ pnpm build         # 十个包输出 lib/*.js 与声明
 pnpm verify:build  # 重复构建哈希与陈旧产物检查
 pnpm verify:packed # 打包、临时 registry 安装、普通 Node 加载与 HTTP/RPC
 pnpm preview       # 隔离样例工作区；打开输出的 PREVIEW_URL，Ctrl+C 清理临时数据
+# 协作模式合成账号预览（先完成上面的 build）
+node scripts/verify-packed.mjs --collaboration-preview
 ```
 
 > **`pnpm typecheck` 需要 harness checkout。** PKW 的 tsconfig 通过
@@ -82,6 +88,9 @@ pnpm preview       # 隔离样例工作区；打开输出的 PREVIEW_URL，Ctrl+
 ---
 
 ## 配置
+
+以下是原单空间宿主模式配置。多人模式使用独立协作配置和完整 `/pkw` 路由切换，
+不要仅安装新包就对外邀请用户；见 [协作部署指南](docs/upgrade/COLLABORATION_DEPLOYMENT.md)。
 
 `pkw-web`（`PkwWebService.Config`，zod 校验）需要的配置项，由 profile 的 `cordis.patch.yml` 注入。
 填写模板见 [`config.example.yaml`](config.example.yaml)，部署 manifest 的只读快照见

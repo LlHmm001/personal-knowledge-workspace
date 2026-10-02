@@ -103,6 +103,21 @@ async function boot(pollMs = 25, options: Partial<Pick<Config, 'kbId' | 'weknora
 }
 
 describe('PKW Web Host Bridge (real Core integration)', () => {
+  it('offers explicitly labeled canonical keyword search when retrieval is unconfigured and excludes trash', async () => {
+    const { web } = await boot(3_600_000, { weknoraBaseUrl: '', kbId: '', weknoraApiKey: '' })
+    const a = await web.call('createNote', { relativePath: '项目交付.md', markdown: '# 项目交付\n\n保留旧数据并验证附件。' }) as { noteId: string }
+    const b = await web.call('createNote', { relativePath: 'archive.md', markdown: '# 保留旧数据\n\n此条已移入回收站。' }) as { noteId: string }
+    await web.call('deleteNote', { noteId: b.noteId })
+    const attachment = await web.call('uploadAttachment', { filename: '旧数据迁移.pdf', mimeType: 'application/pdf', contentBase64: Buffer.from('not parsed local bytes').toString('base64') }) as { attachmentId: string }
+    const result = await web.call('search', { query: '旧数据', limit: 10 }) as { mode: string; warning: string; results: Array<{ local: { entityId: string } }> }
+    expect(result.mode).toBe('local-keyword')
+    expect(result.warning).toContain('不包含附件内部全文')
+    expect(result.results.map(r => r.local.entityId)).toContain(a.noteId)
+    expect(result.results.map(r => r.local.entityId)).toContain(attachment.attachmentId)
+    expect(result.results.map(r => r.local.entityId)).not.toContain(b.noteId)
+    expect((await web.call('search', { query: 'not parsed local bytes' }) as { results: unknown[] }).results).toEqual([])
+    await expect(web.call('search', { query: 'a'.repeat(201) })).rejects.toThrow('200')
+  })
   it.each(['saveNote', 'saveNoteBody'])('%s rejects a second editor stale snapshot and returns the new save fingerprint', async method => {
     const { web } = await boot(3_600_000)
     const { noteId } = await web.call('createNote', { relativePath: 'two-editors.md', markdown: '# Original\n' }) as { noteId: string }
@@ -557,6 +572,19 @@ describe('PKW Web Host Bridge (real Core integration)', () => {
     expect(await listIds({ matrixId: null })).toEqual([inbox.taskId])
     expect(await listIds({ matrixId: matrix.matrixId })).toEqual([work.taskId])
     expect(await listIds({})).toEqual(expect.arrayContaining([inbox.taskId, work.taskId]))
+  })
+
+  it('lists only deleted tasks and restores them with stable identity into visible task lists', async () => {
+    const { web } = await boot()
+    const removed = await web.call('createTask', { title: 'Restore me' }) as { taskId: string }
+    await web.call('createTask', { title: 'Still active' })
+    await web.call('deleteTask', { taskId: removed.taskId })
+    const trash = await web.call('listTrashTasks', {}) as Array<{ taskId: string; contentHash: string }>
+    expect(trash.map(task => task.taskId)).toEqual([removed.taskId])
+    expect(trash[0]!.contentHash).toMatch(/^[a-f0-9]{64}$/)
+    await web.call('restoreTask', { taskId: removed.taskId })
+    expect(await web.call('listTrashTasks', {})).toEqual([])
+    expect((await web.call('listTasks', {}) as Array<{ taskId: string }>).map(task => task.taskId)).toContain(removed.taskId)
   })
 
   it('removeMatrix with reassignTo:null moves tasks to Inbox (not a not-empty throw)', async () => {
