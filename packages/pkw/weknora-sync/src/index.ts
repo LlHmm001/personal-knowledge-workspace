@@ -25,7 +25,7 @@ import { z } from 'zod'
 import { randomUUID } from 'node:crypto'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import type { Domain, KvTable } from '@deepseek-ai/dsh-storage-domain'
-import { AttachmentId, NoteId, enrichNoteForKnowledge, extractAttachmentSummary, hasCompanionUserContent, insertAttachmentSummary, stripInternalFrontmatter } from '@deepseek-ai/dsh-pkw-domain'
+import { AttachmentId, NoteId, NoteUpdateConflictError, enrichNoteForKnowledge, extractAttachmentSummary, hasCompanionUserContent, insertAttachmentSummary, stripInternalFrontmatter } from '@deepseek-ai/dsh-pkw-domain'
 import type { NoteId as NoteIdT, AttachmentId as AttachmentIdT } from '@deepseek-ai/dsh-pkw-domain'
 import {
   WeKnoraError,
@@ -518,7 +518,15 @@ export class WeKnoraSyncService extends Service {
     const current = extractAttachmentSummary(doc.markdown, String(attachmentId))
     if (current !== undefined && current.trim() === description.trim()) return false // no-op
     const next = insertAttachmentSummary(doc.markdown, String(attachmentId), description)
-    await this.ctx.pkwNotes.update(noteId, next)
+    try {
+      await this.ctx.pkwNotes.update(noteId, next, {
+        expectedRevision: doc.note.observedRevision,
+        expectedContentHash: doc.note.contentHash,
+      })
+    } catch (error) {
+      if (error instanceof NoteUpdateConflictError) return false // re-read current user content on the next sweep
+      throw error
+    }
     this.ctx.logger.info(`[pkw.knowledge] companion-summary attachment=${String(attachmentId)} note=${String(noteId)}`)
     return true
   }

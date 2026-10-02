@@ -21,9 +21,10 @@ import { posix, extname, resolve as pathResolve, sep } from 'node:path'
 import { readFile } from 'node:fs/promises'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
+import { createHash } from 'node:crypto'
 import z from '@deepseek-ai/schemastery'
-import { AttachmentId, FolderTrashEntryId, NoteId, TaskId, TaskMatrixId, addColumnLeft, addColumnRight, addRowAbove, addRowBelow, companionNoteMarkdown, deleteColumn, deleteRow, deleteFootnote, deleteTable, editFootnoteDefinition, filenameStem, nextFootnoteKey, parseTrashItemKey, resolveTableCell, sanitizeNoteBase, setColumnAlign, summarizeBatch, uniqueNotePath } from '@deepseek-ai/dsh-pkw-domain'
-import type { ColumnAlign } from '@deepseek-ai/dsh-pkw-domain'
+import { AttachmentId, FolderTrashEntryId, NoteId, NoteUpdateConflictError, TaskId, TaskMatrixId, addColumnLeft, addColumnRight, addRowAbove, addRowBelow, companionNoteMarkdown, deleteColumn, deleteRow, deleteFootnote, deleteTable, editFootnoteDefinition, filenameStem, nextFootnoteKey, parseTrashItemKey, resolveTableCell, sanitizeNoteBase, setColumnAlign, summarizeBatch, uniqueNotePath } from '@deepseek-ai/dsh-pkw-domain'
+import type { ColumnAlign, NoteUpdateOptions } from '@deepseek-ai/dsh-pkw-domain'
 import type { OrderChild } from '@deepseek-ai/dsh-pkw-notes'
 import PkwEventStoreService from '@deepseek-ai/dsh-pkw-events'
 import PkwWorkspaceService from '@deepseek-ai/dsh-pkw-workspace'
@@ -38,6 +39,23 @@ import { renderMarkdownToHtml } from './lute.ts'
 // Capture at module load: a stale running process must not claim a newly
 // installed version merely because package.json changed on disk.
 const packageVersion = (JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }).version
+
+const noteContentHash = (markdown: string): string => createHash('sha256').update(markdown.replace(/\r\n/g, '\n')).digest('hex')
+type SyncConfiguration = 'configured' | 'missing_base_url' | 'missing_credential' | 'missing_kb' | 'unavailable'
+interface SyncSnapshot {
+  intents: Map<string, { state: string; lastError?: string }>
+  dirty: Set<string>
+  configuration: SyncConfiguration
+}
+
+const activeSyncIntent = (intent: { state: string } | undefined): boolean => intent !== undefined && ['pending', 'running', 'unknown', 'retryable'].includes(intent.state)
+
+function noteWriteOptions(args: Record<string, unknown>): NoteUpdateOptions {
+  const { expectedRevision, expectedContentHash } = args
+  if (expectedRevision !== undefined && (typeof expectedRevision !== 'number' || !Number.isSafeInteger(expectedRevision) || expectedRevision < 0)) throw new Error('Invalid expectedRevision')
+  if (expectedContentHash !== undefined && (typeof expectedContentHash !== 'string' || !/^[a-f0-9]{64}$/.test(expectedContentHash))) throw new Error('Invalid expectedContentHash')
+  return { expectedRevision: expectedRevision as number | undefined, expectedContentHash: expectedContentHash as string | undefined }
+}
 
 export interface Config {
   /** Workspace root directory (notes/ + attachments/ live under it). */
@@ -288,7 +306,7 @@ export class PkwWebService extends Service {
     this.ctx.effect(() => this.ctx.webServer.register({
       kind: 'exact', path: '/pkw', handler: (_req, res) => {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'X-PKW-Version': packageVersion })
-        res.end(renderPage())
+        res.end(renderPage(packageVersion))
       },
     }), 'pkw.web.page')
 
@@ -332,7 +350,7 @@ export class PkwWebService extends Service {
       // `<filename>` segment (if any) is never used for lookup — filename is
       // display/reference metadata, not route identity (CJK/spaces/rename safe).
       let raw = decodeURIComponent(url.pathname.slice('/pkw/attachment/'.length)).replace(/^\/+|\/+$/g, '')
-      // Preview contract: `/pkw/attachment/<id>/preview` → force inline (PDF/image/txt).
+      // Preview supports passive image/PDF/plain text; active document types remain downloads.
       const isPreview = raw.endsWith('/preview')
       if (isPreview) raw = raw.slice(0, -'/preview'.length).replace(/\/+$/g, '')
       const id = raw
@@ -350,14 +368,20 @@ export class PkwWebService extends Service {
       const bytes = await this.attachments.open(AttachmentId(id))
       const mime = rec.mimeType || 'application/octet-stream'
       const safeName = (rec.filename ?? 'attachment').replace(/["\r\n\\]/g, '_')
-      const disposition = isPreview || mime.startsWith('image/') || mime === 'application/pdf'
-        ? 'inline'
-        : `attachment; filename="${safeName}"`
+      // Uploaded HTML/SVG/XML must never become active same-origin documents.
+      const mediaType = mime.split(';')[0]!.trim().toLowerCase()
+      const inlineImage = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif', 'image/bmp', 'image/x-icon', 'image/vnd.microsoft.icon'].includes(mediaType)
+      const safeInline = inlineImage || mediaType === 'application/pdf' || (isPreview && mediaType === 'text/plain')
+      const asciiName = safeName.replace(/[^\x20-\x7e]/g, '_')
+      const encodedName = encodeURIComponent(safeName).replace(/[!'()*]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase())
+      const disposition = safeInline ? 'inline' : `attachment; filename="${asciiName}"; filename*=UTF-8''${encodedName}`
       res.writeHead(200, {
         'Content-Type': mime,
         'Content-Disposition': disposition,
         'Content-Length': String(bytes.length),
-        'Cache-Control': 'private, max-age=3600',
+        'Cache-Control': 'private, no-store',
+        'X-Content-Type-Options': 'nosniff',
+        ...(!safeInline ? { 'Content-Security-Policy': "sandbox; default-src 'none'" } : {}),
       })
       res.end(Buffer.from(bytes))
     } catch (error) {
@@ -406,6 +430,10 @@ export class PkwWebService extends Service {
       const result = await this.call(method, args)
       json(res, 200, { ok: true, value: result })
     } catch (error) {
+      if (error instanceof NoteUpdateConflictError) {
+        json(res, 409, { ok: false, code: error.code, error: error.message })
+        return
+      }
       json(res, 400, { ok: false, error: String(error instanceof Error ? error.message : error) })
     }
   }
@@ -415,7 +443,7 @@ export class PkwWebService extends Service {
     switch (method) {
       case 'summary': return this.summary()
       case 'listNotes': {
-        const snap = this.syncSnapshot()
+        const snap = await this.syncSnapshot()
         return this.notes.list().map(n => ({
           noteId: String(n.noteId),
           relativePath: n.relativePath,
@@ -434,12 +462,12 @@ export class PkwWebService extends Service {
         const doc = await this.notes.getDocument(noteId)
         const { frontmatterRaw, body } = splitFrontmatter(doc.markdown)
         return {
-          note: { noteId: String(doc.note.noteId), relativePath: doc.note.relativePath, title: doc.note.title, tags: doc.note.tags, updatedAt: doc.note.updatedAt, observedRevision: doc.note.observedRevision, contentHash: doc.note.contentHash, attachmentBacked: doc.note.attachmentBacked === true },
+          note: { noteId: String(doc.note.noteId), relativePath: doc.note.relativePath, title: doc.note.title, tags: doc.note.tags, updatedAt: doc.note.updatedAt, observedRevision: doc.note.observedRevision, contentHash: noteContentHash(doc.markdown), attachmentBacked: doc.note.attachmentBacked === true },
           markdown: doc.markdown,
           frontmatter: frontmatterRaw,
           body,
           attachments: doc.attachments.map(a => ({ attachmentId: String(a.attachmentId), relativePath: a.relativePath })),
-          sync: this.syncView('note', String(noteId), this.syncSnapshot()),
+          sync: this.syncView('note', String(noteId), await this.syncSnapshot()),
         }
       }
       case 'renderMarkdown': {
@@ -520,8 +548,8 @@ export class PkwWebService extends Service {
         return { noteId: String(rec.noteId), relativePath: rec.relativePath, title: rec.title }
       }
       case 'saveNote': {
-        const rec = await this.notes.update(NoteId(String(args.noteId)), String(args.markdown))
-        return { noteId: String(rec.noteId), updatedAt: rec.updatedAt, observedRevision: rec.observedRevision }
+        const rec = await this.notes.update(NoteId(String(args.noteId)), String(args.markdown), noteWriteOptions(args))
+        return { noteId: String(rec.noteId), updatedAt: rec.updatedAt, observedRevision: rec.observedRevision, contentHash: rec.contentHash }
       }
       case 'saveNoteBody': {
         // Live editor only edits the body; the Host re-attaches the preserved
@@ -531,8 +559,12 @@ export class PkwWebService extends Service {
         const { frontmatterRaw } = splitFrontmatter(doc.markdown)
         const body = String(args.body)
         const markdown = frontmatterRaw === '' ? body : `${frontmatterRaw}\n${body}`
-        const rec = await this.notes.update(noteId, markdown)
-        return { noteId: String(rec.noteId), updatedAt: rec.updatedAt, observedRevision: rec.observedRevision }
+        const options = noteWriteOptions(args)
+        const rec = await this.notes.update(noteId, markdown, {
+          expectedRevision: options.expectedRevision ?? doc.note.observedRevision,
+          expectedContentHash: options.expectedContentHash ?? noteContentHash(doc.markdown),
+        })
+        return { noteId: String(rec.noteId), updatedAt: rec.updatedAt, observedRevision: rec.observedRevision, contentHash: rec.contentHash }
       }
       case 'moveNote': {
         const rec = await this.notes.move(NoteId(String(args.noteId)), String(args.relativePath))
@@ -545,7 +577,7 @@ export class PkwWebService extends Service {
         const title = String(args.title).trim()
         if (title === '') throw new Error('pkwWeb: empty title')
         const doc = await this.notes.getDocument(noteId)
-        const rec = await this.notes.update(noteId, retitleMarkdown(doc.markdown, title))
+        const rec = await this.notes.update(noteId, retitleMarkdown(doc.markdown, title), { expectedRevision: doc.note.observedRevision, expectedContentHash: noteContentHash(doc.markdown) })
         return { noteId: String(rec.noteId), relativePath: rec.relativePath, title: rec.title }
       }
       case 'deleteNote': {
@@ -561,7 +593,7 @@ export class PkwWebService extends Service {
         return { purged: true }
       }
       case 'listTrash': {
-        const snap = this.syncSnapshot()
+        const snap = await this.syncSnapshot()
         return this.notes.list({ includeDeleted: true })
           .filter(n => n.deletedAt !== undefined)
           .map(n => ({
@@ -571,7 +603,7 @@ export class PkwWebService extends Service {
           }))
       }
       case 'listTrashAttachments': {
-        const snap = this.syncSnapshot()
+        const snap = await this.syncSnapshot()
         return this.attachments.list({ includeDeleted: true })
           .filter(a => a.deletedAt !== undefined)
           .map(a => ({
@@ -581,7 +613,7 @@ export class PkwWebService extends Service {
       }
       case 'listTrashFolders': return (await this.notes.listTrashFolders()).map(e => ({ trashEntryId: String(e.trashEntryId), originalPath: e.originalPath, deletedAt: e.deletedAt }))
       case 'listAttachments': {
-        const snap = this.syncSnapshot()
+        const snap = await this.syncSnapshot()
         const owners = await this.attachmentOwners()
         return this.attachments.list().map(a => {
           const companion = a.companionNoteId !== undefined ? this.notes.get(a.companionNoteId) : undefined
@@ -606,7 +638,9 @@ export class PkwWebService extends Service {
             hasSummary: derived?.summary !== undefined && derived.summary.trim() !== '',
             ownerCount: ownerNotes.length,
             indexed: mapping !== undefined && mapping.knowledgeId !== undefined && mapping.syncState === 'synced',
-            pending: snap.dirty.has(key) || intent !== undefined,
+            pending: snap.dirty.has(key) || activeSyncIntent(intent),
+            configuration: snap.configuration,
+            intentState: intent?.state,
             error: intent?.lastError,
           }
         })
@@ -663,7 +697,7 @@ export class PkwWebService extends Service {
         const derived = this.sync.getDerivedContent(id)
         const owners = (await this.attachmentOwners()).get(String(id)) ?? []
         const mapping = this.sync.getAttachmentMapping(id)
-        const snap = this.syncSnapshot()
+        const snap = await this.syncSnapshot()
         const key = `attachment:${String(id)}`
         const intent = snap.intents.get(key)
         return {
@@ -682,7 +716,9 @@ export class PkwWebService extends Service {
           owners,
           ownerCount: owners.length,
           indexed: mapping !== undefined && mapping.knowledgeId !== undefined && mapping.syncState === 'synced',
-          pending: snap.dirty.has(key) || intent !== undefined,
+          pending: snap.dirty.has(key) || activeSyncIntent(intent),
+          configuration: snap.configuration,
+          intentState: intent?.state,
           error: intent?.lastError,
         }
       }
@@ -838,7 +874,7 @@ export class PkwWebService extends Service {
         return this.tasks.removeMatrix(matrixId, opts)
       }
       case 'listTasks': return this.tasks.listTasks({
-        ...(args.matrixId !== undefined && args.matrixId !== null ? { matrixId: TaskMatrixId(String(args.matrixId)) } : {}),
+        ...(args.matrixId !== undefined ? { matrixId: args.matrixId === null ? null : TaskMatrixId(String(args.matrixId)) } : {}),
         ...(args.status !== undefined ? { status: String(args.status) as never } : {}),
         includeDeleted: args.includeDeleted === true,
       })
@@ -868,7 +904,7 @@ export class PkwWebService extends Service {
 
   /** Nested notes folder tree with per-parent ordering + per-note sync views. */
   private async tree(sortMode: string): Promise<unknown> {
-    const snap = this.syncSnapshot()
+    const snap = await this.syncSnapshot()
     const notes = this.notes.list().map(n => ({
       kind: 'note' as const,
       noteId: String(n.noteId),
@@ -912,22 +948,27 @@ export class PkwWebService extends Service {
     return { root: build('') }
   }
 
-  /** Active (non-terminal) intents by entity key + currently-dirty entity keys. */
-  private syncSnapshot(): { intents: Map<string, { state: string; lastError?: string }>; dirty: Set<string> } {
+  /** Latest operation per entity, including terminal failures, plus dirty keys. */
+  private async syncSnapshot(configuration?: SyncConfiguration): Promise<SyncSnapshot> {
+    const currentConfiguration = configuration ?? await this.syncConfiguration()
     const intents = new Map<string, { state: string; lastError?: string }>()
+    const timestamps = new Map<string, { createdAt: string; updatedAt: string }>()
     for (const intent of this.sync.listIntents()) {
-      if (intent.state === 'pending' || intent.state === 'running' || intent.state === 'unknown' || intent.state === 'retryable') {
-        const key = `${intent.entityType}:${intent.entityId}`
-        if (!intents.has(key)) intents.set(key, { state: intent.state, lastError: intent.lastError })
-      }
+      const key = `${intent.entityType}:${intent.entityId}`
+      const previous = timestamps.get(key)
+      if (previous && (previous.createdAt > intent.createdAt ||
+        (previous.createdAt === intent.createdAt && previous.updatedAt > intent.updatedAt))) continue
+      timestamps.set(key, intent)
+      const failed = ['unknown', 'retryable', 'permanent'].includes(intent.state)
+      intents.set(key, { state: intent.state, lastError: failed ? intent.lastError : undefined })
     }
     const dirty = new Set<string>()
     for (const rec of this.sync.listDirty()) if (rec.dirty) dirty.add(`${rec.entityType}:${rec.entityId}`)
-    return { intents, dirty }
+    return { intents, dirty, configuration: currentConfiguration }
   }
 
   /** UI-facing per-entity sync view (mapping + pending/error, no raw table shapes). */
-  private syncView(entityType: string, entityId: string, snap: ReturnType<PkwWebService['syncSnapshot']>): Record<string, unknown> {
+  private syncView(entityType: string, entityId: string, snap: SyncSnapshot): Record<string, unknown> {
     const mapping = entityType === 'note'
       ? this.sync.getMapping(NoteId(entityId))
       : this.sync.getAttachmentMapping(AttachmentId(entityId))
@@ -939,7 +980,9 @@ export class PkwWebService extends Service {
       syncState: mapping?.syncState,
       remoteParseStatus: mapping?.remoteParseStatus,
       updatedAt: mapping?.updatedAt,
-      pending: snap.dirty.has(key) || intent !== undefined,
+      pending: snap.dirty.has(key) || activeSyncIntent(intent),
+      configuration: snap.configuration,
+      intentState: intent?.state,
       error: intent?.lastError,
     }
   }
@@ -1010,7 +1053,7 @@ export class PkwWebService extends Service {
    * body snippet) and user-facing fields only. Fully offline-safe (no WeKnora).
    */
   private async listKnowledge(): Promise<unknown[]> {
-    const snap = this.syncSnapshot()
+    const snap = await this.syncSnapshot()
     const out: unknown[] = []
     for (const n of this.notes.list()) {
       const doc = await this.notes.getDocument(n.noteId)
@@ -1032,7 +1075,9 @@ export class PkwWebService extends Service {
         attachmentCount: doc.attachments.length,
         summary: summary ?? markdownSnippet(doc.markdown),
         indexed: mapping !== undefined && mapping.knowledgeId !== undefined && mapping.syncState === 'synced',
-        pending: snap.dirty.has(`note:${String(n.noteId)}`) || intent !== undefined,
+        pending: snap.dirty.has(`note:${String(n.noteId)}`) || activeSyncIntent(intent),
+        configuration: snap.configuration,
+        intentState: intent?.state,
         error: intent?.lastError,
       })
     }
@@ -1137,13 +1182,29 @@ export class PkwWebService extends Service {
     return out
   }
 
+  /** Local capability metadata only; failures must never block canonical reads. */
+  private async syncConfiguration(): Promise<SyncConfiguration> {
+    if (this.config.kbId.trim() === '') return 'missing_kb'
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      // Credential providers may be asynchronous or stuck. Their diagnostics
+      // must not indefinitely delay local Note/Attachment reads.
+      return await Promise.race([
+        this.weknora.credentialStatus(),
+        new Promise<SyncConfiguration>(resolve => { timer = setTimeout(() => resolve('unavailable'), 300) }),
+      ])
+    } catch { return 'unavailable' }
+    finally { if (timer !== undefined) clearTimeout(timer) }
+  }
+
   private async summary(): Promise<unknown> {
-    const credential = await this.weknora.credentialStatus()
-    const integration = await this.sync.integrationState()
+    const configuration = await this.syncConfiguration()
+    const credential = configuration
+    const integration = configuration === 'configured' ? 'ready' : 'unavailable'
     let pendingSync = 0
     for (const rec of this.sync.listDirty()) if (rec.dirty) pendingSync += 1
     let syncErrors = 0
-    for (const intent of this.sync.listIntents()) {
+    for (const intent of (await this.syncSnapshot(configuration)).intents.values()) {
       if (intent.state === 'retryable' || intent.state === 'unknown' || intent.state === 'permanent') syncErrors += 1
     }
     const notes = this.notes.list()
@@ -1159,6 +1220,7 @@ export class PkwWebService extends Service {
       kbId: this.config.kbId,
       weknoraBaseUrl: this.config.weknoraBaseUrl,
       credential: credential,
+      configuration,
       integration: integration,
       notes: notes.length,
       attachments: attachments.length,

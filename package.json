@@ -11,7 +11,8 @@
     "test:tooling": "node --test scripts/tests/*.test.mjs",
     "deploy": "node scripts/deploy-pkw.mjs",
     "verify:build": "node scripts/verify-build.mjs",
-    "verify:packed": "node scripts/verify-packed.mjs"
+    "verify:packed": "node scripts/verify-packed.mjs",
+    "preview": "node scripts/build.mjs && node scripts/verify-packed.mjs --preview"
   },
   "devDependencies": {
     "@types/node": "^22.20.0",

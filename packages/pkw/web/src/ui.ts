@@ -8,14 +8,14 @@
  * remote-sync polling that never rebuilds the editor or the folder tree.
  */
 
-export function renderPage(): string {
+export function renderPage(version = 'development'): string {
+  const versionJson = JSON.stringify(version).replace(/</g, '\\u003c')
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>PKW — Personal Knowledge Workspace</title>
-<!-- PKW build: 1d93f55 -->
 <style>
 :root{--bg-app:#f6f7f9;--bg-sidebar:#fff;--bg-surface:#fff;--bg-elevated:#f8fafd;--bg-hover:#eef2f8;--bg-selected:#e7eefb;--bg-input:#fff;--text-primary:#1c2330;--text-secondary:#33415c;--text-muted:#6b7280;--border:#e3e6ea;--border-strong:#c6ccd4;--accent:#2f6fed;--accent-hover:#2456c9;--accent-soft:#eef4ff;--success:#178a4f;--warning:#b45309;--danger:#b91c1c;--shadow-sm:0 1px 3px rgba(0,0,0,.08);--shadow-md:0 8px 30px rgba(0,0,0,.18);--radius-sm:6px;--radius-md:8px;--radius-lg:12px;--space-1:4px;--space-2:8px;--space-3:12px;--space-4:16px;--space-5:24px;--code-bg:#0f172a;--code-fg:#e2e8f0;--mark-bg:#ffe9a8;--mark-fg:#1c2330;--co-note:#2f6fed;--co-note-bg:#eef4ff;--co-tip:#178a4f;--co-tip-bg:#e8f6ee;--co-info:#0e7f9e;--co-info-bg:#e7f5f9;--co-important:#7c3aed;--co-important-bg:#f2ecff;--co-warning:#b45309;--co-warning-bg:#fdf1e3;--co-question:#0891b2;--co-question-bg:#e8f8fb;--co-example:#6d28d9;--co-example-bg:#f3eefc;--co-success:#16a34a;--co-success-bg:#e9f9ef;--co-danger:#b91c1c;--co-danger-bg:#fdeaea;--bg:var(--bg-app);--panel:var(--bg-sidebar);--ink:var(--text-primary);--muted:var(--text-muted);--ok:var(--success);--warn:var(--warning);--err:var(--danger)}
 [data-theme="dark"]{--bg-app:#0f1218;--bg-sidebar:#161a22;--bg-surface:#161a22;--bg-elevated:#1c212c;--bg-hover:#232a38;--bg-selected:#2a3447;--bg-input:#161a22;--text-primary:#e5e9f0;--text-secondary:#b6c0cf;--text-muted:#8b95a7;--border:#2a3242;--border-strong:#3b4557;--accent:#5b8cff;--accent-hover:#7ba3ff;--accent-soft:#1e2b47;--success:#4ade80;--warning:#fbbf24;--danger:#f87171;--shadow-sm:0 1px 3px rgba(0,0,0,.5);--shadow-md:0 8px 30px rgba(0,0,0,.6);--code-bg:#0d1117;--code-fg:#e6edf3;--mark-bg:#5c4a1e;--mark-fg:#ffe9a8;--co-note:#7ba3ff;--co-note-bg:#1e2b47;--co-tip:#4ade80;--co-tip-bg:#12301f;--co-info:#38bdf8;--co-info-bg:#0f2a3a;--co-important:#a78bfa;--co-important-bg:#281d4d;--co-warning:#fbbf24;--co-warning-bg:#33250a;--co-question:#22d3ee;--co-question-bg:#0a2e33;--co-example:#c084fc;--co-example-bg:#2b1744;--co-success:#4ade80;--co-success-bg:#12301f;--co-danger:#f87171;--co-danger-bg:#3a1414}
@@ -44,6 +44,7 @@ aside{border-right:1px solid var(--border);background:var(--panel);display:flex;
 .tree-toolbar{display:flex;gap:4px;padding:6px 8px;border-bottom:1px solid var(--border);flex:0 0 auto;align-items:center}
 .tree-row{display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:7px;cursor:pointer;border:1px solid transparent;font-size:13px}
 .tree-row:hover{background:var(--bg-hover)}.tree-row.active{background:var(--bg-selected);border-color:var(--border-strong)}
+.row-action{appearance:none;border:0;background:none;color:inherit;font:inherit;text-align:left;padding:2px 0;cursor:pointer;min-width:0}.row-action:hover{text-decoration:underline}.row-action.mobile-open{display:block;width:100%;min-height:44px}.tree-row button.tw{padding:2px;border:0;background:none;cursor:pointer}.tree-row button.tw:hover{color:var(--accent)}
 .tree-row .tw{width:16px;text-align:center;color:var(--muted);flex:0 0 auto;font-size:11px}
 .tree-row .ic{flex:0 0 auto;font-size:12px}
 .tree-row .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1 1 auto}
@@ -61,7 +62,7 @@ aside{border-right:1px solid var(--border);background:var(--panel);display:flex;
 main{overflow:auto;padding:20px 24px;background:var(--bg)}
 main h2{margin:0 0 12px;font-size:18px;font-weight:650}
 .toolbar{display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap}
-button.btn{padding:7px 12px;border:1px solid var(--border);background:var(--panel);border-radius:8px;cursor:pointer;font-size:13px}
+button.btn{padding:7px 12px;border:1px solid var(--border);background:var(--panel);color:var(--ink);border-radius:8px;cursor:pointer;font-size:13px}
 button.btn:hover{border-color:var(--border-strong)}
 button.btn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
 button.btn.danger{color:var(--err)}
@@ -145,10 +146,17 @@ aside.right h3:first-child{margin-top:0}
 .hit .ref .spacer{flex:1 1 auto}
 .hit .t .badge{margin-left:6px;vertical-align:1px}
 .hit .reason{color:var(--text-secondary)}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+#kbSearch{flex:1;min-width:140px;padding:9px 12px;border:1px solid var(--border);border-radius:8px;background:var(--panel);color:var(--text-primary);font:inherit}
+#kbSearchStatus{font-size:13px;color:var(--muted);margin-bottom:12px}
+.note-conflict{padding:12px 16px;margin:12px 0;border:1px solid var(--warn);border-radius:10px;background:var(--panel)}.note-conflict p{margin:0 0 10px}.note-conflict summary{cursor:pointer}.note-conflict textarea{width:100%;min-height:160px;margin-top:10px;background:var(--panel);color:var(--ink);font:13px/1.6 ui-monospace,monospace}
+.search-error{max-width:560px;margin:16px auto 0;text-align:left;overflow-wrap:anywhere}.search-error summary{cursor:pointer}
 .kb-section-hint{font-size:12px;color:var(--muted);margin:0 0 12px}
 .empty{color:var(--muted);padding:28px;text-align:center}.empty .cta{margin-top:10px}
 .spinner{width:16px;height:16px;border:2px solid var(--border-strong);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite;display:inline-block;vertical-align:-3px}
 @keyframes spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.spinner{animation:none}}
 .check-row{display:flex;align-items:center;gap:6px;margin-bottom:8px;font-size:13px;cursor:pointer}
 .check-row input{margin:0}
 .radio-row{display:flex;align-items:flex-start;gap:8px;margin-bottom:8px;font-size:13px;cursor:pointer}
@@ -301,7 +309,7 @@ mark{background:var(--mark-bg);border-radius:2px;padding:0 2px}
 .mnote-title,.msrc-name,.mtask-title{font-size:15px;font-weight:600;line-height:1.3;word-break:break-word}
 .mnote-folder,.msrc-meta,.mtask-cat,.mtask-due{font-size:12px;color:var(--muted);margin-top:2px}
 .mnote-meta{font-size:11px;color:var(--muted);margin-top:4px}
-.mnote-more{flex:0 0 auto;border:0;background:none;font-size:18px;color:var(--muted);padding:0 4px;min-width:32px;min-height:36px;cursor:pointer}
+.mnote-more{flex:0 0 auto;border:0;background:none;font-size:18px;color:var(--muted);padding:0 4px;min-width:44px;min-height:44px;cursor:pointer}
 .msrc-thumbwrap{flex:0 0 auto;width:44px;height:44px;border-radius:8px;overflow:hidden;background:var(--bg-hover);display:flex;align-items:center;justify-content:center;border:1px solid var(--border)}
 .msrc-thumb{width:100%;height:100%;object-fit:cover}.msrc-ic{font-size:22px}
 .msrc-badges{margin-top:4px;display:flex;gap:4px;flex-wrap:wrap}
@@ -426,7 +434,7 @@ a.src-inline:hover{border-color:var(--accent)}
     <div id="treeToolbar"></div>
     <div id="list"></div>
   </aside>
-  <main id="main"></main>
+  <main id="main" tabindex="-1"></main>
   <aside class="right" id="detail"></aside>
 </div>
 <nav id="bottomNav" aria-label="Workspace">
@@ -436,14 +444,21 @@ a.src-inline:hover{border-color:var(--accent)}
   <button data-view="attachments" class="bn-item"><span class="bn-ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M13 2v7h7"/></svg></span><span class="bn-label">来源</span></button>
   <button data-action="mobile-more" class="bn-item"><span class="bn-ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg></span><span class="bn-label">更多</span></button>
 </nav>
-<div id="toast"></div>
-<div id="activity"></div>
+<div id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
+<div id="activity" role="status" aria-live="polite"></div>
 <script>
 const STR = {
   zh: {
+    uploadRetained:'附件已上传到原笔记的来源中。你已切换页面，未向当前笔记插入链接。',
+    searchResultsCount:'「{q}」的检索结果 · {n} 条', searchBackHome:'返回知识主页', searchOfflineHint:'搜索暂时不可用。已保存的笔记和附件不受检索失败影响。检查连接后重试，或返回笔记。', searchErrorDetails:'查看错误详情', searchEvidenceHint:'以下结果由知识服务检索返回，请结合摘要核对相关性。',
+    editorOperationStale:'笔记或正文已变化，未应用旧操作。请在目标笔记中重试。', taskNewerEdits:'先前的修改已保存；保存期间新增的修改仍待保存。',
+    itemActions:'{name}的操作', selectItem:'选择{name}', expandFolder:'展开{name}', collapseFolder:'收起{name}', syncWaitingConfig:'等待配置', syncConfigUnavailable:'配置暂不可读', syncWaitingConfigHint:'内容已保存在本地；完成知识服务配置后可同步。', syncConfigUnavailableHint:'知识服务配置暂不可读取，本地阅读和保存不依赖此服务。',
+    reloadDraftChanged:'重新读取期间草稿又有修改，已保留当前草稿；复制完成后可再次重新读取。', reloadFailed:'重新读取失败，当前草稿仍保留，请检查连接后重试。',
+    noteConflict:'笔记已在其他位置更新。当前草稿仍保留，服务器内容未被覆盖。请先复制草稿，再重新读取最新版本。', copyDraft:'复制草稿', manualCopyDraft:'查看或手动复制草稿', reloadNote:'重新读取', reloadNoteConfirm:'重新读取会丢弃当前未保存的草稿。请先复制草稿，之后再把需要的内容合并到最新笔记中。继续重新读取？', copyDraftFailed:'自动复制失败，请展开下方草稿，选中后手动复制。',
+    navigationSaveFailed:'尚未离开：当前笔记保存失败。内容仍在编辑器中，请重试保存。',
     overview:'总览', notes:'笔记', attachments:'附件库', tasks:'待办', trash:'回收站', search:'搜索',
     searchPlaceholder:'搜索笔记与附件…', workspaceLabel:'工作区', localSummary:'本地: {n} 笔记 · {m} 文件',
-    connected:'已连接', unavailable:'不可用', notConfigured:'未配置', error:'错误',
+    connected:'已配置', unavailable:'不可用', notConfigured:'未配置', error:'错误',
     overviewTitle:'工作区概览', overviewNotes:'笔记', overviewAttachments:'附件', overviewMappings:'已同步对象', overviewPendingSync:'待同步', overviewSyncErrors:'同步错误',
     overviewIntegration:'WeKnora 集成', overviewRecent:'最近更新', overviewEmpty:'工作区为空。点击「新建笔记」开始。', recentNote:'笔记', recentAttachment:'附件', noRecent:'暂无最近更新',
     newNote:'新建笔记', newFolder:'新建文件夹', emptyNotes:'还没有笔记。', emptyNotesCta:'新建第一篇笔记', loading:'加载中…', deletedSuffix:'已删除',
@@ -469,7 +484,7 @@ const STR = {
     attSelectAll:'全选', attSelected:'已选择 {n} 项', attBatchTrash:'移入回收站', attBatchReparse:'重新解析', attBatchIndex:'重新索引', attClearSelection:'取消选择',
     attCompanion:'伴随笔记', attCreateCompanion:'创建伴随笔记', attOpenCompanion:'打开伴随笔记', attPreview:'预览', attCopyRef:'复制引用', attNoCompanion:'未建伴随笔记', attCopied:'已复制引用', attUploadResult:'上传完成：附件 {a} · 伴随笔记 {n} · 失败 {f}', attUploadResultNoNote:'上传完成：附件 {a} 成功，伴随笔记失败 {f}', attUploadPartial:'部分上传失败：{a}/{t} 成功', attCreatedNote:'已创建伴随笔记', attOpenedExisting:'该附件已有伴随笔记，已打开', attBatchNoSelection:'请先选择附件', companionUpgrade:'将伴随笔记作为独立知识同步', companionUpgraded:'已作为独立知识同步', attachmentBacked:'附件驱动（不独立同步）',
     uploadProgress:'上传中…', uploadSuccess:'已上传', uploadFailed:'上传失败', searching:'搜索中…', noHits:'没有命中「{q}」。', searchHint:'输入关键词搜索笔记与附件。',
-    score:'得分', openNote:'打开笔记', openAttachment:'打开附件', noteLabel:'笔记', attachmentLabel:'附件', noteBodyMatch:'正文命中', attMatch:'附件命中',
+    score:'得分', openNote:'打开笔记', openAttachment:'打开附件', noteLabel:'笔记', attachmentLabel:'附件', noteBodyMatch:'笔记内容检索', attMatch:'附件内容检索',
     details:'详情', noteId:'NoteId', attachmentId:'AttachmentId', path:'路径', revision:'版本', updated:'更新时间', lastError:'最近错误', maintenance:'维护', advanced:'高级',
     workspaceSummary:'工作区摘要', kb:'知识库', state:'状态', parse:'解析', syncSection:'WeKnora 同步', noSyncInfo:'尚未同步。',
     reconcileDone:'重建完成', reconcileResult:'笔记修复 {a} · 附件修复 {b} · 待同步 {c} · 已删 {d}', syncingAll:'正在同步…', genericError:'操作失败', ok:'完成', emptyPreview:'（空）', searchFailed:'搜索失败',
@@ -504,9 +519,16 @@ const STR = {
     trashRestoring:'正在恢复…', trashDeleting:'正在删除…', trashEmptied:'回收站已清空', trashRestored:'已恢复 {n} 项', trashRestoredPartial:'已恢复 {n} 项，{m} 项失败', trashPurged:'已永久删除 {n} 项', trashPurgedPartial:'已永久删除 {n} 项，{m} 项失败', trashDeletedTime:'删除于 {t}',
   },
   en: {
+    uploadRetained:'The file was uploaded to the original note’s sources. No link was inserted into your current note.',
+    searchResultsCount:'Results for “{q}” · {n}', searchBackHome:'Back to knowledge home', searchOfflineHint:'Search is currently unavailable. Saved notes and attachments are unaffected by search failures. Check your connection and retry, or return to Notes.', searchErrorDetails:'Error details', searchEvidenceHint:'These results come from knowledge search. Check the excerpts for relevance.',
+    editorOperationStale:'The note or its text changed. The earlier operation was not applied; retry in the intended note.', taskNewerEdits:'Earlier edits were saved. Changes made while saving are still unsaved.',
+    itemActions:'Actions for {name}', selectItem:'Select {name}', expandFolder:'Expand {name}', collapseFolder:'Collapse {name}', syncWaitingConfig:'Awaiting setup', syncConfigUnavailable:'Configuration unavailable', syncWaitingConfigHint:'Content is saved locally. Complete knowledge service setup to sync it.', syncConfigUnavailableHint:'Knowledge service configuration cannot be read. Local reading and saving do not depend on this service.',
+    reloadDraftChanged:'Your draft changed while loading. It has been kept; copy it before trying again.', reloadFailed:'Could not load the latest note. Your draft is retained; check your connection and retry.',
+    noteConflict:'This note changed elsewhere. Your draft is retained and the server was not overwritten. Copy your draft before loading the latest note.', copyDraft:'Copy draft', manualCopyDraft:'View or manually copy draft', reloadNote:'Load latest note', reloadNoteConfirm:'Loading the latest note will discard your unsaved draft. Copy it first, then merge the text you need into the latest note. Continue?', copyDraftFailed:'Automatic copy failed. Expand the draft below and select the text to copy it manually.',
+    navigationSaveFailed:'Still here: your note could not be saved. Your edits remain in the editor; please retry saving.',
     overview:'Overview', notes:'Notes', attachments:'Attachment library', tasks:'Tasks', trash:'Trash', search:'Search',
     searchPlaceholder:'Search notes & attachments…', workspaceLabel:'Workspace', localSummary:'Local: {n} notes · {m} files',
-    connected:'Connected', unavailable:'Unavailable', notConfigured:'Not configured', error:'error',
+    connected:'Configured', unavailable:'Unavailable', notConfigured:'Not configured', error:'error',
     overviewTitle:'Workspace Overview', overviewNotes:'Notes', overviewAttachments:'Attachments', overviewMappings:'Synced objects', overviewPendingSync:'Pending sync', overviewSyncErrors:'Sync errors',
     overviewIntegration:'WeKnora integration', overviewRecent:'Recent', overviewEmpty:'Workspace is empty. Click 「New Note」 to start.', recentNote:'Note', recentAttachment:'Attachment', noRecent:'No recent changes',
     newNote:'New Note', newFolder:'New Folder', emptyNotes:'No notes yet.', emptyNotesCta:'Create your first note', loading:'Loading…', deletedSuffix:'deleted',
@@ -532,7 +554,7 @@ const STR = {
     attSelectAll:'Select all', attSelected:'{n} selected', attBatchTrash:'Trash', attBatchReparse:'Reparse', attBatchIndex:'Re-index', attClearSelection:'Clear selection',
     attCompanion:'Companion note', attCreateCompanion:'Create companion note', attOpenCompanion:'Open companion note', attPreview:'Preview', attCopyRef:'Copy reference', attNoCompanion:'No companion note', attCopied:'Reference copied', attUploadResult:'Upload done: {a} attachments · {n} companion notes · {f} failed', attUploadResultNoNote:'Upload done: {a} attachments, {f} companion notes failed', attUploadPartial:'Partial upload: {a}/{t} succeeded', attCreatedNote:'Companion note created', attOpenedExisting:'Companion note already exists — opened', attBatchNoSelection:'Select attachments first', companionUpgrade:'Sync companion note as independent knowledge', companionUpgraded:'Synced as independent knowledge', attachmentBacked:'Attachment-backed (not independently synced)',
     uploadProgress:'Uploading…', uploadSuccess:'Uploaded', uploadFailed:'Upload failed', searching:'Searching…', noHits:'No hits for 「{q}」.', searchHint:'Type a query to search notes & attachments.',
-    score:'score', openNote:'Open note', openAttachment:'Open attachment', noteLabel:'Note', attachmentLabel:'Attachment', noteBodyMatch:'Body match', attMatch:'Attachment match',
+    score:'score', openNote:'Open note', openAttachment:'Open attachment', noteLabel:'Note', attachmentLabel:'Attachment', noteBodyMatch:'Note content search', attMatch:'Attachment content search',
     details:'Details', noteId:'NoteId', attachmentId:'AttachmentId', path:'Path', revision:'Revision', updated:'Updated', lastError:'Last error', maintenance:'Maintenance', advanced:'Advanced',
     workspaceSummary:'Workspace summary', kb:'KB', state:'State', parse:'Parse', syncSection:'WeKnora Sync', noSyncInfo:'Not synced yet.',
     reconcileDone:'Reconcile done', reconcileResult:'Notes repaired {a} · attachments repaired {b} · dirty {c} · deleted {d}', syncingAll:'Syncing…', genericError:'Operation failed', ok:'Done', emptyPreview:'(empty)', searchFailed:'Search failed',
@@ -567,14 +589,14 @@ const STR = {
     trashRestoring:'Restoring…', trashDeleting:'Deleting…', trashEmptied:'Trash emptied', trashRestored:'Restored {n} items', trashRestoredPartial:'Restored {n} items, {m} failed', trashPurged:'Deleted {n} items permanently', trashPurgedPartial:'Deleted {n} items permanently, {m} failed', trashDeletedTime:'Deleted {t}',
   },
 }
-const PKW_BUILD = '1d93f55'
+const PKW_BUILD = ${versionJson}
 let lang = localStorage.getItem('pkw-lang') === 'en' ? 'en' : 'zh'
 const t = (key, vars) => { let s = STR[lang][key] ?? STR.zh[key] ?? key; if (vars) for (const k in vars) s = s.split('{' + k + '}').join(String(vars[k])); return s }
 const api = async (method, args = {}) => {
   const res = await fetch('/pkw/api', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ method, args }) })
   let data = {}
   try { data = await res.json() } catch (e) {}
-  if (!res.ok || data.ok !== true) throw new Error((data && data.error) || ('HTTP ' + res.status))
+  if (!res.ok || data.ok !== true) { const error = new Error((data && data.error) || ('HTTP ' + res.status)); error.code = data && data.code; throw error }
   return data.value
 }
 const $ = (s) => document.querySelector(s)
@@ -604,6 +626,8 @@ const state = {
   searchContext: null,
   searchQuery: '',
   searchResults: null,
+  searchStatus: 'idle',
+  searchError: '',
   attMode: localStorage.getItem('pkw-att-mode') || 'list',
   attQuery: localStorage.getItem('pkw-att-query') || '',
   attType: localStorage.getItem('pkw-att-type') || 'all',
@@ -624,6 +648,9 @@ const state = {
 let viewSeq = 0
 let viewStart = 0
 let noteSeq = 0
+let navigationSeq = 0
+let searchSeq = 0
+let attachmentSeq = 0
 const inFlight = {}
 function loadOnce(method, args){
   const key = method + ':' + JSON.stringify(args || {})
@@ -689,22 +716,39 @@ function showAppearanceMenu(x, y){
   ]
   showContextMenu(x, y, items)
 }
+function syncConfigurationState(sync){
+  if (!sync) return null
+  if (['missing_base_url', 'missing_credential', 'missing_kb'].includes(sync.configuration)) return { label: t('syncWaitingConfig'), hint: t('syncWaitingConfigHint') }
+  if (sync.configuration === 'unavailable') return { label: t('syncConfigUnavailable'), hint: t('syncConfigUnavailableHint') }
+  return null
+}
+function configurationBadge(sync){
+  const config = syncConfigurationState(sync)
+  return config ? '<span class="badge warn" title="' + esc(config.hint) + '">' + esc(config.label) + '</span>' : ''
+}
+function configurationHint(sync){
+  const config = syncConfigurationState(sync)
+  return config ? '<p class="muted small">' + esc(config.hint) + '</p>' : ''
+}
 function syncBadgeHtml(sync){
-  if (!sync || (!sync.pending && sync.syncState === undefined && sync.error === undefined)) return '<span class="badge">' + esc(t('notSynced')) + '</span>'
+  if (sync && sync.error) return '<span class="badge err">' + esc(t('failed')) + '</span>'
+  const config = configurationBadge(sync)
+  if (config) return config
+  if (!sync || (!sync.pending && sync.syncState === undefined)) return '<span class="badge">' + esc(t('notSynced')) + '</span>'
   let label, cls = 'warn'
-  if (sync.error) { label = t('failed'); cls = 'err' }
-  else if (sync.pending) { label = t('syncing'); cls = 'warn' }
+  if (sync.pending) label = t(sync.intentState === 'running' ? 'syncing' : 'pending')
   else if (sync.syncState === 'synced') { label = t('synced'); cls = 'ok' }
-  else if (sync.syncState === 'deleted') { label = t('deleted'); cls = 'warn' }
-  else if (sync.syncState === 'stale') { label = t('stale'); cls = 'warn' }
-  else { label = sync.syncState || t('notSynced'); cls = 'warn' }
+  else if (sync.syncState === 'deleted') label = t('deleted')
+  else if (sync.syncState === 'stale') label = t('stale')
+  else label = t('notSynced')
   return '<span class="badge ' + cls + '">' + esc(label) + '</span>'
 }
 function knowledgeBadge(s){
-  if (!s || (s.syncState === undefined && !s.pending && !s.error)) return '<span class="badge">' + esc(t('knowledgeNotIndexed')) + '</span>'
-  if (s.error || s.remoteParseStatus === 'failed') return '<span class="badge err">' + esc(t('knowledgeParseFailed')) + '</span>'
-  if (s.pending) return '<span class="badge warn">' + esc(t('knowledgePending')) + '</span>'
-  if (s.syncState === 'synced') return '<span class="badge ok">' + esc(t('knowledgeIndexed')) + '</span>'
+  if (s && (s.error || s.remoteParseStatus === 'failed')) return '<span class="badge err">' + esc(t('knowledgeParseFailed')) + '</span>'
+  const config = configurationBadge(s)
+  if (config) return config
+  if (s && s.pending) return '<span class="badge warn">' + esc(t(s.intentState === 'running' ? 'syncing' : 'pending')) + '</span>'
+  if (s && (s.syncState === 'synced' || s.indexed)) return '<span class="badge ok">' + esc(t('knowledgeIndexed')) + '</span>'
   return '<span class="badge">' + esc(t('knowledgeNotIndexed')) + '</span>'
 }
 function isTerminalSync(sync){ return !sync || (sync.syncState === 'synced' && !sync.pending) || sync.syncState === 'deleted' || sync.syncState === 'stale' }
@@ -715,13 +759,20 @@ async function refreshHeader(){
     $('#wsBadge').textContent = t('workspaceLabel') + ': ' + (s.workspaceName || 'Personal Workspace')
     $('#localBadge').textContent = t('localSummary', { n: s.notes, m: s.attachments })
     $('#localBadge').className = 'badge ok'
-    const integ = s.integration === 'ready'
-    $('#integBadge').textContent = 'WeKnora: ' + (integ ? t('connected') : (s.credential === 'configured' ? t('unavailable') : t('notConfigured')))
+    const integ = s.configuration ? s.configuration === 'configured' : s.integration === 'ready'
+    const config = syncConfigurationState(s)
+    $('#integBadge').textContent = 'WeKnora: ' + (config ? config.label : (integ ? t('connected') : t('notConfigured')))
+    $('#integBadge').title = config ? config.hint : ''
     $('#integBadge').className = 'badge ' + (integ ? 'ok' : 'warn')
   } catch (e) { $('#integBadge').textContent = 'WeKnora: ' + t('error'); $('#integBadge').className = 'badge err' }
 }
 
-function setView(v){
+async function setView(v){
+  if (v === state.view) return true // Keep active note/search requests owned by this surface.
+  if (!await prepareNoteNavigation()) return false
+  noteSeq++
+  if (v !== 'notes') { destroyVditor(); clearTimeout(onEditorInput._t) }
+  if (state.view === 'knowledge' && v !== 'knowledge') { searchSeq++; if (state.searchStatus === 'loading') state.searchStatus = 'idle' }
   saveScroll(state.view)
   state.view = v
   viewSeq++
@@ -730,11 +781,12 @@ function setView(v){
   if (v !== 'notes') { state.selectedNoteId = null; state.selectedFolder = null }
   if (v !== 'attachments') state.selectedAttachmentId = null
   render()
+  return true
 }
 function render(){
   applyLang()
-  document.querySelectorAll('.nav button').forEach(b => b.classList.toggle('active', b.dataset.view === state.view))
-  document.querySelectorAll('#bottomNav .bn-item').forEach(b => b.classList.toggle('active', b.dataset.view === state.view))
+  document.querySelectorAll('.nav button').forEach(b => { b.classList.toggle('active', b.dataset.view === state.view); if (b.dataset.view === state.view) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current') })
+  document.querySelectorAll('#bottomNav .bn-item').forEach(b => { b.classList.toggle('active', b.dataset.view === state.view); if (b.dataset.view === state.view) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current') })
   const pageTitle = $('#pageTitle')
   if (pageTitle) {
     let title = isMobile() ? (state.view === 'attachments' ? t('sources') : t(state.view)) : 'PKW'
@@ -753,7 +805,7 @@ function render(){
 
 // ── Overview ────────────────────────────────────────────────────────────────
 function renderOverviewFrom(s){
-  const integ = s.integration === 'ready'
+  const integ = s.configuration ? s.configuration === 'configured' : s.integration === 'ready'
   const rows = [
     '<div class="stat"><div class="n">' + s.notes + '</div><div class="l">' + esc(t('overviewNotes')) + '</div></div>',
     '<div class="stat"><div class="n">' + s.attachments + '</div><div class="l">' + esc(t('overviewAttachments')) + '</div></div>',
@@ -761,7 +813,7 @@ function renderOverviewFrom(s){
     '<div class="stat"><div class="n">' + s.pendingSync + '</div><div class="l">' + esc(t('overviewPendingSync')) + '</div></div>',
     '<div class="stat"><div class="n">' + s.syncErrors + '</div><div class="l">' + esc(t('overviewSyncErrors')) + '</div></div>',
   ]
-  const integBadge = '<span class="badge ' + (integ ? 'ok' : 'warn') + '">' + (integ ? t('connected') : (s.credential === 'configured' ? t('unavailable') : t('notConfigured'))) + '</span>'
+  const integBadge = configurationBadge(s) || '<span class="badge ' + (integ ? 'ok' : 'warn') + '">' + (integ ? t('connected') : t('notConfigured')) + '</span>'
   const recentHtml = (s.recent || []).length ? (s.recent || []).map(r => '<div class="tree-row" data-action="' + (r.kind === 'note' ? 'open-note' : 'open-attachment') + '" data-id="' + esc(r.id) + '"><span class="nm">' + esc(r.title) + '</span></div>').join('') : '<div class="empty">' + esc(t('noRecent')) + '</div>'
   $('#main').innerHTML = '<h2>' + esc(t('overviewTitle')) + '<span class="sub">' + esc(s.workspaceName || '') + '</span></h2>' +
     '<div class="toolbar"><button class="btn primary" data-action="new-note">+ ' + esc(t('newNote')) + '</button><button class="btn" data-action="sync-now">' + esc(t('syncNow')) + '</button><button class="btn" data-action="reconcile">' + esc(t('reconcile')) + '</button></div>' +
@@ -791,7 +843,7 @@ function detailWorkspace(s){
 
 // ── Notes tree ──────────────────────────────────────────────────────────────
 function renderTreeToolbar(){
-  const sel = '<select id="sortSel" class="sel"><option value="manual"' + (state.sortMode === 'manual' ? ' selected' : '') + '>' + esc(t('sortManual')) + '</option><option value="title"' + (state.sortMode === 'title' ? ' selected' : '') + '>' + esc(t('sortTitle')) + '</option><option value="updated"' + (state.sortMode === 'updated' ? ' selected' : '') + '>' + esc(t('sortUpdated')) + '</option></select>'
+  const sel = '<select id="sortSel" class="sel" aria-label="' + esc(t('sortMode')) + '"><option value="manual"' + (state.sortMode === 'manual' ? ' selected' : '') + '>' + esc(t('sortManual')) + '</option><option value="title"' + (state.sortMode === 'title' ? ' selected' : '') + '>' + esc(t('sortTitle')) + '</option><option value="updated"' + (state.sortMode === 'updated' ? ' selected' : '') + '>' + esc(t('sortUpdated')) + '</option></select>'
   $('#treeToolbar').innerHTML = '<div class="tree-toolbar"><button class="btn small primary" data-action="new-note">+ ' + esc(t('newNote')) + '</button><button class="btn small" data-action="new-folder">+ ' + esc(t('newFolder')) + '</button></div><div class="tree-toolbar" style="border-top:0">' + esc(t('sortMode')) + ' ' + sel + '</div>'
   $('#sortSel').addEventListener('change', (e) => { state.sortMode = e.target.value; localStorage.setItem('pkw-sort', state.sortMode); renderTree() })
 }
@@ -812,11 +864,11 @@ function renderTreeNodes(nodes){ if (!nodes.length) return ''; return nodes.map(
 function renderFolderNode(n){
   const sel = state.selectedFolder === n.path ? ' active' : ''
   const collapsed = state.collapsed.has(n.path)
-  return '<div><div class="tree-row folder ' + sel + '" data-action="select-folder" data-path="' + esc(n.path) + '"><span class="tw" data-action="toggle-folder" data-path="' + esc(n.path) + '">' + (collapsed ? '▸' : '▾') + '</span><span class="ic">📁</span><span class="nm">' + esc(n.name) + '</span></div><div class="tree-children" data-folder="' + esc(n.path) + '"' + (collapsed ? ' style="display:none"' : '') + '>' + renderTreeNodes(n.children || []) + '</div></div>'
+  return '<div><div class="tree-row folder ' + sel + '" data-action="select-folder" data-path="' + esc(n.path) + '"><button type="button" class="tw" data-action="toggle-folder" data-path="' + esc(n.path) + '" aria-label="' + esc(t(collapsed ? 'expandFolder' : 'collapseFolder', { name: n.name })) + '" aria-expanded="' + !collapsed + '">' + (collapsed ? '▸' : '▾') + '</button><span class="ic" aria-hidden="true">📁</span><button type="button" class="nm row-action" data-action="select-folder" data-path="' + esc(n.path) + '">' + esc(n.name) + '</button></div><div class="tree-children" data-folder="' + esc(n.path) + '"' + (collapsed ? ' style="display:none"' : '') + '>' + renderTreeNodes(n.children || []) + '</div></div>'
 }
 function renderNoteNode(n){
   const sel = state.selectedNoteId === n.noteId ? ' active' : ''
-  return '<div class="tree-row note ' + sel + '" data-action="open-note" data-id="' + esc(n.noteId) + '"><span class="tw"></span><span class="ic">📄</span><span class="nm note-title" data-id="' + esc(n.noteId) + '">' + esc(n.title || n.relativePath) + '</span> <span class="syncbadge" data-sync="note:' + esc(n.noteId) + '">' + syncBadgeHtml(n.sync) + '</span></div>'
+  return '<div class="tree-row note ' + sel + '" data-action="open-note" data-id="' + esc(n.noteId) + '"><span class="tw"></span><span class="ic">📄</span><button type="button" class="nm note-title row-action" data-action="open-note" data-id="' + esc(n.noteId) + '">' + esc(n.title || n.relativePath) + '</button> <span class="syncbadge" data-sync="note:' + esc(n.noteId) + '">' + syncBadgeHtml(n.sync) + '</span></div>'
 }
 function renderDetail(){
   if (state.view !== 'notes') return
@@ -833,9 +885,9 @@ function renderDetail(){
 function explorerNoteRow(n, checked){
   const key = 'note:' + n.noteId
   return '<div class="tree-row note explorer-item" data-action="explorer-note" data-id="' + esc(n.noteId) + '">' +
-    '<input type="checkbox" class="exp-check" data-action="explorer-toggle" data-key="' + esc(key) + '"' + (checked ? ' checked' : '') + '>' +
+    '<input type="checkbox" class="exp-check" aria-label="' + esc(t('selectItem', { name: n.title || n.relativePath })) + '" data-action="explorer-toggle" data-key="' + esc(key) + '"' + (checked ? ' checked' : '') + '>' +
     '<span class="ic">📄</span>' +
-    '<span class="nm note-title" data-id="' + esc(n.noteId) + '">' + esc(n.title || n.relativePath) + '</span>' +
+    '<button type="button" class="nm note-title row-action" data-action="explorer-note" data-id="' + esc(n.noteId) + '">' + esc(n.title || n.relativePath) + '</button>' +
     '<span class="spacer" style="flex:1 1 auto"></span>' +
     '<span class="muted small">' + esc(fmtStamp(n.updatedAt)) + '</span>' +
     '<span class="syncbadge" data-sync="note:' + esc(n.noteId) + '">' + syncBadgeHtml(n.sync) + '</span>' +
@@ -845,9 +897,9 @@ function explorerNoteRow(n, checked){
 function explorerFolderRow(f, checked){
   const key = 'folder:' + f.path
   return '<div class="tree-row folder explorer-item" data-action="explorer-folder" data-path="' + esc(f.path) + '">' +
-    '<input type="checkbox" class="exp-check" data-action="explorer-toggle" data-key="' + esc(key) + '"' + (checked ? ' checked' : '') + '>' +
+    '<input type="checkbox" class="exp-check" aria-label="' + esc(t('selectItem', { name: f.name })) + '" data-action="explorer-toggle" data-key="' + esc(key) + '"' + (checked ? ' checked' : '') + '>' +
     '<span class="ic">📁</span>' +
-    '<span class="nm">' + esc(f.name) + '</span>' +
+    '<button type="button" class="nm row-action" data-action="explorer-folder" data-path="' + esc(f.path) + '">' + esc(f.name) + '</button>' +
     '<span class="muted small">' + esc(t('notesCount', { n: folderNoteCount(f) })) + '</span>' +
     '<span class="spacer" style="flex:1 1 auto"></span>' +
     '<span class="chev">›</span>' +
@@ -918,6 +970,7 @@ function explorerToggleSel(key){
   if (state.explorerSel.has(key)) state.explorerSel.delete(key)
   else state.explorerSel.add(key)
   renderNotesExplorer()
+  const input = document.querySelector('.exp-check[data-key="' + CSS.escape(key) + '"]'); if (input) input.focus()
 }
 function explorerClearSel(){ state.explorerSel.clear(); renderNotesExplorer() }
 function explorerSelectAllScope(){
@@ -993,8 +1046,8 @@ function mobileFolderCard(f){
   const count = folderNoteCount(f)
   return '<div class="mfolder" data-action="mobile-folder-open" data-path="' + esc(f.path) + '">' +
     '<span class="mfolder-ic">📁</span>' +
-    '<div class="mfolder-main"><div class="mfolder-name">' + esc(f.name) + '</div><div class="mfolder-count">' + esc(t('notesCount', { n: count })) + '</div></div>' +
-    '<button class="mnote-more" data-action="mobile-folder-menu" data-path="' + esc(f.path) + '">⋯</button>' +
+    '<div class="mfolder-main"><button type="button" class="mfolder-name row-action mobile-open" data-action="mobile-folder-open" data-path="' + esc(f.path) + '">' + esc(f.name) + '</button><div class="mfolder-count">' + esc(t('notesCount', { n: count })) + '</div></div>' +
+    '<button class="mnote-more" aria-label="' + esc(t('itemActions', { name: f.name })) + '" data-action="mobile-folder-menu" data-path="' + esc(f.path) + '">⋯</button>' +
     '<span class="chev">›</span></div>'
 }
 function renderMobileNotesHome(){
@@ -1007,7 +1060,7 @@ function renderMobileNotesHome(){
   const unfiledHtml = unfiled.length ? unfiled.map(n => mobileNoteRow(n)).join('') : '<div class="empty small">' + esc(t('emptyNotes')) + '</div>'
   const recentHtml = recent.length ? recent.map(n => mobileNoteRow(n)).join('') : ''
   $('#main').innerHTML =
-    '<div class="toolbar"><button class="btn primary" data-action="mobile-notes-new">+</button></div>' +
+    '<div class="toolbar"><button class="btn primary" data-action="mobile-notes-new" aria-label="' + esc(t('newNote')) + '">+</button></div>' +
     '<div class="list-section">' + esc(t('foldersSection')) + '</div>' + foldersHtml +
     '<div class="list-section">' + esc(t('unfiled')) + '</div>' + unfiledHtml +
     (recentHtml ? '<div class="list-section">' + esc(t('recentNotes')) + '</div>' + recentHtml : '')
@@ -1018,7 +1071,7 @@ function renderMobileFolderView(path){
   const folderNotes = notes.filter(n => parentOfPath(n.relativePath || '') === path)
   const name = path.split('/').pop()
   $('#main').innerHTML =
-    '<div class="toolbar"><button class="btn" data-action="mobile-notes-back">← ' + esc(t('back')) + '</button><span class="mfolder-title">📁 ' + esc(name) + '</span><span class="spacer" style="flex:1"></span><button class="btn primary" data-action="mobile-notes-new">+</button><button class="btn small" data-action="mobile-folder-menu" data-path="' + esc(path) + '">⋯</button></div>' +
+    '<div class="toolbar"><button class="btn" data-action="mobile-notes-back">← ' + esc(t('back')) + '</button><span class="mfolder-title">📁 ' + esc(name) + '</span><span class="spacer" style="flex:1"></span><button class="btn primary" data-action="mobile-notes-new" aria-label="' + esc(t('newNote')) + '">+</button><button class="btn small" data-action="mobile-folder-menu" data-path="' + esc(path) + '">⋯</button></div>' +
     (folderNotes.length ? folderNotes.map(n => mobileNoteRow(n)).join('') : '<div class="empty">' + esc(t('emptyNotes')) + '</div>')
 }
 function mobileNotesScopeSheet(){
@@ -1130,7 +1183,8 @@ function renderTableMd(tblLines){
 let vditor = null // active Vditor instance (Live mode only)
 function destroyVditor(){ if (setupLiveAttachmentRewrite._obs) { setupLiveAttachmentRewrite._obs.disconnect(); setupLiveAttachmentRewrite._obs = null } if (vditor) { try { vditor.destroy() } catch (e) {} vditor = null } }
 
-async function openNote(noteId){
+async function openNote(noteId, loaded = null){
+  if (!await prepareNoteNavigation()) return
   const seq = ++noteSeq
   state.selectedNoteId = noteId; state.selectedFolder = null
   destroyVditor()
@@ -1139,8 +1193,8 @@ async function openNote(noteId){
   $('#main').innerHTML = '<div class="empty">' + esc(t('loading')) + '</div>'
   $('#detail').innerHTML = '' // clear stale Inspector immediately
   try {
-    const d = await api('getNote', { noteId })
-    if (seq !== noteSeq || state.view !== 'notes') return // stale: a newer note/view owns the surface
+    const d = loaded || await api('getNote', { noteId })
+    if (seq !== noteSeq || state.view !== 'notes' || state.selectedNoteId !== noteId) return // stale: a newer note/view owns the surface
     state.editor = { noteId, persistedMarkdown: d.markdown, body: d.body || '', frontmatter: d.frontmatter || '', dirty: false, saving: false, mode: isMobile() ? 'reading' : (localStorage.getItem('pkw-editor-mode') || 'live'), observedRevision: d.note && d.note.observedRevision, contentHash: d.note && d.note.contentHash }
     state.noteAttachments = d.attachments || []
     // Expand parent folders so the opened Note is visible + highlighted in the tree
@@ -1155,7 +1209,7 @@ async function openNote(noteId){
     await renderTree()
     kickSyncPoll(d.sync)
   } catch (e) {
-    if (seq !== noteSeq) return // stale error: ignore
+    if (seq !== noteSeq || state.view !== 'notes' || state.selectedNoteId !== noteId) return // stale error: ignore
     if (String(e.message || '').indexOf('file is missing') >= 0) renderMissingNote(noteId)
     else { $('#main').innerHTML = '<div class="empty">' + esc(t('genericError')) + ': ' + esc(e.message) + '</div>'; $('#detail').innerHTML = '' }
   }
@@ -1202,11 +1256,12 @@ function renderEditorShell(d){
     (d.note && d.note.attachmentBacked ? '<button class="btn" data-action="upgrade-companion" data-id="' + esc(state.selectedNoteId) + '">' + esc(t('companionUpgrade')) + '</button>' : '<button class="btn" data-action="sync-note" data-id="' + esc(state.selectedNoteId) + '">' + esc(t('syncNow')) + '</button>') +
     '<button class="btn" data-action="selection-to-task">' + esc(t('selectionToTask')) + '</button>' +
     '<button class="btn danger" data-action="delete-note">' + esc(t('del')) + '</button>' +
-    '<span id="saveStatus" class="saved">✓ ' + esc(t('saved')) + '</span>' +
+    '<span id="saveStatus" class="saved" role="status" aria-live="polite">✓ ' + esc(t('saved')) + '</span>' +
     '<span class="spacer"></span>' + modeBtn('live', 'modeLive') + modeBtn('source', 'modeSource') + modeBtn('reading', 'modeReading') +
     '</div>' +
     '<div class="editor-head"><span class="title note-title" data-id="' + esc(state.selectedNoteId) + '">' + esc(fm.title || d.note.title || '') + '</span><span class="path">' + esc(d.note.relativePath) + '</span></div>' +
     (state.searchContext ? searchContextBanner(state.searchContext) : '') +
+    '<div id="noteSaveError"></div>' +
     '<div id="editorPane">' +
       (mode === 'live' ? '<div id="vditor" style="min-height:calc(100vh - 180px)"><div class="empty">' + esc(t('editorLoading')) + '</div></div>' : '') +
       (mode === 'source' ? '<textarea id="editor" aria-label="Markdown">' + esc(d.markdown) + '</textarea>' : '') +
@@ -1393,7 +1448,8 @@ function vditorToolbar(){
   return [
     'undo', 'redo', '|',
     'headings', '|',
-    'bold', 'italic', 'strike', 'mark', '|',
+    'bold', 'italic', 'strike',
+    { name: 'mark', tip: t('highlight'), icon: ic('H'), click: () => editorWrap('==', '==') }, '|',
     'list', 'ordered-list', 'check', '|',
     'quote',
     { name: 'callout', tip: t('slashCallout'), icon: ic('💡'), toolbar: calloutTypes.map(ty => ({ name: 'callout-' + ty, tip: ty, icon: ic('💡'), click: (_e, vd) => vd.insertValue('> [!' + ty + ']\\n> ') })) },
@@ -1480,6 +1536,8 @@ function slashMenu(){
   ]
 }
 function uploadVditorFiles(files, asImage){
+  const editor = state.editor, noteId = state.selectedNoteId, instance = vditor
+  if (!noteId) return
   for (const file of files) {
     showActivity(t('uploadProgress') + ' · ' + esc(file.name))
     const reader = new FileReader()
@@ -1487,13 +1545,14 @@ function uploadVditorFiles(files, asImage){
       const base64 = String(reader.result).split(',')[1]
       // Note-editor upload → NOTE-SCOPED: this file belongs to the note being
       // edited, so it does NOT become an independent WeKnora Knowledge.
-      api('uploadAttachment', { filename: file.name, mimeType: file.type || 'application/octet-stream', contentBase64: base64, knowledgeMode: 'note-scoped', ownerNoteId: state.selectedNoteId }).then(up => {
+      api('uploadAttachment', { filename: file.name, mimeType: file.type || 'application/octet-stream', contentBase64: base64, knowledgeMode: 'note-scoped', ownerNoteId: noteId }).then(up => {
         // Reference the STORED filename (up.filename), never the raw File.name, so the
         // managed link always resolves to the persisted binary. The filename segment
         // is URL-encoded (space/()/#/…/CJK/emoji) so it is a valid Markdown destination.
         const ref = 'attachments/' + up.attachmentId + '/' + encodeAttachmentPath(up.filename)
         const md = asImage === false ? '[' + up.filename + '](' + ref + ')' : '![](' + ref + ')'
-        if (vditor) vditor.insertValue(md)
+        if (editor === state.editor && state.selectedNoteId === noteId && instance && instance === vditor) instance.insertValue(md)
+        else toast(t('uploadRetained'), 'ok')
         refreshHeader()
         clearActivity()
       }).catch(e => { clearActivity(); toast(t('uploadFailed') + ': ' + e.message, 'err') })
@@ -1509,16 +1568,54 @@ function getEditorValue(){
 }
 function onEditorInput(){
   const v = getEditorValue().value
-  const dirty = state.editor.mode === 'source' ? (v !== state.editor.persistedMarkdown) : (v !== state.editor.body)
+  const dirty = state.editor.conflict || (state.editor.mode === 'source' ? (v !== state.editor.persistedMarkdown) : (v !== state.editor.body))
   if (dirty !== state.editor.dirty) { state.editor.dirty = dirty; updateSaveStatus() }
   clearTimeout(onEditorInput._t)
-  onEditorInput._t = setTimeout(autosave, 1500)
+  if (!state.editor.conflict) onEditorInput._t = setTimeout(autosave, 1500)
+  else updateNoteConflict()
 }
 function updateSaveStatus(){
+  updateNoteConflict()
   const st = $('#saveStatus'); if (!st) return
   if (state.editor.saving) { st.className = 'saving'; st.textContent = '… ' + t('saving') }
   else if (state.editor.dirty) { st.className = 'dirty'; st.textContent = '● ' + t('unsaved') }
   else { st.className = 'saved'; st.textContent = '✓ ' + t('saved') }
+}
+function updateNoteConflict(){
+  const box = $('#noteSaveError')
+  if (!box) return
+  if (!state.editor.conflict) { box.innerHTML = ''; return }
+  if (!box.querySelector('#noteConflictDraft')) {
+    box.innerHTML = '<div class="note-conflict"><p role="alert">' + esc(t('noteConflict')) + '</p><div class="toolbar"><button class="btn primary" data-action="copy-note-draft">' + esc(t('copyDraft')) + '</button><button class="btn" data-action="reload-note-conflict">' + esc(t('reloadNote')) + '</button></div><details><summary>' + esc(t('manualCopyDraft')) + '</summary><textarea id="noteConflictDraft" readonly aria-label="' + esc(t('manualCopyDraft')) + '"></textarea></details></div>'
+  }
+  const draft = box.querySelector('#noteConflictDraft')
+  if (draft) draft.value = getEditorValue().value
+  const reload = box.querySelector('[data-action="reload-note-conflict"]')
+  if (reload) { reload.disabled = !!state.editor.reloading; reload.textContent = t(state.editor.reloading ? 'loading' : 'reloadNote') }
+}
+async function copyNoteDraft(){
+  try { await navigator.clipboard.writeText(getEditorValue().value); toast(t('attCopied'), 'ok') }
+  catch (e) {
+    toast(t('copyDraftFailed'), 'warn')
+    const draft = $('#noteConflictDraft')
+    if (draft) { draft.closest('details').open = true; draft.focus(); draft.select() }
+  }
+}
+async function reloadConflictedNote(){
+  if (!state.editor.conflict || state.editor.reloading || !confirm(t('reloadNoteConfirm'))) return
+  const editor = state.editor, noteId = state.selectedNoteId, draft = getEditorValue().value
+  const navigation = ++navigationSeq
+  editor.reloading = true; updateNoteConflict()
+  try {
+    // Do not destroy the only remaining draft until the latest note was read.
+    const latest = await api('getNote', { noteId })
+    if (navigation !== navigationSeq || editor !== state.editor || noteId !== state.selectedNoteId) return
+    if (getEditorValue().value !== draft) { toast(t('reloadDraftChanged'), 'warn'); return }
+    clearTimeout(onEditorInput._t)
+    editor.dirty = false; editor.conflict = false
+    await openNote(noteId, latest)
+  } catch (e) { if (editor === state.editor) toast(t('reloadFailed'), 'err') }
+  finally { editor.reloading = false; if (editor === state.editor) updateNoteConflict() }
 }
 function applyPreviewHighlight(pv){
   const q = state.highlightText
@@ -1556,11 +1653,13 @@ function renderPreview(){
   }).catch(() => { finish() })
 }
 async function openWikiTarget(target){
+  const navigation = navigationSeq
   // resolve [[Note]] target to a stable NoteId via the tree/title index.
   try {
     const tree = await api('getTree', { sortMode: 'manual' })
+    if (navigation !== navigationSeq) return
     const found = findNoteByTitleOrPath(tree.root, target)
-    if (found) { setView('notes'); openNote(found.noteId) }
+    if (found) { if (await setView('notes')) await openNote(found.noteId) }
     else toast(t('noHits', { q: target }), 'warn')
   } catch (e) { toast(t('genericError') + ': ' + e.message, 'err') }
 }
@@ -1584,12 +1683,11 @@ function detailNote(d){
     '<div class="kv"><b>' + esc(t('path')) + '</b> <span class="v mono">' + esc(d.note.relativePath) + '</span></div>' +
     (d.attachments && d.attachments.length ? '<h3>' + esc(t('refAttachments')) + '</h3><div class="kv">' + d.attachments.length + '</div><div id="noteAttachmentKnowledge"></div>' : '') +
     '<h3>' + esc(t('outline')) + '</h3><div class="outline" id="outlineBox">' + outlineHtml(d.markdown) + '</div>' +
-    '<h3>' + esc(t('syncSection')) + '</h3><div id="detailSync">' + syncBadgeHtml(s) + '</div>' +
+    '<h3>' + esc(t('syncSection')) + '</h3><div id="detailSync">' + syncBadgeHtml(s) + configurationHint(s) + '</div>' +
     (s && s.error ? '<div class="kv"><b>' + esc(t('lastError')) + '</b> <span class="v">' + esc(s.error) + '</span></div>' : '') +
     '<h3>' + esc(t('advanced')) + '</h3>' +
     '<div class="kv"><b>' + esc(t('noteId')) + '</b> <span class="v mono">' + esc(d.note.noteId) + '</span></div>' +
-    '<div class="kv"><b>' + esc(t('revision')) + '</b> ' + d.note.observedRevision + '</div>' +
-    (s && s.knowledgeId ? '<div class="kv"><b>' + esc(t('knowledgeId')) + '</b> <span class="v mono">' + esc(s.knowledgeId) + '</span></div>' : '')
+    '<div class="kv"><b>' + esc(t('revision')) + '</b> ' + d.note.observedRevision + '</div>'
 }
 function renderNoteAttachmentKnowledge(d){
   if (!d.attachments || !d.attachments.length) return
@@ -1600,7 +1698,11 @@ function renderNoteAttachmentKnowledge(d){
     if (rows) box.innerHTML = '<h3>' + esc(t('summary')) + '</h3>' + rows
   }).catch(() => {})
 }
-function procStateBadge(state){
+function procStateBadge(state, sync){
+  if (state === 'failed' || (sync && sync.error)) return '<span class="badge err">' + esc(t('attFailed')) + '</span>'
+  const config = configurationBadge(sync)
+  if (config) return config
+  if (sync && sync.pending) return syncBadgeHtml(sync)
   if (state === 'ready') return '<span class="badge ok">' + esc(t('attReady')) + '</span>'
   if (state === 'failed') return '<span class="badge err">' + esc(t('attFailed')) + '</span>'
   if (state === 'optimizing') return '<span class="badge warn">' + esc(t('attOptimizing')) + '</span>'
@@ -1633,7 +1735,7 @@ function renderSources(noteId, attachments){
           '<div class="muted small">' + esc(s.mimeType || '') + (s.sizeBytes != null ? ' · ' + fmtSize(s.sizeBytes) : '') + '</div>' +
           summary +
         '</div>' +
-        '<div class="bk-att-side">' + procStateBadge(s.processingState) + ownerHint + retryBtn + '</div>' +
+        '<div class="bk-att-side">' + procStateBadge(s.processingState, s) + ownerHint + retryBtn + '</div>' +
         '</div>'
     }).join('')
     box.innerHTML = '<h3>' + esc(t('sourceFiles')) + ' <button class="btn small" data-action="refresh-sources">' + esc(t('refresh')) + '</button></h3>' + rows
@@ -1673,38 +1775,74 @@ function outlineHtml(md){
   return items.map(h => '<a class="lv' + h.lv + '" href="#preview" data-outline="' + esc(h.text) + '">' + esc(h.text) + '</a>').join('')
 }
 
+// A save owns one editor object and one immutable content snapshot. The UI may
+// change while the RPC is pending; only the submitted snapshot becomes saved.
+let noteSavePromise = null
+async function persistNote(editor){
+  if (noteSavePromise) return noteSavePromise
+  if (editor !== state.editor || state.selectedNoteId !== editor.noteId) return false
+  const noteId = editor.noteId
+  if (editor.conflict) return false
+  const value = getEditorValue()
+  const expected = { ...(editor.observedRevision !== undefined ? { expectedRevision: editor.observedRevision } : {}), ...(editor.contentHash ? { expectedContentHash: editor.contentHash } : {}) }
+  editor.saving = true; updateSaveStatus()
+  const request = (async () => {
+    try {
+      const saved = value.kind === 'body'
+        ? await api('saveNoteBody', { noteId, body: value.value, ...expected })
+        : await api('saveNote', { noteId, markdown: value.value, ...expected })
+      if (editor !== state.editor || state.selectedNoteId !== noteId) return false
+      if (value.kind === 'body') editor.body = value.value
+      else editor.persistedMarkdown = value.value
+      const current = getEditorValue()
+      editor.dirty = current.kind !== value.kind || current.value !== value.value
+      editor.observedRevision = saved.observedRevision
+      if (saved.contentHash) editor.contentHash = saved.contentHash
+      refreshHeader(); renderTree(); kickSyncPoll({ pending: true })
+      return true
+    } catch (e) {
+      if (editor === state.editor) {
+        editor.dirty = true
+        if (e.code === 'PKW_NOTE_CONFLICT') { editor.conflict = true; clearTimeout(onEditorInput._t) }
+        toast(editor.conflict ? t('noteConflict') : t('saveFailed') + ': ' + e.message, 'err')
+      }
+      return false
+    } finally {
+      editor.saving = false
+      if (editor === state.editor) updateSaveStatus()
+    }
+  })()
+  noteSavePromise = request
+  try { return await request }
+  finally { if (noteSavePromise === request) noteSavePromise = null }
+}
+async function flushNoteEdits(){
+  const editor = state.editor
+  if (state.view !== 'notes' || state.selectedNoteId === null) return true
+  clearTimeout(onEditorInput._t)
+  while (editor.dirty || editor.saving) {
+    if (!await persistNote(editor)) return false
+    if (editor !== state.editor) return false
+  }
+  return true
+}
+async function prepareNoteNavigation(){
+  const request = ++navigationSeq
+  const saved = await flushNoteEdits()
+  if (!saved && request === navigationSeq) toast(t(state.editor.conflict ? 'noteConflict' : 'navigationSaveFailed'), 'err')
+  return saved && request === navigationSeq
+}
 async function saveNote(){
   if (state.selectedNoteId === null) return
-  const btn = document.querySelector('[data-action="save-note"]'); if (btn) btn.disabled = true
-  state.editor.saving = true; updateSaveStatus()
-  try {
-    const v = getEditorValue()
-    const d = v.kind === 'body'
-      ? await api('saveNoteBody', { noteId: state.selectedNoteId, body: v.value })
-      : await api('saveNote', { noteId: state.selectedNoteId, markdown: v.value })
-    if (v.kind === 'body') state.editor.body = v.value
-    else state.editor.persistedMarkdown = v.value
-    state.editor.dirty = false; state.editor.saving = false; updateSaveStatus()
-    toast(t('localSavedR', { r: d.observedRevision }), 'ok')
-    refreshHeader(); renderTree()
-    kickSyncPoll({ pending: true })
-  } catch (e) { state.editor.saving = false; updateSaveStatus(); toast(t('saveFailed') + ': ' + e.message, 'err') }
-  finally { if (btn) btn.disabled = false }
+  if (await flushNoteEdits()) toast(t('localSaved'), 'ok')
 }
 async function autosave(){
-  if (!state.editor.dirty || state.selectedNoteId === null || state.editor.saving) return
-  state.editor.saving = true; updateSaveStatus()
-  try {
-    const v = getEditorValue()
-    const d = v.kind === 'body'
-      ? await api('saveNoteBody', { noteId: state.selectedNoteId, body: v.value })
-      : await api('saveNote', { noteId: state.selectedNoteId, markdown: v.value })
-    if (v.kind === 'body') state.editor.body = v.value
-    else state.editor.persistedMarkdown = v.value
-    state.editor.dirty = false; state.editor.saving = false; updateSaveStatus()
-    refreshHeader()
-    kickSyncPoll({ pending: true })
-  } catch (e) { state.editor.saving = false; updateSaveStatus(); toast(t('autosaveFailed'), 'err') }
+  if (!state.editor.dirty || state.selectedNoteId === null || state.editor.saving || state.editor.conflict) return
+  const editor = state.editor
+  if (await persistNote(editor) && editor === state.editor && editor.dirty) {
+    clearTimeout(onEditorInput._t)
+    onEditorInput._t = setTimeout(autosave, 1500)
+  }
 }
 
 // ── Adaptive remote-sync polling (never rebuilds editor/tree) ───────────────
@@ -1722,14 +1860,17 @@ function scheduleSyncPoll(){
 }
 async function pollSync(){
   if (document.hidden || state.view !== 'notes' || state.selectedNoteId === null) return
+  const noteId = state.selectedNoteId, editor = state.editor
+  const current = () => state.view === 'notes' && state.selectedNoteId === noteId && state.editor === editor
   try {
-    const d = await api('getNote', { noteId: state.selectedNoteId })
-    const syncEl = $('#detailSync'); if (syncEl) syncEl.innerHTML = syncBadgeHtml(d.sync)
-    patchNoteBadge(state.selectedNoteId, d.sync)
+    const d = await api('getNote', { noteId })
+    if (!current()) return
+    const syncEl = $('#detailSync'); if (syncEl) syncEl.innerHTML = syncBadgeHtml(d.sync) + configurationHint(d.sync)
+    patchNoteBadge(noteId, d.sync)
     if (isTerminalSync(d.sync)) { syncPollDelay = 2000; return } // done: stop polling
     syncPollDelay = Math.min(15000, Math.max(3000, Date.now() - syncPollStarted < 20000 ? 3000 : syncPollDelay * 1.6))
     scheduleSyncPoll()
-  } catch (e) { scheduleSyncPoll() }
+  } catch (e) { if (current()) scheduleSyncPoll() }
 }
 function patchNoteBadge(noteId, sync){
   const el = document.querySelector('[data-sync="note:' + CSS.escape(noteId) + '"]')
@@ -1738,6 +1879,7 @@ function patchNoteBadge(noteId, sync){
 
 // ── Create / rename / delete / folders / order (change-driven) ──────────────
 async function newNote(){
+  if (!await prepareNoteNavigation()) return
   const title = prompt(t('newNotePrompt'), '')
   if (title === null) return
   const slug = (title.trim() || 'untitled').replace(/[\\/:*?"<>|#]+/g, ' ').trim().replace(/\s+/g, '-').slice(0, 60) || 'untitled'
@@ -1745,7 +1887,7 @@ async function newNote(){
   const rel = base + slug + '.md'
   try {
     const r = await api('createNote', { relativePath: rel, markdown: '# ' + (title.trim() || 'New note') + '\\n' })
-    state.selectedNoteId = r.noteId; state.selectedFolder = null
+    if (state.view !== 'notes' && !await setView('notes')) return
     await openNote(r.noteId); refreshHeader()
   } catch (e) { toast(t('genericError') + ': ' + e.message, 'err') }
 }
@@ -1758,10 +1900,11 @@ function inlineRenameTitle(targetEl, noteId){
   targetEl.replaceWith(input)
   input.focus(); input.select()
   let done = false
-  const finish = () => {
+  const finish = async () => {
     if (done) return; done = true
     const v = input.value.trim()
     if (!v || v === current) { input.replaceWith(targetEl); return }
+    if (!await prepareNoteNavigation()) { input.replaceWith(targetEl); return }
     api('renameNoteTitle', { noteId, title: v }).then(() => {
       toast(t('localSaved'), 'ok'); refreshHeader()
       if (state.selectedNoteId === noteId) openNote(noteId)
@@ -1780,6 +1923,7 @@ function renameNote(noteId){
   inlineRenameTitle(target, id)
 }
 async function delNote(noteId){
+  if (!await prepareNoteNavigation()) return
   const id = noteId || state.selectedNoteId
   if (id === null) return
   if (!confirm(t('delNoteConfirm'))) return
@@ -1801,20 +1945,24 @@ function removeMissingNote(noteId){
   })
 }
 async function newFolder(parentPath){
+  if (!await prepareNoteNavigation()) return
   const name = prompt(t('createFolderPrompt'), ''); if (!name || !name.trim()) return
   const path = (parentPath ? parentPath + '/' : '') + name.trim()
-  try { await api('createFolder', { path }); state.selectedFolder = path; state.selectedNoteId = null; toast(t('folderCreated'), 'ok'); await renderTree(); renderDetail(); renderFolderMain(path) }
+  const navigation = navigationSeq
+  try { await api('createFolder', { path }); if (navigation !== navigationSeq || !await prepareNoteNavigation()) return; state.selectedFolder = path; state.selectedNoteId = null; toast(t('folderCreated'), 'ok'); await renderTree(); renderDetail(); renderFolderMain(path) }
   catch (e) { toast(t('genericError') + ': ' + e.message, 'err') }
 }
 function renderFolderMain(path){
   renderDesktopExplorer(path)
 }
 async function renameFolder(path){
+  if (!await prepareNoteNavigation()) return
   const name = prompt(t('folderRenamePrompt'), path.split('/').pop()); if (!name || !name.trim()) return
   const parent = parentOfPath(path); const newPath = (parent ? parent + '/' : '') + name.trim()
   if (newPath === path) return
   const span = mutSpan('renameFolder')
-  try { await api('renameFolder', { path, newPath }); span.mark('rpc'); state.selectedFolder = newPath; await renderTree(); span.mark('tree'); renderDetail(); renderFolderMain(newPath); span.end('paint') }
+  const navigation = navigationSeq
+  try { await api('renameFolder', { path, newPath }); span.mark('rpc'); if (navigation !== navigationSeq || !await prepareNoteNavigation()) return; state.selectedNoteId = null; state.selectedFolder = newPath; await renderTree(); span.mark('tree'); renderDetail(); renderFolderMain(newPath); span.end('paint') }
   catch (e) { span.end('error'); toast(t('genericError') + ': ' + e.message, 'err') }
 }
 function folderCounts(path){
@@ -1829,6 +1977,7 @@ function folderCounts(path){
   return { notes, subfolders }
 }
 async function deleteFolder(path){
+  if (!await prepareNoteNavigation()) return
   const { notes, subfolders } = folderCounts(path)
   const name = path.split('/').pop()
   if (notes === 0 && subfolders === 0) {
@@ -1846,6 +1995,7 @@ async function moveNote(noteId){
     (async () => {
       span.mark('pick')
       try {
+        if (!await prepareNoteNavigation()) return
         const cur = await api('getNote', { noteId }); span.mark('getNote')
         const rel = (target ? target + '/' : '') + cur.note.relativePath.split('/').pop()
         if (rel === cur.note.relativePath) { span.end('noop'); return }
@@ -1916,7 +2066,7 @@ function attRowHtml(a){
     '<span class="nm">' + esc(a.filename) + '</span>' +
     '<span class="muted small">' + esc(attTypeOf(a.mimeType)) + '</span>' +
     '<span class="muted small">' + fmtSize(a.sizeBytes) + '</span>' +
-    procStateBadge(a.processingState) +
+    procStateBadge(a.processingState, a) +
     sourceOwnerBadge(a) +
     attCompanionHtml(a) +
     '</div>'
@@ -1928,7 +2078,7 @@ function attCardHtml(a){
     '<div class="att-thumbwrap">' + (attTypeOf(a.mimeType) === 'image' ? '<img class="att-thumb" src="/pkw/attachment/' + esc(a.attachmentId) + '" alt="" loading="lazy">' : '<span class="att-ic big">📄</span>') + '</div>' +
     '<div class="att-card-name">' + esc(a.filename) + '</div>' +
     '<div class="muted small">' + fmtSize(a.sizeBytes) + ' · ' + esc(fmtStamp(a.createdAt)) + '</div>' +
-    '<div>' + procStateBadge(a.processingState) + sourceOwnerBadge(a) + '</div>' +
+    '<div>' + procStateBadge(a.processingState, a) + sourceOwnerBadge(a) + '</div>' +
     '</div>'
 }
 function attToolbarHtml(){
@@ -1937,7 +2087,7 @@ function attToolbarHtml(){
   const sortLabel = state.attSort === 'name' ? t('attSortName') : state.attSort === 'size' ? t('attSortSize') : t('attSortRecent')
   return '<div class="toolbar">' +
     (isMobile() ? '' : '<button class="btn small" data-action="att-mode" data-mode="' + (state.attMode === 'list' ? 'grid' : 'list') + '">' + esc(state.attMode === 'list' ? t('attGridView') : t('attListView')) + '</button>') +
-    '<input id="attSearch" type="search" placeholder="' + esc(t('attSearchPlaceholder')) + '" value="' + esc(state.attQuery) + '">' +
+    '<input id="attSearch" type="search" aria-label="' + esc(t('attSearchPlaceholder')) + '" placeholder="' + esc(t('attSearchPlaceholder')) + '" value="' + esc(state.attQuery) + '">' +
     typeBtn('all', t('attTypeAll')) + typeBtn('image', t('attTypeImage')) + typeBtn('document', t('attTypeDocument')) + typeBtn('other', t('attTypeOther')) +
     (isMobile()
       ? '<button class="btn small" data-action="att-sort-sheet">' + esc(t('attSort')) + '：' + esc(sortLabel) + ' ▼</button>'
@@ -2011,11 +2161,12 @@ async function refreshSourcesData(){
   } catch (e) { /* offline → background worker will retry */ }
 }
 async function openAttachment(id){
+  const request = ++attachmentSeq
   const seq = viewSeq
   state.selectedAttachmentId = id
   try {
     const d = await api('getAttachment', { attachmentId: id })
-    if (seq !== viewSeq || state.view !== 'attachments') return
+    if (request !== attachmentSeq || seq !== viewSeq || state.view !== 'attachments' || state.selectedAttachmentId !== id) return
     const a = d.attachment, c = d.companionNote
     const owners = d.owners || []
     const summaryHtml = d.summary
@@ -2030,7 +2181,7 @@ async function openAttachment(id){
     const reparseBtn = (d.processingState === 'failed' || d.processingState === 'ready')
       ? ' <button class="btn small" data-action="reparse-attachment" data-id="' + esc(id) + '">' + esc(t('reparse')) + '</button>'
       : ''
-    const html = '<h3>' + esc(t('sources')) + '</h3>' + procStateBadge(d.processingState) +
+    const html = '<h3>' + esc(t('sources')) + '</h3>' + procStateBadge(d.processingState, d) + configurationHint(d) +
       '<div class="kv"><b>' + esc(t('mime')) + '</b> <span class="v mono">' + esc(a.mimeType) + '</span></div>' +
       '<div class="kv"><b>' + esc(t('size')) + '</b> <span class="v">' + fmtSize(a.sizeBytes) + '</span></div>' +
       '<div class="kv"><b>' + esc(t('updated')) + '</b> <span class="v">' + esc(fmtStamp(a.createdAt)) + '</span></div>' +
@@ -2047,7 +2198,7 @@ async function openAttachment(id){
       '<h3>' + esc(t('details')) + '</h3><div class="kv"><b>' + esc(t('attachmentId')) + '</b> <span class="v mono">' + esc(a.attachmentId) + '</span></div>'
     if (isMobile()) mobileDetail(a.filename, html)
     else $('#detail').innerHTML = html
-  } catch (e) { toast(t('genericError') + ': ' + e.message, 'err') }
+  } catch (e) { if (request === attachmentSeq && seq === viewSeq && state.selectedAttachmentId === id) toast(t('genericError') + ': ' + e.message, 'err') }
 }
 function fileToBase64(file){
   return new Promise((resolve, reject) => {
@@ -2066,7 +2217,7 @@ async function uploadFileBinary(file, indexable){
 // ── Companion Note (idempotent Host orchestration; local-first, never waits on WeKnora) ──
 async function ensureCompanionForAttachment(id, folder){
   const r = await api('createCompanionNote', { attachmentId: id, folder: folder || '' })
-  if (r.created === false) { toast(t('attOpenedExisting'), 'ok'); setView('notes'); openNote(r.noteId); return r }
+  if (r.created === false) { toast(t('attOpenedExisting'), 'ok'); if (await setView('notes')) await openNote(r.noteId); return r }
   toast(t('attCreatedNote'), 'ok')
   await refreshAttachments(); refreshHeader()
   if (state.view === 'notes') renderTree()
@@ -2074,7 +2225,7 @@ async function ensureCompanionForAttachment(id, folder){
 }
 async function openCompanionForAttachment(id){
   const c = await api('getCompanionNote', { attachmentId: id }).catch(() => null)
-  if (c && c.noteId) { setView('notes'); openNote(c.noteId) }
+  if (c && c.noteId) { if (await setView('notes')) await openNote(c.noteId) }
   else toast(t('attNoCompanion'), 'warn')
 }
 async function previewAttachment(id){
@@ -2331,7 +2482,7 @@ function renderMobileTasks(){
 function mobileCompletedTaskRow(x){
   return '<div class="mtask done" data-action="open-task-detail" data-id="' + esc(x.taskId) + '">' +
     '<span class="mtask-check">✓</span>' +
-    '<div class="mtask-main"><div class="mtask-title">' + esc(x.title) + '</div>' +
+    '<div class="mtask-main"><button type="button" class="mtask-title row-action mobile-open" data-action="open-task-detail" data-id="' + esc(x.taskId) + '">' + esc(x.title) + '</button>' +
     (x.completedAt ? '<div class="mtask-due muted">' + esc(fmtStamp(x.completedAt)) + '</div>' : '') + '</div>' +
     '</div>'
 }
@@ -2533,17 +2684,46 @@ function renderKnowledgeView(){
   $('#treeToolbar').innerHTML = ''; $('#detail').innerHTML = ''
   const q = state.searchQuery || ''
   $('#main').innerHTML = '<h2>' + esc(t('knowledgeBrowseTitle')) + '</h2>' +
-    '<div class="toolbar"><input id="kbSearch" placeholder="' + esc(t('searchPlaceholder')) + '" value="' + esc(q) + '" style="flex:1;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--panel);color:var(--text-primary)">' +
-    (q ? '<button class="btn" data-action="kb-clear-search">' + esc(t('cancel')) + '</button>' : '') +
-    '</div><div id="kbBody"></div>'
-  const input = $('#kbSearch')
-  if (input) input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { const v = input.value.trim(); if (v) runSearch(v) } })
+    '<form id="kbSearchForm" class="toolbar" role="search"><label class="sr-only" for="kbSearch">' + esc(t('search')) + '</label>' +
+    '<input id="kbSearch" type="search" placeholder="' + esc(t('searchPlaceholder')) + '" value="' + esc(q) + '">' +
+    '<button class="btn primary" type="submit">' + esc(t('search')) + '</button>' +
+    '<button class="btn" id="kbClearSearch" type="button" data-action="kb-clear-search"' + (q ? '' : ' hidden') + '>' + esc(t('searchBackHome')) + '</button>' +
+    '</form><div id="kbSearchStatus" role="status" aria-live="polite"></div><div id="kbBody" aria-busy="false"></div>'
+  $('#kbSearchForm').addEventListener('submit', (e) => {
+    e.preventDefault()
+    const query = $('#kbSearch').value.trim()
+    if (query) runSearch(query)
+    else clearKnowledgeSearch()
+  })
   if (q) {
-    if (state.searchResults) { const html = searchCardsHtml(state.searchResults); $('#kbBody').innerHTML = html || '<div class="empty">' + esc(t('noHits', { q })) + '</div>' }
-    else $('#kbBody').innerHTML = '<div class="empty">' + esc(t('searching')) + '</div>'
-    return
+    if (state.searchStatus === 'idle') runSearch(q)
+    else renderKnowledgeSearchState()
+  } else renderKnowledgeBrowseInto()
+}
+function renderKnowledgeSearchState(){
+  const box = $('#kbBody')
+  if (!box || state.view !== 'knowledge') return
+  const status = $('#kbSearchStatus'), clear = $('#kbClearSearch')
+  if (clear) clear.hidden = false
+  box.setAttribute('aria-busy', state.searchStatus === 'loading' ? 'true' : 'false')
+  if (state.searchStatus === 'loading') {
+    if (status) status.textContent = t('searching')
+    box.innerHTML = '<div class="empty"><span class="spinner" aria-hidden="true"></span> ' + esc(t('searching')) + '</div>'
+  } else if (state.searchStatus === 'error') {
+    if (status) status.textContent = t('searchFailed')
+    box.innerHTML = '<div class="empty"><p>' + esc(t('searchOfflineHint')) + '</p><button class="btn primary" data-action="kb-retry-search">' + esc(t('retry')) + '</button>' +
+      '<details class="search-error"><summary>' + esc(t('searchErrorDetails')) + '</summary><p class="mono">' + esc(state.searchError) + '</p></details></div>'
+  } else {
+    const results = state.searchResults || []
+    if (status) status.textContent = t('searchResultsCount', { q: state.searchQuery, n: results.length })
+    box.innerHTML = results.length ? '<p class="kb-section-hint">' + esc(t('searchEvidenceHint')) + '</p>' + searchCardsHtml(results) : '<div class="empty">' + esc(t('noHits', { q: state.searchQuery })) + '</div>'
   }
-  renderKnowledgeBrowseInto()
+}
+function clearKnowledgeSearch(){
+  searchSeq++
+  state.searchQuery = ''; state.searchResults = null; state.searchStatus = 'idle'; state.searchError = ''
+  renderKnowledgeView()
+  const input = $('#kbSearch'); if (input) input.focus()
 }
 // Unified knowledge card: shared by Knowledge Discovery browse + Search results
 // so "finding knowledge" reads identically regardless of entry point. Exposes
@@ -2560,7 +2740,7 @@ function knowledgeCardHtml(c){
   const snippetHtml = snippets.slice(0, 2).map(s => '<div class="snippet">' + esc(s) + '</div>').join('')
   if (isMobile() && c.open) {
     return '<div class="hit hit-clickable" data-action="' + esc(c.open.action) + '" data-id="' + esc(c.open.id) + '"' + (c.reasonAttrs || '') + '>' +
-      '<div class="t">' + esc(c.title) + (c.badges || '') + '<span class="chev">›</span></div>' +
+      '<div class="t"><button type="button" class="row-action mobile-open" data-action="' + esc(c.open.action) + '" data-id="' + esc(c.open.id) + '"' + (c.reasonAttrs || '') + '>' + esc(c.title) + '</button>' + (c.badges || '') + '</div>' +
       snippetHtml +
       '<div class="ref"><span class="meta">' + meta.join(' · ') + '</span></div>' +
       '</div>'
@@ -2577,7 +2757,7 @@ async function renderKnowledgeBrowseInto(){
   if (!box) return
   const card = (it) => {
     const badges = (it.attachmentCount ? '<span class="badge">' + esc(t('attachmentsN', { n: it.attachmentCount })) + '</span>' : '') +
-      (it.indexed ? '<span class="badge ok">' + esc(t('knowledgeIndexed')) + '</span>' : (it.pending ? '<span class="badge warn">' + esc(t('knowledgePending')) + '</span>' : ''))
+      knowledgeBadge(it)
     return knowledgeCardHtml({
       title: it.title || it.relativePath || '',
       snippet: it.summary,
@@ -2612,12 +2792,12 @@ async function renderKnowledgeBrowseInto(){
   else { box.innerHTML = '<div class="empty">' + esc(t('loading')) + '</div>'; viewMark('shell', 'cache=miss') }
   try {
     const list = await api('listKnowledge', {})
-    if (seq !== viewSeq) return
+    if (seq !== viewSeq || state.view !== 'knowledge' || state.searchQuery || box !== $('#kbBody')) return
     state.knowledgeCache = list
     draw()
     viewMark('data-ready')
   } catch (e) {
-    if (seq !== viewSeq) return
+    if (seq !== viewSeq || state.view !== 'knowledge' || state.searchQuery || box !== $('#kbBody')) return
     if (box) box.innerHTML = '<div class="empty">' + esc(t('knowledgeOffline')) + '</div><div class="empty"><button class="btn" data-action="knowledge-tab" data-tab="browse">' + esc(t('retry')) + '</button></div>'
   }
 }
@@ -2661,20 +2841,25 @@ function renderSearchResults(q, results){
   $('#main').innerHTML = '<h2>' + esc(t('search')) + '<span class="sub">' + esc(q) + '</span></h2>' + searchCardsHtml(results)
 }
 async function runSearch(q){
+  const request = ++searchSeq, view = viewSeq
   state.searchQuery = q
   state.searchResults = null
-  const box = $('#kbBody')
-  if (box) box.innerHTML = '<div class="empty">' + esc(t('searching')) + '</div>'
-  else $('#main').innerHTML = '<div class="empty">' + esc(t('searching')) + '</div>'
+  state.searchStatus = 'loading'; state.searchError = ''
+  renderKnowledgeSearchState()
+  const current = () => request === searchSeq && view === viewSeq && state.view === 'knowledge' && state.searchQuery === q
   try {
     const payload = await api('search', { query: q, limit: 10 })
-    const results = payload && Array.isArray(payload.results) ? payload.results : (Array.isArray(payload) ? payload : [])
-    state.searchResults = results
-    // Dev-only retrieval trace (C4): localize "no hits" to a layer; never in UI.
+    if (!current()) return
+    state.searchResults = payload && Array.isArray(payload.results) ? payload.results : (Array.isArray(payload) ? payload : [])
+    state.searchStatus = 'success'
+    // Dev-only retrieval trace: never render remote IDs or ranking scores.
     if (payload && payload.trace) console.debug('[pkw.retrieval]', payload.trace)
-    if (box) box.innerHTML = searchCardsHtml(results) || '<div class="empty">' + esc(t('noHits', { q })) + '</div>'
-    else renderSearchResults(q, results)
-  } catch (e) { state.searchResults = null; const msg = '<div class="empty">' + esc(t('knowledgeOffline')) + '</div><div class="empty muted">' + esc(e.message || '') + '</div>'; if (box) box.innerHTML = msg; else $('#main').innerHTML = msg }
+    renderKnowledgeSearchState()
+  } catch (e) {
+    if (!current()) return
+    state.searchResults = null; state.searchStatus = 'error'; state.searchError = String(e.message || '')
+    renderKnowledgeSearchState()
+  }
 }
 async function syncNow(){ toast(t('syncingAll'), 'warn'); try { await api('syncNow'); toast(t('ok'), 'ok'); await render() } catch (e) { toast(t('genericError') + ': ' + e.message, 'err') } }
 async function syncEntity(et, id){ try { await api('syncEntity', { entityType: et, entityId: id }); toast(t('ok'), 'ok'); if (et === 'note' && state.selectedNoteId === id) await openNote(id); else await renderTree() } catch (e) { toast(t('genericError') + ': ' + e.message, 'err') } }
@@ -2698,9 +2883,9 @@ function quickSwitch(){
     }
     render()
     input.addEventListener('input', render)
-    listEl.addEventListener('click', (e) => {
+    listEl.addEventListener('click', async (e) => {
       const row = e.target.closest('[data-qsid]')
-      if (row) { overlay.remove(); setView('notes'); openNote(row.dataset.qsid) }
+      if (row) { overlay.remove(); if (await setView('notes')) await openNote(row.dataset.qsid) }
     })
     overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove() })
   })
@@ -2712,22 +2897,23 @@ document.addEventListener('paste', async (e) => {
   // Vditor (Live mode) handles paste via its own upload hook; this manual handler
   // is for Source mode only (a raw textarea with no upload integration).
   if (state.view !== 'notes' || state.selectedNoteId === null || state.editor.mode !== 'source') return
-  const items = (e.clipboardData && e.clipboardData.items) || []
+  const editor = state.editor, noteId = state.selectedNoteId, input = $('#editor')
+  const items = Array.from((e.clipboardData && e.clipboardData.items) || []).filter(item => item.type.indexOf('image/') === 0)
+  if (!items.length) return
+  e.preventDefault()
   for (const item of items) {
-    if (item.type.indexOf('image/') === 0) {
-      const file = item.getAsFile()
-      if (!file) continue
+    const file = item.getAsFile()
+    if (!file) continue
+    try {
       const contentBase64 = await fileToBase64(file)
-      const up = await api('uploadAttachment', { filename: 'paste-' + Date.now() + '.png', mimeType: file.type || 'image/png', contentBase64, knowledgeMode: 'note-scoped', ownerNoteId: state.selectedNoteId })
-      const el = $('#editor')
-      if (el) {
-        // Reference the STORED filename so the managed link resolves to the binary.
+      const up = await api('uploadAttachment', { filename: 'paste-' + Date.now() + '.png', mimeType: file.type || 'image/png', contentBase64, knowledgeMode: 'note-scoped', ownerNoteId: noteId })
+      if (editor === state.editor && state.selectedNoteId === noteId && input && input === $('#editor')) {
         const ref = '![](attachments/' + up.attachmentId + '/' + encodeAttachmentPath(up.filename) + ')'
-        insertAtCursor(el, '\\n' + ref + '\\n')
-      }
-      toast(t('uploadSuccess'), 'ok'); refreshHeader()
-      e.preventDefault()
-    }
+        insertAtCursor(input, '\\n' + ref + '\\n')
+        toast(t('uploadSuccess'), 'ok')
+      } else toast(t('uploadRetained'), 'ok')
+      refreshHeader()
+    } catch (error) { toast(t('uploadFailed') + ': ' + error.message, 'err') }
   }
 })
 function insertAtCursor(el, text){
@@ -2778,10 +2964,10 @@ function mobileActionSheet(title, items){
 function mobileNoteRow(n){
   const folder = (n.relativePath || '').includes('/') ? (n.relativePath).slice(0, (n.relativePath).lastIndexOf('/')) : ''
   return '<div class="mnote" data-action="open-note" data-id="' + esc(n.noteId) + '">' +
-    '<div class="mnote-main"><div class="mnote-title">' + esc(n.title || n.relativePath) + '</div>' +
+    '<div class="mnote-main"><button type="button" class="mnote-title row-action mobile-open" data-action="open-note" data-id="' + esc(n.noteId) + '">' + esc(n.title || n.relativePath) + '</button>' +
     (folder ? '<div class="mnote-folder">' + esc(folder) + '</div>' : '') +
     '<div class="mnote-meta">' + esc(fmtStamp(n.updatedAt)) + ' · ' + syncBadgeHtml(n.sync) + '</div></div>' +
-    '<button class="mnote-more" data-action="mobile-note-menu" data-id="' + esc(n.noteId) + '">⋯</button></div>'
+    '<button class="mnote-more" aria-label="' + esc(t('itemActions', { name: n.title || n.relativePath })) + '" data-action="mobile-note-menu" data-id="' + esc(n.noteId) + '">⋯</button></div>'
 }
 function mobileSourceCard(a){
   const isImage = (a.mimeType || '').indexOf('image/') === 0
@@ -2789,19 +2975,19 @@ function mobileSourceCard(a){
   const summary = a.summary ? '<div class="msrc-summary">' + esc(String(a.summary).slice(0, 120)) + '</div>' : ''
   return '<div class="msrc" data-action="open-attachment" data-id="' + esc(a.attachmentId) + '">' +
     '<div class="msrc-thumbwrap">' + thumb + '</div>' +
-    '<div class="msrc-main"><div class="msrc-name">' + esc(a.filename) + '</div>' +
+    '<div class="msrc-main"><button type="button" class="msrc-name row-action mobile-open" data-action="open-attachment" data-id="' + esc(a.attachmentId) + '">' + esc(a.filename) + '</button>' +
     '<div class="msrc-meta">' + esc(attTypeOf(a.mimeType)) + ' · ' + fmtSize(a.sizeBytes) + '</div>' +
-    '<div class="msrc-badges">' + procStateBadge(a.processingState) + (a.ownerCount ? '<span class="badge">' + esc(t('usedByN', { n: a.ownerCount })) + '</span>' : '<span class="badge warn">' + esc(t('isolated')) + '</span>') + '</div>' +
+    '<div class="msrc-badges">' + procStateBadge(a.processingState, a) + (a.ownerCount ? '<span class="badge">' + esc(t('usedByN', { n: a.ownerCount })) + '</span>' : '<span class="badge warn">' + esc(t('isolated')) + '</span>') + '</div>' +
     summary + '</div>' +
-    '<button class="mnote-more" data-action="mobile-source-menu" data-id="' + esc(a.attachmentId) + '">⋯</button></div>'
+    '<button class="mnote-more" aria-label="' + esc(t('itemActions', { name: a.filename })) + '" data-action="mobile-source-menu" data-id="' + esc(a.attachmentId) + '">⋯</button></div>'
 }
 function mobileTaskCard(x, matrices, inMatrix){
   const badge = (inMatrix ? '' : (x.matrixId ? '<div class="mtask-cat">' + esc(matrixName(matrices, x.matrixId)) + '</div>' : ''))
   const due = x.dueAt ? '<div class="mtask-due">' + esc(dueLabel(x.dueAt)) + '</div>' : ''
   return '<div class="mtask" data-action="open-task-detail" data-id="' + esc(x.taskId) + '">' +
-    '<span class="mtask-check" data-action="toggle-task" data-completed="' + (x.status === 'completed' ? '1' : '0') + '" data-id="' + esc(x.taskId) + '">' + (x.status === 'completed' ? '☑' : '☐') + '</span>' +
-    '<div class="mtask-main"><div class="mtask-title">' + esc(x.title) + '</div>' + badge + due + '</div>' +
-    '<button class="mnote-more" data-action="mobile-task-menu" data-id="' + esc(x.taskId) + '">⋯</button></div>'
+    '<button type="button" class="mtask-check row-action" aria-label="' + esc(x.title) + '" aria-pressed="' + (x.status === 'completed') + '" data-action="toggle-task" data-completed="' + (x.status === 'completed' ? '1' : '0') + '" data-id="' + esc(x.taskId) + '">' + (x.status === 'completed' ? '☑' : '☐') + '</button>' +
+    '<div class="mtask-main"><button type="button" class="mtask-title row-action mobile-open" data-action="open-task-detail" data-id="' + esc(x.taskId) + '">' + esc(x.title) + '</button>' + badge + due + '</div>' +
+    '<button class="mnote-more" aria-label="' + esc(t('itemActions', { name: x.title })) + '" data-action="mobile-task-menu" data-id="' + esc(x.taskId) + '">⋯</button></div>'
 }
 // Full-screen mobile detail (replaces the hidden desktop Inspector on mobile).
 function mobileDetail(title, bodyHtml){
@@ -3055,14 +3241,29 @@ function restoreCellCaret(tableIndex, isHeader, rowIndex, columnIndex){
   const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range)
   vditor.focus()
 }
+function captureEditorSnapshot(){
+  if (state.view !== 'notes' || state.selectedNoteId === null || !['live', 'source'].includes(state.editor.mode)) return null
+  const surface = state.editor.mode === 'live' ? vditor : $('#editor')
+  if (!surface) return null
+  const value = getEditorValue()
+  return { editor: state.editor, noteId: state.selectedNoteId, mode: state.editor.mode, surface, kind: value.kind, value: value.value }
+}
+function acceptEditorSnapshot(snapshot){
+  const current = snapshot && state.view === 'notes' && state.editor === snapshot.editor && state.selectedNoteId === snapshot.noteId && state.editor.mode === snapshot.mode &&
+    (snapshot.mode === 'live' ? vditor : $('#editor')) === snapshot.surface
+  const value = current ? getEditorValue() : null
+  if (!value || value.kind !== snapshot.kind || value.value !== snapshot.value) { toast(t('editorOperationStale'), 'warn'); return false }
+  return true
+}
 function applyTableMutation(cell, op, align){
   if (!vditor) return
   const ctx = resolveCellInEditor(cell); if (!ctx) return
-  const markdown = vditor.getValue()
+  const snapshot = captureEditorSnapshot(); if (!snapshot) return
+  const markdown = snapshot.value
   const irEl = vditor.vditor.ir.element
   const scrollTop = irEl ? irEl.scrollTop : 0
   api('tableMutation', { markdown, op, tableIndex: ctx.tableIndex, isHeader: ctx.isHeader, rowIndex: ctx.rowIndex, columnIndex: ctx.columnIndex, align }).then(r => {
-    if (!vditor || r.unchanged || !r.markdown) return
+    if (!acceptEditorSnapshot(snapshot) || r.unchanged || typeof r.markdown !== 'string') return
     vditor.setValue(r.markdown)
     const el = vditor.vditor.ir.element; if (el && scrollTop) el.scrollTop = scrollTop
     restoreCellCaret(ctx.tableIndex, ctx.isHeader, ctx.rowIndex, ctx.columnIndex)
@@ -3164,15 +3365,19 @@ function appendFootnoteDefinitionAtEnd(key, content){
   el.dispatchEvent(new Event('input'))
 }
 function applyFootnoteEdit(key, content){
-  const md = getEditorValue().value
+  const snapshot = captureEditorSnapshot(); if (!snapshot) return
+  const md = snapshot.value
   api('footnoteEdit', { markdown: md, key, content }).then(r => {
+    if (!acceptEditorSnapshot(snapshot)) return
     if (r.unchanged) { toast(t('genericError'), 'warn'); return }
     setEditorValue(r.markdown); onEditorInput()
   }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
 }
 function applyFootnoteDelete(key){
-  const md = getEditorValue().value
+  const snapshot = captureEditorSnapshot(); if (!snapshot) return
+  const md = snapshot.value
   api('footnoteDelete', { markdown: md, key }).then(r => {
+    if (!acceptEditorSnapshot(snapshot)) return
     setEditorValue(r.markdown); onEditorInput()
   }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
 }
@@ -3225,10 +3430,12 @@ function footnoteModal(title, initial, placeholder, onOk){
   })
 }
 function footnoteDialog(){
-  if (state.selectedNoteId === null) return
+  const snapshot = captureEditorSnapshot(); if (!snapshot) return
   const hasSel = !!(getEditorSelection() || '').trim()
   footnoteModal(t('footnoteInsert'), '', t('footnoteContent'), (content) => {
-    api('nextFootnoteKey', { markdown: getEditorValue().value }).then(r => {
+    if (!acceptEditorSnapshot(snapshot)) return
+    api('nextFootnoteKey', { markdown: snapshot.value }).then(r => {
+      if (!acceptEditorSnapshot(snapshot)) return
       insertFootnoteReference(r.key)
       appendFootnoteDefinitionAtEnd(r.key, content)
       onEditorInput()
@@ -3238,8 +3445,9 @@ function footnoteDialog(){
   if (hint) hint.insertAdjacentHTML('afterbegin', '<p class="muted">' + esc(hasSel ? t('footnoteSelectText') : t('footnoteEmpty')) + '</p>')
 }
 function editFootnoteDialog(key){
-  const cur = footnoteDefinitionContent(getEditorValue().value, key)
-  footnoteModal(t('footnoteEdit'), cur, t('footnoteContent'), (content) => applyFootnoteEdit(key, content))
+  const snapshot = captureEditorSnapshot(); if (!snapshot) return
+  const cur = footnoteDefinitionContent(snapshot.value, key)
+  footnoteModal(t('footnoteEdit'), cur, t('footnoteContent'), (content) => { if (acceptEditorSnapshot(snapshot)) applyFootnoteEdit(key, content) })
 }
 document.addEventListener('contextmenu', (e) => {
   const editorPane = e.target.closest('#editorPane')
@@ -3366,7 +3574,7 @@ document.addEventListener('drop', (e) => {
 })
 
 // ── Delegated events ────────────────────────────────────────────────────────
-document.addEventListener('click', (e) => {
+document.addEventListener('click', async (e) => {
   if (!e.target.closest('#wikiSuggest')) dismissWikiSuggest()
   if (!e.target.closest('#ctxMenu')) dismissContextMenu()
   if (!e.target.closest('#selTaskBtn')) dismissSelButton()
@@ -3390,12 +3598,13 @@ document.addEventListener('click', (e) => {
   }
   const el = e.target.closest('[data-action]'); if (!el) return
   const act = el.dataset.action, id = el.dataset.id, path = el.dataset.path, mode = el.dataset.mode
+  if (['select-folder', 'explorer-up', 'explorer-crumb', 'explorer-open-folder', 'explorer-folder', 'mobile-back-notes', 'set-mode'].includes(act) && !await prepareNoteNavigation()) return
   if (act === 'new-note') newNote()
   else if (act === 'new-note-here') { state.selectedFolder = path; newNote() }
   else if (act === 'new-folder') newFolder(state.selectedFolder || '')
   else if (act === 'new-subfolder') newFolder(path)
-  else if (act === 'open-note') { setView('notes'); if (el.dataset.reason) state.searchContext = { reason: el.dataset.reason, attName: el.dataset.attname || '' }; else state.searchContext = null; openNote(id) }
-  else if (act === 'open-attachment') { setView('attachments'); openAttachment(id) }
+  else if (act === 'open-note') { if (!await setView('notes')) return; if (el.dataset.reason) state.searchContext = { reason: el.dataset.reason, attName: el.dataset.attname || '' }; else state.searchContext = null; openNote(id) }
+  else if (act === 'open-attachment') { if (await setView('attachments')) openAttachment(id) }
   else if (act === 'select-folder') { state.selectedFolder = path; state.selectedNoteId = null; state.explorerSel.clear(); renderTree(); renderFolderMain(path); renderDetail() }
   else if (act === 'explorer-up') { state.selectedFolder = parentOfPath(state.selectedFolder || ''); state.selectedNoteId = null; state.explorerSel.clear(); renderTree(); renderFolderMain(state.selectedFolder || '') }
   else if (act === 'explorer-crumb') { state.selectedFolder = path || null; state.selectedNoteId = null; state.explorerSel.clear(); renderTree(); renderFolderMain(path || '') }
@@ -3408,12 +3617,14 @@ document.addEventListener('click', (e) => {
   else if (act === 'explorer-bulk-trash') explorerBulkTrash()
   else if (act === 'folder-menu') {
     showContextMenu(e.clientX, e.clientY, [
-      { label: t('renameFolder'), action: 'rename-folder', id: path },
-      { label: t('deleteFolder'), action: 'delete-folder', id: path },
+      { label: t('renameFolder'), action: 'rename-folder', path },
+      { label: t('deleteFolder'), action: 'delete-folder', path },
     ])
   }
-  else if (act === 'toggle-folder') { if (state.collapsed.has(path)) state.collapsed.delete(path); else state.collapsed.add(path); const c = document.querySelector('.tree-children[data-folder="' + CSS.escape(path) + '"]'); if (c) { c.style.display = state.collapsed.has(path) ? 'none' : ''; el.textContent = state.collapsed.has(path) ? '▸' : '▾' } }
+  else if (act === 'toggle-folder') { if (state.collapsed.has(path)) state.collapsed.delete(path); else state.collapsed.add(path); const c = document.querySelector('.tree-children[data-folder="' + CSS.escape(path) + '"]'); if (c) { c.style.display = state.collapsed.has(path) ? 'none' : ''; el.textContent = state.collapsed.has(path) ? '▸' : '▾'; el.setAttribute('aria-expanded', String(!state.collapsed.has(path))); el.setAttribute('aria-label', t(state.collapsed.has(path) ? 'expandFolder' : 'collapseFolder', { name: path.split('/').pop() })) } }
   else if (act === 'save-note') saveNote()
+  else if (act === 'copy-note-draft') copyNoteDraft()
+  else if (act === 'reload-note-conflict') reloadConflictedNote()
   else if (act === 'set-mode') { state.editor.mode = mode; localStorage.setItem('pkw-editor-mode', mode); const d = state.editor.noteId; if (d) openNote(d) }
   else if (act === 'rename-note') {
     const nid = id || state.selectedNoteId
@@ -3487,7 +3698,7 @@ document.addEventListener('click', (e) => {
     }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
   }
   else if (act === 'selection-to-task') { const ref = selectionSourceRef(); if (ref) quickTaskDialog(null, [ref], { title: ref.exact.replace(/\\n/g, ' ').trim().slice(0, 60), description: ref.exact }); else toast(t('taskNoTasks'), 'warn') }
-  else if (act === 'open-task-source') { state.highlightText = el.dataset.exact || ''; setView('notes'); openNote(id) }
+  else if (act === 'open-task-source') { if (!await setView('notes')) return; state.highlightText = el.dataset.exact || ''; openNote(id) }
   else if (act === 'toggle-task') {
     const task = (state.tasksCache || []).find(x => x.taskId === id)
     const isSubtask = task && task.parentTaskId !== null
@@ -3517,7 +3728,8 @@ document.addEventListener('click', (e) => {
   else if (act === 'theme-light') setTheme('light')
   else if (act === 'theme-dark') setTheme('dark')
   else if (act === 'knowledge-tab') { renderKnowledgeView() }
-  else if (act === 'kb-clear-search') { state.searchQuery = ''; state.searchResults = null; renderKnowledgeView() }
+  else if (act === 'kb-clear-search') clearKnowledgeSearch()
+  else if (act === 'kb-retry-search') { const query = ($('#kbSearch').value || '').trim() || state.searchQuery; if (query) runSearch(query) }
   else if (act === 'knowledge-view-all') { state.knowledgeShowAll = true; renderKnowledgeBrowseInto() }
   else if (act === 'knowledge-back-home') { state.knowledgeShowAll = false; renderKnowledgeBrowseInto() }
   else if (act === 'mobile-more') {
@@ -3756,6 +3968,7 @@ function taskDetailDialog(taskId){
     const qs = (sel) => modal.querySelector(sel)
     const isActive = () => sessionId === activeTaskDetailSession
     let parentDirty = false
+    let editGeneration = 0
     let saving = false
     let subtaskSubmitting = false
     const isDirty = () => parentDirty
@@ -3766,7 +3979,7 @@ function taskDetailDialog(taskId){
       if (st) { st.className = saving ? 'saving' : (d ? 'dirty' : 'saved'); st.textContent = saving ? ('… ' + t('saving')) : (d ? ('● ' + t('unsaved')) : ('✓ ' + t('saved'))) }
       if (sv) { sv.disabled = !d || saving; sv.textContent = saving ? t('saving') : t('taskSaveEdit') }
     }
-    const markDirty = () => { if (!parentDirty) { parentDirty = true; updateState() } }
+    const markDirty = () => { editGeneration++; if (!parentDirty) { parentDirty = true; updateState() } }
     const renderSubtaskSection = () => {
       const box = qs('#tdSubtasks')
       if (box) box.innerHTML = renderSubRows(subtaskList) || '<span class="muted">' + esc(t('taskNoTasks')) + '</span>'
@@ -3852,6 +4065,7 @@ function taskDetailDialog(taskId){
     const doSave = (andClose) => {
       if (!isActive() || saving) return
       saving = true
+      const submittedGeneration = editGeneration
       updateState()
       const q = Number(qs('#tdQuad').value)
       api('updateTask', { taskId, patch: {
@@ -3861,16 +4075,17 @@ function taskDetailDialog(taskId){
         matrixId: qs('#tdMatrix').value || null,
         important: q === 1 || q === 2,
         urgent: q === 1 || q === 3,
-        ...(qs('#tdSched').value ? { scheduledAt: qs('#tdSched').value } : {}),
-        ...(qs('#tdDue').value ? { dueAt: qs('#tdDue').value } : {}),
+        scheduledAt: qs('#tdSched').value || '',
+        dueAt: qs('#tdDue').value || '',
         tags: (qs('#tdTags').value || '').split(',').map(s => s.trim()).filter(Boolean),
       } }).then(() => {
         if (!isActive()) return
-        parentDirty = false
+        parentDirty = editGeneration !== submittedGeneration
         saving = false
         updateState()
         refreshTasks()
-        if (andClose) close()
+        if (parentDirty) toast(t('taskNewerEdits'), 'warn')
+        else if (andClose) close()
       }).catch(e => {
         if (!isActive()) return
         saving = false
@@ -3989,7 +4204,7 @@ $('#mobileMoreBtn').addEventListener('click', () => { mobileActionSheet(t('mobil
   { label: t('themeDark'), action: 'theme-dark' },
 ]) })
 $('#pageTitle').addEventListener('click', () => { if (isMobile() && state.view === 'notes' && state.selectedNoteId === null && state.mobileNotesFolder === null) mobileNotesScopeSheet() })
-window.addEventListener('beforeunload', (e) => { if (state.editor.dirty && state.selectedNoteId !== null) { e.preventDefault(); e.returnValue = '' } })
+window.addEventListener('beforeunload', (e) => { if ((state.editor.dirty || state.editor.saving) && state.selectedNoteId !== null) { e.preventDefault(); e.returnValue = '' } })
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { refreshHeader(); if (state.view === 'notes') { renderTree(); if (state.selectedNoteId) kickSyncPoll({ pending: true }) } } })
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (currentThemeMode() === 'system') applyTheme('system') })
 applyTheme()

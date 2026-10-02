@@ -53,6 +53,37 @@ loopback registry, installs an isolated profile, and verifies:
 This is a local installation/integration check. Its HTTP route host is a test
 adapter, not the production DSH process or browser acceptance.
 
+## Isolated browser preview
+
+With the same `DSH_HARNESS_ROOT`, run `pnpm preview`. It builds and verifies the
+tarballs, then prints a `PREVIEW_URL` bound to `127.0.0.1`. Open that address to
+try the actual installed UI with disposable sample notes, SQLite and files.
+WeKnora is intentionally unavailable; no production configuration or user data
+is loaded. Stop with Ctrl+C to dispose the test host and remove the temporary
+installation and workspace. This is a development preview, not a production
+server or a deployment command.
+
+## Read-only target inventory
+
+The deployment side can collect the following evidence after fetching this
+repository through GitHub. Only Node is required; no package installation or
+service restart is performed by this command:
+
+```sh
+node scripts/inspect-profile.mjs \
+  --profile /root/.dsh/profiles/web \
+  --harness /opt/deepseek-harness
+```
+
+Use the real target paths. The JSON reports installed PKW/host versions and entry
+hashes, available UI artifact/backup hashes, and the Harness commit when the
+supplied directory is its Git root. Unresolved packages and a missing source
+commit are reported explicitly. Entry hashes are an inventory aid, not proof
+of every host dependency or service behavior. The command does not read notes,
+databases, environment variables, registry credentials or service configuration;
+it does not copy UI source. Actual UI snapshots, storage location/schema and
+service commands still need a separate deployment-side handoff.
+
 ## Review manual UI patches before activation
 
 Have the deployment side commit sanitized, read-only snapshots of current

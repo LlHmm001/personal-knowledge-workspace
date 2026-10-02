@@ -5,10 +5,14 @@ import { createServer } from 'node:http'
 import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
+import { parseArgs } from 'node:util'
 import { repoRoot } from './harness-config.mjs'
 import { packageList, run, stagePackages } from './deployment.mjs'
+import { runWebSmoke } from './packed-web-smoke.mjs'
+import { inspectProfile } from './inspect-profile.mjs'
 
 const harness = resolve(process.env.DSH_HARNESS_ROOT || '/opt/deepseek-harness')
+const { values } = parseArgs({ options: { preview: { type: 'boolean', default: false } } })
 const directory = await mkdtemp(join(tmpdir(), 'pkw-packed-'))
 let registry
 try {
@@ -73,11 +77,19 @@ try {
     }
   }
   assert.deepEqual([...peers], [], 'Harness checkout is missing declared peers')
+  const inventory = await inspectProfile(profile, harness)
+  assert.equal(inventory.pkw.length, 10)
+  assert.ok(inventory.pkw.every(pkg => pkg.version === '0.1.1-pack-check'))
+  assert.ok(inventory.host.every(pkg => pkg.entrySha256?.length === 64))
+  assert.equal(inventory.uiArtifacts.length, 1)
   await run(process.execPath, [join(repoRoot, 'scripts/check-runtime-imports.mjs'), '--profile', profile, '--version', '0.1.1-pack-check'], profile)
   await run(process.execPath, [join(repoRoot, 'scripts/packed-web-smoke.mjs'), '--profile', profile, '--version', '0.1.1-pack-check'], profile)
   await writeFile(join(profile, 'consumer.ts'), `import { NoteId, quadrantOf } from '@deepseek-ai/dsh-pkw-domain'\nconst id: string = NoteId('note_example')\nconst q: number = quadrantOf({ important: true, urgent: false })\n// @ts-expect-error branded id is not a number\nconst invalid: number = NoteId('note_example')\nvoid [id, q, invalid]\n`)
   await run(process.execPath, [join(repoRoot, 'node_modules/typescript/bin/tsc'), '--noEmit', '--strict', '--skipLibCheck', '--module', 'NodeNext', '--target', 'es2024', 'consumer.ts'], profile)
   console.log('PASS: all 10 tarballs installed without PKW sources; plain Node imports, Vditor renderer, artifact hashes, and consumer types verified')
+  if (values.preview) {
+    await runWebSmoke({ profile, version: '0.1.1-pack-check', preview: true })
+  }
 } finally {
   if (registry) await new Promise(resolve => registry.close(resolve))
   await rm(directory, { recursive: true, force: true })

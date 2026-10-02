@@ -2,6 +2,7 @@
 
 > **后续工程进展**：构建、部署与测试更新见
 > [DELIVERY_STATUS.md](DELIVERY_STATUS.md) 和 [BUILD_AND_DEPLOY.md](BUILD_AND_DEPLOY.md)。
+> 2026-10-02 三团队专业升级范围与验收见 [upgrade/PRODUCT_PLAN.md](upgrade/PRODUCT_PLAN.md)。
 > 下文的“无 build 脚本 / 基线不绿”保留为接手时快照；当前完成状态以上述分层证据为准。
 
 > **这份文档是给"接手并升级这个项目"的 agent/工程师看的。** 它回答四件事：

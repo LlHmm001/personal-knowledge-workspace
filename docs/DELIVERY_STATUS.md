@@ -1,5 +1,27 @@
 # Delivery status — P0 build and reliability work
 
+## 2026-10-02 upgrade update
+
+Three teams completed two rounds of local reliability and interaction upgrades:
+Note identity/trash and conditional saves, editor/Task delayed-response safety,
+Task reference and restoration rules, honest sync configuration states, safer
+attachment downloads, keyboard entry points, preview and target inventory.
+Final local verification: **359 Vitest tests + 7 tooling tests passed; 5 real
+WeKnora tests skipped; typecheck passed; 10 packages / 56 repeatable emitted files;
+packed installation and real HTTP checks passed**.
+
+The final browser spot checks verified task-title routing, persistent date
+clearing, dark-theme button readability, keyboard Note entry, configuration
+messages, and the 390px read-only Note layout. This is not full browser, mobile
+hardware or accessibility acceptance. See [UPGRADE_DELIVERY.md](upgrade/UPGRADE_DELIVERY.md)
+and [ACCEPTANCE_MATRIX.md](upgrade/ACCEPTANCE_MATRIX.md) for exact evidence.
+
+The user selected private personal spaces plus shared team spaces. The proposed
+roles, authorization and isolation plan is in [COLLABORATION_DESIGN.md](upgrade/COLLABORATION_DESIGN.md);
+multiplayer authentication, membership and storage isolation are **not implemented**.
+Production, target UI patch backflow and the Harness-dependent CI job still
+require separate evidence. The tables below retain the old build-delivery baseline.
+
 Base: GitHub `main@62f57a2`. This records the developer-machine evidence; it does
 not supersede the frozen model in HANDOVER §4 or claim a production deployment.
 
@@ -7,10 +29,10 @@ not supersede the frozen model in HANDOVER §4 or claim a production deployment.
 | --- | --- | --- | --- | --- | --- | --- |
 | P0-1 build | Locally verified | Verify against the production Harness | Ten packages emit repeatable lib entries | 10 packages / 56 emitted files repeat identically; packed install passed | Medium | Base remains a metadata bundle |
 | P0-2 deployment | Implemented; target acceptance blocked | Obtain target execution entry and run dry-run | Publish/install/restart and actual `/pkw` acceptance | Tooling recovery tests and isolated packed installation | High | No target profile or registry changed |
-| P0-3 manual UI backflow | Blocked on production snapshots | Fetch sanitized ui.js and backups through GitHub | Itemized diffs and source backports | No production artifact available | High | ui.ts is unchanged; deploy gate prevents unaudited overwrite |
+| P0-3 manual UI backflow | Blocked on production snapshots | Fetch sanitized ui.js and backups through GitHub | Itemized diffs and source backports | No production artifact available | High | ui.ts now has the reviewed source upgrades; deploy gate still prevents unaudited production overwrite |
 | P0-4 sync/tests | Locally verified | Verify against the production Harness | Stable suite with supported storage contract tests enabled | Five final full runs: 256 Vitest + 6 tooling passed per run; 5 external tests skipped | High | Historical data conversion is still unavailable |
 | P1-5 portability | Harness seam completed; bundle injection pending | Verify actual extension loader/config contract | External config injection on target | Custom DSH_HARNESS_ROOT works locally | Medium | Read-only deployment snapshots are unchanged |
-| P1-6 worker operations | Not started | Complete P0 prerequisites | Retry/stalled/retired-KB/stale-Knowledge acceptance | Not run | High | No remote cleanup introduced |
+| P1-6 worker operations | Error visibility improved; operational recovery incomplete | Complete P0 prerequisites | Retry/stalled/retired-KB/stale-Knowledge acceptance | Current error/recovery projection tests pass; real operational acceptance pending | High | No remote cleanup introduced |
 | P1-7 relevance gate | Not started | Select and verify the target reranker/LLM provider | Real relevance judgments and retrieval regression coverage | Not run | Medium | No threshold tuning substituted for reranking |
 
 ## Baseline and environment
@@ -61,7 +83,7 @@ that old production media are now upgradeable.
 Keep both machines exchanging code/evidence through GitHub. Do not copy this
 developer workspace directly over the production installation.
 
-## Final developer-machine verification
+## Previous developer-machine verification (before 2026-10-02 upgrades)
 
 | Layer | Command / evidence | Result |
 | --- | --- | --- |

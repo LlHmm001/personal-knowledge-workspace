@@ -281,6 +281,20 @@ export interface FolderTrashEntry {
   deletedAt: string
 }
 
+/** Optional optimistic guard for a write derived from an earlier note snapshot. */
+export interface NoteUpdateOptions {
+  expectedRevision?: number
+  expectedContentHash?: string
+}
+
+export class NoteUpdateConflictError extends Error {
+  readonly code = 'PKW_NOTE_CONFLICT'
+  constructor(noteId: NoteId) {
+    super(`pkwNotes: note '${noteId}' changed since it was read; reload before saving`)
+    this.name = 'NoteUpdateConflictError'
+  }
+}
+
 export interface PkwNotesService {
   list(filter?: NoteListFilter): NoteIndexRecord[]
   get(noteId: NoteId): NoteIndexRecord | undefined
@@ -289,7 +303,7 @@ export interface PkwNotesService {
   findNoteById(noteIdStr: string): Promise<string | undefined>
   listMissingNotes(): Promise<Array<{ noteId: string; relativePath: string }>>
   create(input: CreateNoteInput): Promise<NoteIndexRecord>
-  update(noteId: NoteId, markdown: string): Promise<NoteIndexRecord>
+  update(noteId: NoteId, markdown: string, options?: NoteUpdateOptions): Promise<NoteIndexRecord>
   move(noteId: NoteId, newRelativePath: string): Promise<NoteIndexRecord>
   setAttachmentBacked(noteId: NoteId, flag: boolean): Promise<NoteIndexRecord>
   delete(noteId: NoteId): Promise<void>

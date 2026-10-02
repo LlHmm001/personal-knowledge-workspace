@@ -845,6 +845,41 @@ describe('secret redaction', () => {
 // ── Companion Note summary materialization ────────────────────────────────────
 
 describe('companion summary materialization', () => {
+  it('does not overwrite a user save made after the summary reads its note snapshot', async () => {
+    const { attachments, notes, sync, fake } = await boot({ pollMs: 3_600_000 })
+    const note = await notes.create({ relativePath: 'user-edit.md', markdown: '# Original\n' })
+    const attachment = await attachments.importFile({ content: Buffer.from('SUMMARY'), filename: 'summary.txt', mimeType: 'text/plain' })
+    await attachments.setCompanionNote(attachment.id, note.noteId)
+    const knowledgeId = await sync.syncAttachment(attachment.id)
+    fake.files.get(knowledgeId)!.summary = 'Derived summary'
+    fake.files.get(knowledgeId)!.summaryStatus = 'completed'
+    const captured = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    const readDocument = notes.getDocument.bind(notes)
+    const spy = vi.spyOn(notes, 'getDocument').mockImplementationOnce(async id => {
+      const snapshot = await readDocument(id)
+      captured.resolve()
+      await release.promise
+      return snapshot
+    })
+    try {
+      const pending = sync.materializeCompanionSummary(attachment.id)
+      await captured.promise
+      await notes.update(note.noteId, '# User saved newer work\n')
+      release.resolve()
+      const changed = await pending
+      expect((await readDocument(note.noteId)).markdown).toContain('# User saved newer work')
+      expect(changed).toBe(false)
+      expect(await sync.materializeCompanionSummary(attachment.id)).toBe(true)
+      const after = await readDocument(note.noteId)
+      expect(after.markdown).toContain('# User saved newer work')
+      expect(after.markdown).toContain('Derived summary')
+    } finally {
+      release.resolve()
+      spy.mockRestore()
+    }
+  })
+
   it('serializes overlapping summary materializations and writes the canonical note once', async () => {
     const { attachments, notes, sync, fake } = await boot({ pollMs: 3_600_000 })
     const note = await notes.create({ relativePath: 'concurrent.md', markdown: '# Original\n' })

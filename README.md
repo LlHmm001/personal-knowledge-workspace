@@ -66,10 +66,11 @@ pnpm test          # 工具测试 + Vitest；真实 WeKnora 集成需凭据，�
 pnpm build         # 十个包输出 lib/*.js 与声明
 pnpm verify:build  # 重复构建哈希与陈旧产物检查
 pnpm verify:packed # 打包、临时 registry 安装、普通 Node 加载与 HTTP/RPC
+pnpm preview       # 隔离样例工作区；打开输出的 PREVIEW_URL，Ctrl+C 清理临时数据
 ```
 
 > **`pnpm typecheck` 需要 harness checkout。** PKW 的 tsconfig 通过
-> `/opt/deepseek-harness` 这个软链解析 `@deepseek-ai/cordis` / `@deepseek-ai/dsh-*`。
+> `/opt/deepseek-harness` 默认路径解析 `@deepseek-ai/cordis` / `@deepseek-ai/dsh-*`。
 > 本机开发请设置 `DSH_HARNESS_ROOT`，详见 [`docs/HANDOVER.md`](docs/HANDOVER.md) §7。
 
 > 同步并发回归、启用后的 storage 契约测试及未完成项见
@@ -108,6 +109,8 @@ pnpm verify:packed # 打包、临时 registry 安装、普通 Node 加载与 HTT
 - [`docs/CODEBASE_MAP.md`](docs/CODEBASE_MAP.md) — 权威代码地图（包职责、运行时接线、检索核心、已移除模块）。
 - [`docs/PHASE_1_CLOSURE.md`](docs/PHASE_1_CLOSURE.md) — Phase 1 权威收尾记录（frozen 决策、拒绝方向、遗留债）。
 - [`docs/DEBT.md`](docs/DEBT.md) — 已登记债务清单。
+- [`docs/upgrade/PRODUCT_PLAN.md`](docs/upgrade/PRODUCT_PLAN.md) — 三团队升级范围、分期路线与用户验收场景。
+- [`docs/upgrade/UPGRADE_DELIVERY.md`](docs/upgrade/UPGRADE_DELIVERY.md) — 首批源码升级、自动化/浏览器证据及未完成项。
 - [`docs/INDEX.md`](docs/INDEX.md) — 其余专项决策 / 报告的总目录。
 
 ---

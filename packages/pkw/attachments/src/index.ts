@@ -174,7 +174,12 @@ export class AttachmentsService extends Service {
   async open(attachmentId: AttachmentId): Promise<Uint8Array> {
     const record = this.requireTable().get(attachmentId)
     if (record === undefined) throw new Error(`pkwAttachments: unknown attachment '${attachmentId}'`)
-    return this.ctx.fs.readBytes(await this.ctx.fs.resolve(this.handle.attachmentPath(attachmentId, record.filename)), undefined, record.sizeBytes)
+    const target = await this.ctx.fs.resolve(this.handle.attachmentPath(attachmentId, record.filename))
+    const info = await this.ctx.fs.stat(target)
+    // Catalog size is a projection: an external canonical edit may have grown.
+    // Keep a finite bound from this observation; growth during the read still
+    // fails safely at the fs seam and can be retried after a fresh observation.
+    return this.ctx.fs.readBytes(target, undefined, info?.size ?? record.sizeBytes)
   }
 
   async remove(attachmentId: AttachmentId): Promise<void> {
@@ -245,7 +250,7 @@ export class AttachmentsService extends Service {
       // Deleted attachment whose file reappeared: the SAME identity is restored.
       if (record.deletedAt !== undefined) {
         if (!exists) continue
-        const bytes = await this.ctx.fs.readBytes(target, undefined, record.sizeBytes > 0 ? record.sizeBytes + 1 : 1024 * 1024)
+        const bytes = await this.ctx.fs.readBytes(target, undefined, info?.size ?? record.sizeBytes)
         const hash = sha256(bytes)
         const fp = fingerprint(this.config.workspaceId, String(attachmentId), record.relativePath, hash, false)
         const latest = await this.latestFingerprint(String(attachmentId))
@@ -267,7 +272,7 @@ export class AttachmentsService extends Service {
         report.decisions.push({ changeKind: ATTACHMENT_DELETED, attachmentId, operationId: OperationId(`reconcile:${fp}`) })
         continue
       }
-      const bytes = await this.ctx.fs.readBytes(target, undefined, record.sizeBytes > 0 ? record.sizeBytes + 1 : 1024 * 1024)
+      const bytes = await this.ctx.fs.readBytes(target, undefined, info?.size ?? record.sizeBytes)
       const hash = sha256(bytes)
       if (hash === record.sha256) continue
       const fp = fingerprint(this.config.workspaceId, String(attachmentId), record.relativePath, hash, false)
