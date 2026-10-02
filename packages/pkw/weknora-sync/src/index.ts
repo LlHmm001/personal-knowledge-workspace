@@ -9,7 +9,7 @@
  * reverse keys all carry `WorkspaceId + EntityType + EntityId` (or a globally
  * unique KnowledgeId that is itself workspace-tagged in its record).
  *
- * Worker model: `pkw/event.committed` only MARKS an entity dirty (durably); the
+ * Worker model: committed events and durable catalog changes MARK dirty; the
  * worker later reads the CURRENT canonical local state and converges the remote
  * to it — it never replays historical versions. Full reconcile is the
  * eventual-correctness backstop. Remote mutations are serialized per entity;
@@ -317,6 +317,11 @@ export class WeKnoraSyncService extends Service {
   /** Per-entity in-process serialization: one remote mutation per entity at a time. */
   private readonly locks = new Map<string, Promise<void>>()
 
+  /** Short bookkeeping queues, independent of slow remote mutations. */
+  private readonly dirtyWrites = new Map<string, Promise<void>>()
+  /** A pass may acknowledge only changes accepted before that pass started. */
+  private readonly activePasses = new Map<string, { invalidated: boolean }>()
+
   /** Throttle tick for the periodic standalone-attachment processing reconcile. */
   private reconcileTick = 0
 
@@ -326,7 +331,10 @@ export class WeKnoraSyncService extends Service {
 
   protected async [Service.init](): Promise<void> {
     const domain: Domain<typeof weknoraSyncDomainSpec> = await this.ctx.storageDomain.open(weknoraSyncDomainSpec)
-    this.ctx.effect(() => () => domain.close(), 'pkw.weknoraSyncDomainClose')
+    this.ctx.effect(() => async () => {
+      await Promise.all([...this.dirtyWrites.values()])
+      await domain.close()
+    }, 'pkw.weknoraSyncDomainClose')
     this.intents = domain.table('intents')
     this.mappings = domain.table('mappings')
     this.dirty = domain.table('dirty')
@@ -343,6 +351,19 @@ export class WeKnoraSyncService extends Service {
           void this.markDirty(event.aggregateType, event.aggregateId, event.aggregateRevision).catch(() => {})
         }
       }
+    })
+
+    // The event log commits BEFORE the canonical catalog is updated. An early
+    // event hint can therefore be consumed against the previous catalog state.
+    // Domain notifications arrive after durability AND the in-memory snapshot;
+    // this second hint also covers projection repair and metadata-only changes.
+    this.ctx.on('domain/changed', (change) => {
+      const entityType = change.domain === 'pkw_notes' && change.table === 'note_index' ? ENTITY_NOTE
+        : change.domain === 'pkw_attachments' && change.table === 'attachments' ? ENTITY_ATTACHMENT : undefined
+      if (entityType === undefined || change.operation !== 'put') return
+      const value = change.value as { workspaceId?: string }
+      if (String(value.workspaceId) !== this.config.workspaceId) return
+      void this.markDirty(entityType, change.key).catch(() => {})
     })
 
     this.ctx.interval(() => {
@@ -370,7 +391,7 @@ export class WeKnoraSyncService extends Service {
 
     // Restart resume: actively recover dirty/pending/unknown/retryable state,
     // not just wait for a new event.
-    void this.drain().catch(() => {})
+    void this.rearmDeleted().then(() => this.drain()).catch(() => {})
   }
 
   private reqIntents(): KvTable<string, IntentRecord> {
@@ -429,32 +450,61 @@ export class WeKnoraSyncService extends Service {
 
   async markDirty(entityType: string, entityId: string, revision = 0): Promise<void> {
     const key = this.entityKey(entityType, entityId)
-    const existing = this.reqDirty().get(key)
-    await this.reqDirty().put(key, {
-      workspaceId: this.config.workspaceId,
-      entityType,
-      entityId,
-      dirty: true,
-      pendingOperationId: existing?.pendingOperationId,
-      lastEventAt: this.now(),
-      lastEventRevision: Math.max(existing?.lastEventRevision ?? 0, revision),
+    // Invalidate synchronously at receipt, even when the durable write queues
+    // behind an older clear. Revision 0 hints (derived content) count as changes.
+    const pass = this.activePasses.get(key)
+    if (pass !== undefined) pass.invalidated = true
+    await this.withDirtyWrite(key, async () => {
+      const existing = this.reqDirty().get(key)
+      await this.reqDirty().put(key, {
+        workspaceId: this.config.workspaceId,
+        entityType,
+        entityId,
+        dirty: true,
+        pendingOperationId: existing?.pendingOperationId,
+        lastEventAt: this.now(),
+        lastEventRevision: Math.max(existing?.lastEventRevision ?? 0, revision),
+      })
     })
   }
 
   private async clearDirty(key: string): Promise<void> {
-    const rec = this.reqDirty().get(key)
-    if (rec === undefined) return
-    await this.reqDirty().put(key, { ...rec, dirty: false, pendingOperationId: undefined })
+    const pass = this.activePasses.get(key)
+    if (pass === undefined) throw new Error('clearDirty requires an entity sync pass')
+    await this.withDirtyWrite(key, async () => {
+      const rec = this.reqDirty().get(key)
+      if (rec === undefined) return
+      // For example, a note-scoped attachment can have an unfinished legacy
+      // remote DELETE while its derived-content processing has finished.
+      if (this.activeIntent(rec) !== undefined) return
+      await this.reqDirty().put(key, { ...rec, dirty: pass.invalidated, pendingOperationId: undefined })
+    })
   }
 
-  private async putDirty(rec: DirtyRecord): Promise<void> {
-    await this.reqDirty().put(this.entityKey(rec.entityType, rec.entityId), rec)
+  private activeIntent(rec: DirtyRecord | undefined): IntentRecord | undefined {
+    const intent = rec?.pendingOperationId === undefined ? undefined : this.reqIntents().get(rec.pendingOperationId)
+    return intent !== undefined && ![S_COMPLETED, S_SUPERSEDED, S_PERMANENT].includes(intent.state) ? intent : undefined
+  }
+
+  private withDirtyWrite(key: string, fn: () => Promise<void>): Promise<void> {
+    const run = (this.dirtyWrites.get(key) ?? Promise.resolve()).then(fn, fn)
+    const tail = run.then(() => {}, () => {})
+    this.dirtyWrites.set(key, tail)
+    void tail.then(() => {
+      if (this.dirtyWrites.get(key) === tail) this.dirtyWrites.delete(key)
+    })
+    return run
   }
 
   /** Serialize remote mutations per entity; distinct entities run independently. */
   private withEntityLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
     const prev = this.locks.get(key) ?? Promise.resolve()
-    const run = prev.then(fn, fn)
+    const run = prev.then(async () => {
+      await this.dirtyWrites.get(key)
+      const pass = { invalidated: false }
+      this.activePasses.set(key, pass)
+      try { return await fn() } finally { this.activePasses.delete(key) }
+    })
     const tail = run.then(() => {}, () => {})
     this.locks.set(key, tail)
     void tail.then(() => {
@@ -805,21 +855,24 @@ export class WeKnoraSyncService extends Service {
    * upload-time parse status is a snapshot, not a live status.
    */
   async reconcileNonTerminalAttachments(): Promise<number> {
-    const terminal = new Set(['completed', 'failed'])
     let updated = 0
-    for (const [, mapping] of this.reqMappings().entries()) {
-      if (mapping.entityType !== ENTITY_ATTACHMENT || mapping.knowledgeId === undefined) continue
-      const phase = weKnoraKnowledgePhase(mapping.remoteParseStatus, mapping.remoteSummaryStatus)
-      if (phase === 'ready' || phase === 'failed') continue
-      try {
-        const k = await this.ctx.pkwWeKnora.getKnowledge(mapping.knowledgeId)
-        const nextParse = k.parse_status ?? mapping.remoteParseStatus
-        const nextSummary = k.summary_status ?? mapping.remoteSummaryStatus
-        if (nextParse !== mapping.remoteParseStatus || nextSummary !== mapping.remoteSummaryStatus) {
-          await this.putMapping(this.entityKey(ENTITY_ATTACHMENT, mapping.entityId), { ...mapping, remoteParseStatus: nextParse, remoteSummaryStatus: nextSummary, updatedAt: this.now() })
-          updated++
-        }
-      } catch { /* offline → retry next reconcile */ }
+    for (const [key, candidate] of this.reqMappings().entries()) {
+      if (candidate.entityType !== ENTITY_ATTACHMENT) continue
+      await this.withEntityLock(key, async () => {
+        const mapping = this.reqMappings().get(key)
+        if (mapping === undefined || mapping.syncState !== M_SYNCED) return
+        const phase = weKnoraKnowledgePhase(mapping.remoteParseStatus, mapping.remoteSummaryStatus)
+        if (phase === 'ready' || phase === 'failed') return
+        try {
+          const k = await this.ctx.pkwWeKnora.getKnowledge(mapping.knowledgeId)
+          const nextParse = k.parse_status ?? mapping.remoteParseStatus
+          const nextSummary = k.summary_status ?? mapping.remoteSummaryStatus
+          if (nextParse !== mapping.remoteParseStatus || nextSummary !== mapping.remoteSummaryStatus) {
+            await this.putMapping(key, { ...mapping, remoteParseStatus: nextParse, remoteSummaryStatus: nextSummary, updatedAt: this.now() })
+            updated++
+          }
+        } catch { /* offline → retry next reconcile */ }
+      })
     }
     return updated
   }
@@ -883,6 +936,7 @@ export class WeKnoraSyncService extends Service {
   /** Drain dirty entities + resumable intents. Never throws (records outcomes). */
   async drain(): Promise<void> {
     if ((await this.integrationState()) === 'unavailable') return
+    await Promise.all([...this.dirtyWrites.values()])
 
     // Only dirty records drive the worker. The invariant "active intent ⇔
     // dirty:true" holds because armPending() sets dirty:true before any remote
@@ -928,7 +982,7 @@ export class WeKnoraSyncService extends Service {
     const record = this.ctx.pkwNotes.get(noteId)
     if (record === undefined) return undefined
 
-    const mapping = this.reqMappings().get(key)
+    let mapping = this.reqMappings().get(key)
     if (record.deletedAt !== undefined) {
       await this.runRemoteDelete(ENTITY_NOTE, String(noteId), key, mapping)
       return undefined
@@ -945,12 +999,14 @@ export class WeKnoraSyncService extends Service {
       return undefined
     }
 
+    mapping = await this.restoreMapping(key, mapping)
+
     const doc = await this.ctx.pkwNotes.getDocument(noteId)
     // Remote projection = normalized canonical text + note-scoped attachment
     // derived content (bounded). The canonical local Markdown is NEVER changed.
     const { markdown: remoteMarkdown, fingerprint } = await this.noteRemoteProjection(noteId)
 
-    if (mapping !== undefined && mapping.remoteFingerprint === fingerprint) {
+    if (mapping !== undefined && mapping.remoteFingerprint === fingerprint && this.activeIntent(this.reqDirty().get(key)) === undefined) {
       // No-op when already synced; reactivate a stale/deleted mapping on restore.
       if (mapping.syncState !== M_SYNCED) {
         await this.putMapping(key, { ...mapping, syncState: M_SYNCED, updatedAt: this.now() })
@@ -959,10 +1015,7 @@ export class WeKnoraSyncService extends Service {
       return mapping.knowledgeId
     }
 
-    const dirtyRec = this.reqDirty().get(key)
-    const pending = dirtyRec?.pendingOperationId === undefined
-      ? undefined
-      : this.reqIntents().get(dirtyRec.pendingOperationId)
+    const pending = this.activeIntent(this.reqDirty().get(key))
 
     if (mapping === undefined) {
       return pending !== undefined
@@ -990,6 +1043,11 @@ export class WeKnoraSyncService extends Service {
     const dirtyRec = this.reqDirty().get(key)
     let intent = dirtyRec?.pendingOperationId !== undefined ? this.reqIntents().get(dirtyRec.pendingOperationId) : undefined
     if (intent === undefined || intent.operationKind !== 'delete') {
+      if ([...this.reqIntents().entries()].some(([, i]) => i.entityType === entityType && i.entityId === entityId
+        && i.operationKind === 'delete' && i.knowledgeId === mapping.knowledgeId && i.state === S_COMPLETED)) {
+        await this.clearDirty(key)
+        return
+      }
       intent = await this.newIntent({ entityType, entityId, remoteFingerprint: mapping.remoteFingerprint, operationKind: 'delete' })
       await this.armPending(intent)
       return // armed; the next drain executes the DELETE
@@ -1028,6 +1086,25 @@ export class WeKnoraSyncService extends Service {
     }
   }
 
+  /** Restore may race a completed remote delete; the old id is not proof of existence. */
+  private async restoreMapping(key: string, mapping: MappingRecord | undefined): Promise<MappingRecord | undefined> {
+    if (mapping?.syncState !== M_DELETED) return mapping
+    const pending = this.activeIntent(this.reqDirty().get(key))
+    if (pending?.operationKind === 'delete') {
+      await this.recordIntent(pending, { state: S_SUPERSEDED })
+    }
+    try {
+      await this.ctx.pkwWeKnora.getKnowledge(mapping.knowledgeId)
+      return mapping
+    } catch (error) {
+      // Offline/auth failures do not prove existence OR absence. Keep dirty.
+      if (!(error instanceof WeKnoraError && error.kind === 'not_found')) throw error
+    }
+    await this.reqReverse().delete(mapping.knowledgeId)
+    await this.reqMappings().delete(key)
+    return undefined
+  }
+
   private async newIntent(fields: {
     entityType: string
     entityId: string
@@ -1061,14 +1138,18 @@ export class WeKnoraSyncService extends Service {
   }
 
   private async armPending(intent: IntentRecord): Promise<void> {
-    await this.reqDirty().put(this.entityKey(intent.entityType, intent.entityId), {
-      workspaceId: this.config.workspaceId,
-      entityType: intent.entityType,
-      entityId: intent.entityId,
-      dirty: true,
-      pendingOperationId: intent.operationId,
-      lastEventAt: this.now(),
-      lastEventRevision: 0,
+    const key = this.entityKey(intent.entityType, intent.entityId)
+    await this.withDirtyWrite(key, async () => {
+      const existing = this.reqDirty().get(key)
+      await this.reqDirty().put(key, {
+        workspaceId: this.config.workspaceId,
+        entityType: intent.entityType,
+        entityId: intent.entityId,
+        dirty: true,
+        pendingOperationId: intent.operationId,
+        lastEventAt: existing?.lastEventAt ?? this.now(),
+        lastEventRevision: existing?.lastEventRevision ?? 0,
+      })
     })
   }
 
@@ -1320,7 +1401,7 @@ export class WeKnoraSyncService extends Service {
     const key = this.entityKey(ENTITY_ATTACHMENT, String(attachmentId))
     const record = this.ctx.pkwAttachments.get(attachmentId)
     if (record === undefined) return undefined
-    const mapping = this.reqMappings().get(key)
+    let mapping = this.reqMappings().get(key)
 
     // Non-indexable attachments stay local and are never projected to WeKnora.
     if (record.indexable === false) {
@@ -1349,6 +1430,8 @@ export class WeKnoraSyncService extends Service {
       return undefined
     }
 
+    mapping = await this.restoreMapping(key, mapping)
+
     const bytes = await this.ctx.pkwAttachments.open(attachmentId)
     const fingerprint = sha256Bytes(bytes)
     const fileHash = md5Bytes(bytes)
@@ -1360,7 +1443,7 @@ export class WeKnoraSyncService extends Service {
     }
 
     // No-op when synced; reactivate a stale/deleted mapping on restore (same bytes).
-    if (mapping !== undefined && mapping.remoteFingerprint === fingerprint) {
+    if (mapping !== undefined && mapping.remoteFingerprint === fingerprint && this.activeIntent(this.reqDirty().get(key)) === undefined) {
       if (mapping.syncState !== M_SYNCED) {
         await this.putMapping(key, { ...mapping, syncState: M_SYNCED, updatedAt: this.now() })
       }
@@ -1368,10 +1451,7 @@ export class WeKnoraSyncService extends Service {
       return mapping.knowledgeId
     }
 
-    const dirtyRec = this.reqDirty().get(key)
-    const pending = dirtyRec?.pendingOperationId === undefined
-      ? undefined
-      : this.reqIntents().get(dirtyRec.pendingOperationId)
+    const pending = this.activeIntent(this.reqDirty().get(key))
 
     if (mapping === undefined) {
       return pending !== undefined && (pending.state === S_UNKNOWN || pending.state === S_RUNNING || pending.state === S_PENDING)
@@ -1506,14 +1586,42 @@ export class WeKnoraSyncService extends Service {
     }
     // pending / processing / finalizing → keep polling (worker re-arms via dirty).
     await this.reqMappings().put(key, { ...mapping, replacementState: 'parsing', remoteParseStatus: status, updatedAt: this.now() })
-    await this.reqDirty().put(key, {
-      workspaceId: this.config.workspaceId, entityType: ENTITY_ATTACHMENT, entityId: mapping.entityId,
-      dirty: true, pendingOperationId: intent?.operationId, lastEventAt: this.now(), lastEventRevision: 0,
+    await this.withDirtyWrite(key, async () => {
+      const existing = this.reqDirty().get(key)
+      await this.reqDirty().put(key, {
+        workspaceId: this.config.workspaceId, entityType: ENTITY_ATTACHMENT, entityId: mapping.entityId,
+        dirty: true, pendingOperationId: intent?.operationId ?? existing?.pendingOperationId,
+        lastEventAt: existing?.lastEventAt ?? this.now(), lastEventRevision: existing?.lastEventRevision ?? 0,
+      })
     })
     return undefined
   }
 
   // ── full reconcile ──────────────────────────────────────────────────────────
+
+  /** Recover lost deletion hints without migrating or writing canonical content. */
+  private async rearmDeleted(): Promise<void> {
+    for (const rec of this.ctx.pkwNotes.list({ includeDeleted: true })) {
+      if (rec.deletedAt !== undefined || rec.attachmentBacked === true) await this.rearmDeletion(ENTITY_NOTE, String(rec.noteId))
+    }
+    for (const rec of this.ctx.pkwAttachments.list({ includeDeleted: true })) {
+      if (rec.deletedAt !== undefined) await this.rearmDeletion(ENTITY_ATTACHMENT, String(rec.id))
+    }
+  }
+
+  private async rearmDeletion(entityType: string, entityId: string): Promise<boolean> {
+    const key = this.entityKey(entityType, entityId)
+    return this.withEntityLock(key, async () => {
+      const note = entityType === ENTITY_NOTE ? this.ctx.pkwNotes.get(NoteId(entityId)) : undefined
+      const record = entityType === ENTITY_NOTE ? note : this.ctx.pkwAttachments.get(AttachmentId(entityId))
+      if (record === undefined || (record.deletedAt === undefined && note?.attachmentBacked !== true)) return false
+      const mapping = this.reqMappings().get(key)
+      if (mapping === undefined) return false
+      await this.convergeDeleted(key, mapping)
+      await this.markDirty(entityType, entityId)
+      return mapping.syncState !== M_DELETED
+    })
+  }
 
   /** Reconcile local canonical entities → durable dirty/deleted state. Local-first. */
   async reconcile(): Promise<ReconcileReport> {
@@ -1524,20 +1632,13 @@ export class WeKnoraSyncService extends Service {
       const key = this.entityKey(ENTITY_NOTE, String(rec.noteId))
       const mapping = this.reqMappings().get(key)
       if (rec.deletedAt !== undefined) {
-        await this.convergeDeleted(key, mapping)
-        if (mapping !== undefined && mapping.syncState !== M_DELETED) report.markedDeleted += 1
+        if (await this.rearmDeletion(ENTITY_NOTE, String(rec.noteId))) report.markedDeleted += 1
         continue
       }
       if (rec.attachmentBacked === true) {
         // Attachment-backed: no independent Note Knowledge. Converge any legacy
         // Companion Note Knowledge to deleted; the drain performs the remote delete.
-        if (mapping !== undefined && mapping.syncState !== M_DELETED) {
-          await this.convergeDeleted(key, mapping)
-          await this.markDirty(ENTITY_NOTE, String(rec.noteId), rec.observedRevision)
-          report.markedDeleted += 1
-        } else {
-          await this.clearDirty(key)
-        }
+        if (await this.rearmDeletion(ENTITY_NOTE, String(rec.noteId))) report.markedDeleted += 1
         continue
       }
       const { fingerprint } = await this.noteRemoteProjection(rec.noteId)
@@ -1564,8 +1665,7 @@ export class WeKnoraSyncService extends Service {
       const key = this.entityKey(ENTITY_ATTACHMENT, String(rec.id))
       const mapping = this.reqMappings().get(key)
       if (rec.deletedAt !== undefined) {
-        await this.convergeDeleted(key, mapping)
-        if (mapping !== undefined && mapping.syncState !== M_DELETED) report.markedDeleted += 1
+        if (await this.rearmDeletion(ENTITY_ATTACHMENT, String(rec.id))) report.markedDeleted += 1
         continue
       }
       // Prefer the catalog's sha256 (already a projection of the current binary);

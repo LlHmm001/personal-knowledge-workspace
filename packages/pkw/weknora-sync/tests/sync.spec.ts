@@ -231,6 +231,12 @@ function startFakeServer(): Promise<FakeWeKnora> {
 
       // Get knowledge.
       const get = /\/knowledge\/([^/]+)$/.exec(url.pathname)
+      if (req.method === 'DELETE' && get) {
+        fake.manuals.delete(get[1]!)
+        fake.files.delete(get[1]!)
+        send(200, { success: true })
+        return
+      }
       if (req.method === 'GET' && get) {
         const m = fake.manuals.get(get[1]!)
         if (m !== undefined) { send(200, { data: { id: m.id, title: m.title, parse_status: m.parseStatus, channel: 'pkw' } }); return }
@@ -328,10 +334,10 @@ async function boot(opts: BootOptions = {}) {
   await ctx.plugin(NotesService, { workspaceId: ws.id })
   await ctx.plugin(AttachmentsService, { workspaceId: ws.id })
   await ctx.plugin(WeKnoraClient, { baseUrl: fake.baseUrl, apiKey: opts.apiKey ?? 'test-key', apiKeyRef: opts.apiKeyRef ?? '' })
-  await ctx.plugin(WeKnoraSyncService, { kbId: 'kb-1', workspaceId: ws.id, pollMs: opts.pollMs ?? 25, retryBaseMs: 5, retryMaxMs: 10, recoveryGraceAttempts: 2 })
+  const syncFork = await ctx.plugin(WeKnoraSyncService, { kbId: 'kb-1', workspaceId: ws.id, pollMs: opts.pollMs ?? 25, retryBaseMs: 5, retryMaxMs: 10, recoveryGraceAttempts: 2 })
   // Let the startup resume pass finish on an empty workspace before test events.
   if (opts.manualWorker) await ctx.pkwWeKnoraSync.drain()
-  return { ctx, dir, workspaceId: ws.id, notes: ctx.pkwNotes, attachments: ctx.pkwAttachments, adapter: ctx.pkwWeKnora, sync: ctx.pkwWeKnoraSync, fake }
+  return { ctx, dir, workspaceId: ws.id, notes: ctx.pkwNotes, attachments: ctx.pkwAttachments, adapter: ctx.pkwWeKnora, sync: ctx.pkwWeKnoraSync, syncFork, fake }
 }
 
 // ── outcome model ─────────────────────────────────────────────────────────────
@@ -673,6 +679,165 @@ describe('manual update distributed failures', () => {
 // ── worker ────────────────────────────────────────────────────────────────────
 
 describe('worker: durable dirty, coalescing, retry, resume', () => {
+  it.each(['before-clear', 'during-clear'] as const)('keeps a deletion arriving %s in an older sync pass', async (when) => {
+    const { attachments, sync, fake } = await boot({ manualWorker: true })
+    const rec = await attachments.importFile({ content: Buffer.from('delete-race'), filename: 'race.txt', mimeType: 'text/plain' })
+    await sync.syncAttachment(rec.id)
+    const entered = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    const dirty = (sync as any).reqDirty()
+    const originalPut = dirty.put.bind(dirty)
+    const originalOpen = attachments.open.bind(attachments)
+    let held = false
+    const gate = when === 'during-clear'
+      ? vi.spyOn(dirty, 'put').mockImplementation(async (key: any, value: any) => {
+          if (!held && value.dirty === false) { held = true; entered.resolve(); await release.promise }
+          return originalPut(key, value)
+        })
+      : vi.spyOn(attachments, 'open').mockImplementation(async (id) => {
+          const bytes = await originalOpen(id)
+          if (!held) { held = true; entered.resolve(); await release.promise }
+          return bytes
+        })
+    const oldPass = sync.syncAttachment(rec.id)
+    try {
+      await entered.promise
+      await attachments.remove(rec.id)
+    } finally { release.resolve() }
+    await oldPass
+    gate.mockRestore()
+    // No full reconcile or new event: the existing hint must drive deletion.
+    await sync.drain()
+    await sync.drain()
+    expect(sync.getAttachmentMapping(rec.id)?.syncState).toBe('deleted')
+    expect(sync.listIntents().filter(i => i.entityId === rec.id && i.operationKind === 'delete')).toHaveLength(1)
+    expect(sync.listIntents().find(i => i.entityId === rec.id && i.operationKind === 'delete')?.state).toBe('completed')
+    expect(fake.files.size).toBe(0)
+  })
+
+  it('re-arms a deletion when the catalog becomes visible after the event hint was consumed', async () => {
+    const { attachments, sync } = await boot({ manualWorker: true })
+    const rec = await attachments.importFile({ content: Buffer.from('projection-race'), filename: 'race.txt', mimeType: 'text/plain' })
+    await sync.syncAttachment(rec.id)
+    const entered = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    const table = (attachments as any).requireTable()
+    const original = table.put.bind(table)
+    const put = vi.spyOn(table, 'put').mockImplementation(async (key: any, value: any) => {
+      if (key === rec.id && value.deletedAt !== undefined) { entered.resolve(); await release.promise }
+      return original(key, value)
+    })
+    const removing = attachments.remove(rec.id)
+    try {
+      await entered.promise
+      // The committed deletion is visible, but the catalog still says active.
+      // Supply the old bytes to force the no-op path instead of a file-not-found retry.
+      const open = vi.spyOn(attachments, 'open').mockResolvedValue(Buffer.from('projection-race'))
+      try { await sync.drain() } finally { open.mockRestore() }
+      expect(sync.listDirty().find(i => i.entityId === rec.id)?.dirty).toBe(false)
+    } finally { release.resolve() }
+    await removing
+    put.mockRestore()
+    await sync.drain()
+    await sync.drain()
+    expect(sync.getAttachmentMapping(rec.id)?.syncState).toBe('deleted')
+    expect(sync.listIntents().find(i => i.entityId === rec.id && i.operationKind === 'delete')?.state).toBe('completed')
+  })
+
+  it('preserves a revision-zero derived-content hint received during a no-op pass', async () => {
+    const { attachments, sync } = await boot({ manualWorker: true })
+    const rec = await attachments.importFile({ content: Buffer.from('derived'), filename: 'derived.txt', mimeType: 'text/plain' })
+    await sync.syncAttachment(rec.id)
+    const entered = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    const original = attachments.open.bind(attachments)
+    const open = vi.spyOn(attachments, 'open').mockImplementationOnce(async (id) => {
+      const bytes = await original(id)
+      entered.resolve()
+      await release.promise
+      return bytes
+    })
+    const oldPass = sync.syncAttachment(rec.id)
+    try {
+      await entered.promise
+      await sync.markDirty('attachment', String(rec.id), 0)
+      expect(sync.listDirty().find(i => i.entityId === rec.id)?.dirty).toBe(true)
+    } finally { release.resolve() }
+    await oldPass
+    open.mockRestore()
+    expect(sync.listDirty().find(i => i.entityId === rec.id)?.dirty).toBe(true)
+    await sync.drain()
+    expect(sync.listDirty().find(i => i.entityId === rec.id)?.dirty).toBe(false)
+  })
+
+  it('recovers an unknown update even when local content returns to the previous fingerprint', async () => {
+    const { notes, sync, fake } = await boot({ manualWorker: true })
+    const note = await notes.create({ relativePath: 'revert.md', markdown: '# A\n' })
+    const original = (await notes.getDocument(note.noteId)).markdown
+    const knowledgeId = await sync.syncNote(note.noteId)
+    await notes.update(note.noteId, `---\nid: ${note.noteId}\n---\n\n# B\n`)
+    fake.next.commitThenDrop = 'update-manual'
+    await expect(sync.syncNote(note.noteId)).rejects.toThrow()
+    expect(fake.manuals.get(knowledgeId)?.content).toContain('# B')
+    await notes.update(note.noteId, original)
+    await sync.drain()
+    expect(fake.manuals.get(knowledgeId)?.content).toContain('# A')
+    expect(sync.listDirty().find(i => i.entityId === note.noteId)?.dirty).toBe(false)
+  })
+
+  it('full reconcile re-arms a lost deletion hint and completes the remote deletion only once', async () => {
+    const { attachments, sync, fake } = await boot({ manualWorker: true })
+    const rec = await attachments.importFile({ content: Buffer.from('backstop'), filename: 'backstop.txt', mimeType: 'text/plain' })
+    await sync.syncAttachment(rec.id)
+    await attachments.remove(rec.id)
+    await sync.markDirty('attachment', String(rec.id)) // settle all earlier hint writes
+    const dirty = (sync as any).reqDirty()
+    const [key, value] = [...dirty.entries()][0] as [string, any]
+    await dirty.put(key, { ...value, dirty: false, pendingOperationId: undefined })
+    await sync.reconcile()
+    await sync.drain()
+    await sync.drain()
+    expect(fake.files.size).toBe(0)
+    expect(sync.listIntents().filter(i => i.operationKind === 'delete' && i.state === 'completed')).toHaveLength(1)
+    await sync.reconcile()
+    await sync.drain()
+    expect(sync.listIntents().filter(i => i.operationKind === 'delete')).toHaveLength(1)
+  })
+
+  it('timer worker propagates each deletion without a full reconcile', async () => {
+    const { attachments, sync, fake } = await boot()
+    for (let n = 0; n < 15; n++) {
+      const rec = await attachments.importFile({ content: Buffer.from(`timer-${n}`), filename: 'timer.txt', mimeType: 'text/plain' })
+      const knowledgeId = await sync.syncAttachment(rec.id)
+      await attachments.remove(rec.id)
+      await vi.waitFor(() => {
+        expect(sync.getAttachmentMapping(rec.id)?.syncState).toBe('deleted')
+        expect(fake.files.has(knowledgeId)).toBe(false)
+        expect(sync.listIntents().find(i => i.entityId === rec.id && i.operationKind === 'delete')?.state).toBe('completed')
+      }, { timeout: 2000 })
+    }
+  })
+
+  it('service restart re-arms a deleted catalog record whose durable dirty hint was lost', async () => {
+    const { ctx, workspaceId, attachments, sync, syncFork, fake } = await boot({ manualWorker: true })
+    const rec = await attachments.importFile({ content: Buffer.from('restart-delete'), filename: 'restart.txt', mimeType: 'text/plain' })
+    await sync.syncAttachment(rec.id)
+    await attachments.remove(rec.id)
+    await sync.markDirty('attachment', String(rec.id))
+    const dirty = (sync as any).reqDirty()
+    const [key, value] = [...dirty.entries()][0] as [string, any]
+    await dirty.put(key, { ...value, dirty: false, pendingOperationId: undefined })
+    await syncFork.dispose()
+    await ctx.plugin(WeKnoraSyncService, { kbId: 'kb-1', workspaceId, pollMs: 25, retryBaseMs: 5, retryMaxMs: 10, recoveryGraceAttempts: 2 })
+    const restarted = ctx.pkwWeKnoraSync
+    // No new event and no full reconcile. Startup repairs the lost hint.
+    await vi.waitFor(async () => {
+      await restarted.drain()
+      expect(fake.files.size).toBe(0)
+      expect(restarted.listIntents().find(i => i.entityId === rec.id && i.operationKind === 'delete')?.state).toBe('completed')
+    }, { timeout: 2000 })
+  })
+
   it('coalesces A→B→C→D: worker converges remote to the current state, not replay', async () => {
     const { notes, sync, fake } = await boot()
     const note = await notes.create({ relativePath: 'a.md', markdown: '# A\n' })
@@ -1027,19 +1192,19 @@ describe('companion summary materialization', () => {
 
 describe('attachment restore + replacement crash recovery', () => {
   it('restore: deleted attachment reappearing with same bytes reactivates (no new id)', async () => {
-    const { attachments, sync, fake, dir } = await boot()
+    const { attachments, sync, fake, dir } = await boot({ manualWorker: true })
     const rec = await attachments.importFile({ content: Buffer.from('RESTORE'), filename: 'restore.txt', mimeType: 'text/plain' })
     const knowledgeId = await sync.syncAttachment(rec.id)
 
     await attachments.remove(rec.id)
-    await vi.waitFor(() => {
-      expect(sync.getAttachmentMapping(rec.id)?.syncState).toBe('deleted')
-    }, { timeout: 2000 })
+    await sync.drain() // tombstone + arm DELETE; restore before it executes
+    expect(sync.getAttachmentMapping(rec.id)?.syncState).toBe('deleted')
 
     // Same AttachmentId + same bytes reappear (restore, not a new id).
     const fs = await import('node:fs/promises')
     await fs.writeFile(join(dir, 'attachments', String(rec.id), rec.filename), Buffer.from('RESTORE'))
     await attachments.reconcile()
+    await sync.drain()
 
     await vi.waitFor(() => {
       const m = sync.getAttachmentMapping(rec.id)
@@ -1047,6 +1212,31 @@ describe('attachment restore + replacement crash recovery', () => {
       expect(m?.knowledgeId).toBe(knowledgeId)
     }, { timeout: 2000 })
     expect(fake.files.size).toBe(1) // reactivated, not replaced
+  })
+
+  it.each(['note', 'attachment'] as const)('restores a %s after remote DELETE completed, with a new remote id', async (kind) => {
+    const { attachments, notes, sync, fake, adapter } = await boot({ manualWorker: true })
+    const note = kind === 'note' ? await notes.create({ relativePath: 'restore.md', markdown: '# restore\n' }) : undefined
+    const att = kind === 'attachment' ? await attachments.importFile({ content: Buffer.from('restore'), filename: 'restore.txt', mimeType: 'text/plain' }) : undefined
+    const id = note?.noteId ?? att!.id
+    const oldId = note ? await sync.syncNote(note.noteId) : await sync.syncAttachment(att!.id)
+    if (note) await notes.delete(note.noteId)
+    else await attachments.remove(att!.id)
+    await sync.drain()
+    await sync.drain()
+    expect(fake.manuals.has(oldId) || fake.files.has(oldId)).toBe(false)
+    if (note) await notes.restore(note.noteId)
+    else await attachments.restore(att!.id)
+    // A failed existence check must neither claim success nor lose the retry.
+    const get = vi.spyOn(adapter, 'getKnowledge').mockRejectedValueOnce(new Error('offline'))
+    await sync.drain()
+    get.mockRestore()
+    expect(sync.listDirty().find(i => i.entityId === id)?.dirty).toBe(true)
+    await sync.drain()
+    const mapping = note ? sync.getMapping(note.noteId) : sync.getAttachmentMapping(att!.id)
+    expect(mapping?.syncState).toBe('synced')
+    expect(mapping?.knowledgeId).not.toBe(oldId)
+    expect(fake.manuals.has(mapping!.knowledgeId) || fake.files.has(mapping!.knowledgeId)).toBe(true)
   })
 
   it('replacement crash recovery: B durably recorded while A active, then resumed and switched', { timeout: 20000 }, async () => {
