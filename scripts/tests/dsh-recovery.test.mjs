@@ -1,9 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync, readFileSync, statSync, existsSync, rmSync, chmodSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, readFileSync, statSync, existsSync, rmSync, chmodSync, mkdirSync, symlinkSync, unlinkSync, renameSync, cpSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { recoveryManifest, recoveryOverrides, verifyRecovery, jsonStorageConfig, restoreConfigSnapshots, parseServiceEnvironment, recoveryEnvironment, confirmedEnvironmentFile, inspectEnvironmentFile, serializeProbeBaseEnvironment, collectEffectiveEnvironment, environmentFileIdentity } from '../recover-dsh-without-pkw.mjs'
+import { recoveryManifest, recoveryOverrides, verifyRecovery, jsonStorageConfig, restoreConfigSnapshots, parseServiceEnvironment, recoveryEnvironment, confirmedEnvironmentFile, inspectEnvironmentFile, serializeProbeBaseEnvironment, collectEffectiveEnvironment, environmentFileIdentity, runtimeDirectoryIdentity, assertRuntimeDirectories, runtimeEnvironmentProbe, runtimePreflightFailure } from '../recover-dsh-without-pkw.mjs'
 
 const host = () => [
   { id: 'storage', name: '@deepseek-ai/dsh-storage' },
@@ -182,4 +183,82 @@ test('environment identity rejects symlinks, unsafe ownership and permissions an
   for (const change of [{ isFile: () => false }, { uid: 1000 }, { mode: 0o100622 }, { size: 262145 }]) {
     assert.throws(() => environmentFileIdentity({ ...info, ...change }), /manual verification/)
   }
+})
+
+test('runtime directory checks accept Node physical cwd and logical PWD through a release symlink', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'pkw-recovery-cwd-'))
+  try {
+    const release = join(directory, 'release'), logical = join(directory, 'harness')
+    mkdirSync(release)
+    symlinkSync(release, logical)
+    const expected = runtimeDirectoryIdentity(logical)
+    const child = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', 'process.stdout.write(JSON.stringify({cwd:process.cwd(),pwd:process.env.PWD}))'], { cwd: logical, env: { PWD: logical }, encoding: 'utf8' }))
+    assert.notEqual(child.cwd, logical) // Reproduces the old preflight's false rejection.
+    assert.notEqual(child.pwd, child.cwd)
+    assert.equal(child.cwd, expected.canonical)
+    assert.doesNotThrow(() => assertRuntimeDirectories(logical, expected, child.cwd, child.pwd))
+    assert.doesNotThrow(() => assertRuntimeDirectories(logical, expected, child.cwd, undefined))
+    for (const pwd of ['', join(directory, 'absent'), directory]) {
+      assert.throws(() => assertRuntimeDirectories(logical, expected, child.cwd, pwd), /PKW_RECOVERY_CWD_MISMATCH/)
+    }
+    const file = join(directory, 'not-a-directory')
+    writeFileSync(file, '')
+    assert.throws(() => runtimeDirectoryIdentity(file), /not a directory/)
+  } finally { rmSync(directory, { recursive: true, force: true }) }
+})
+
+test('runtime snapshot rejects a switched release link and replacement at the same physical path', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'pkw-recovery-switch-'))
+  try {
+    const first = join(directory, 'release-a'), second = join(directory, 'release-b'), logical = join(directory, 'harness')
+    mkdirSync(first); mkdirSync(second); symlinkSync(first, logical)
+    const expected = runtimeDirectoryIdentity(logical)
+    unlinkSync(logical); symlinkSync(second, logical)
+    assert.throws(() => assertRuntimeDirectories(logical, expected, expected.canonical, undefined), /PKW_RECOVERY_CWD_MISMATCH/)
+    unlinkSync(logical); symlinkSync(first, logical)
+    renameSync(first, join(directory, 'old-release-a')); mkdirSync(first)
+    assert.equal(runtimeDirectoryIdentity(logical).canonical, expected.canonical)
+    assert.notEqual(runtimeDirectoryIdentity(logical).ino, expected.ino)
+    assert.throws(() => assertRuntimeDirectories(logical, expected, first, logical), /PKW_RECOVERY_CWD_MISMATCH/)
+  } finally { rmSync(directory, { recursive: true, force: true }) }
+})
+
+test('generated runtime preflight executes symlink checks and keeps home and post-layer guards', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'pkw-recovery-probe-'))
+  try {
+    const release = join(directory, 'release'), logical = join(directory, 'harness')
+    mkdirSync(release); symlinkSync(release, logical)
+    for (const [name, source] of [
+      ['dsh-app-boot', "import { writeFileSync } from 'node:fs'; if (process.env.FIXTURE_IMPORT_MARKER) writeFileSync(process.env.FIXTURE_IMPORT_MARKER, 'imported'); export function loadLayeredEnv() { if (process.env.FIXTURE_LAYER_CHANGES_PWD) process.env.PWD = process.env.FIXTURE_LAYER_CHANGES_PWD; }"],
+      ['dsh-home-paths', 'export function resolveDshHome() { return process.env.DSH_HOME; }'],
+    ]) {
+      const path = join(release, 'node_modules', '@deepseek-ai', name)
+      mkdirSync(path, { recursive: true })
+      writeFileSync(join(path, 'package.json'), JSON.stringify({ type: 'module', exports: './index.js' }))
+      writeFileSync(join(path, 'index.js'), source)
+    }
+    const probe = runtimeEnvironmentProbe(logical, runtimeDirectoryIdentity(logical))
+    const env = { HOME: '/root', DSH_HOME: '/root/.dsh', PWD: logical }
+    const run = changes => execFileSync(process.execPath, ['--input-type=module', '-e', probe], { cwd: logical, env: { ...env, ...changes }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+    assert.equal(run({}), 'environment-verified')
+    assert.throws(() => run({ HOME: '/wrong' }), error => runtimePreflightFailure(error) === 'PKW_RECOVERY_HOME_MISMATCH')
+    assert.throws(() => run({ DSH_HOME: '/wrong' }), error => runtimePreflightFailure(error) === 'PKW_RECOVERY_HOME_MISMATCH')
+    assert.throws(() => run({ PWD: directory }), error => runtimePreflightFailure(error) === 'PKW_RECOVERY_CWD_MISMATCH')
+    assert.throws(() => run({ FIXTURE_LAYER_CHANGES_PWD: directory }), error => runtimePreflightFailure(error) === 'PKW_RECOVERY_CWD_MISMATCH')
+    const replacement = join(directory, 'replacement'), marker = join(directory, 'import-marker')
+    cpSync(release, replacement, { recursive: true })
+    unlinkSync(logical); symlinkSync(replacement, logical)
+    assert.throws(() => run({ FIXTURE_IMPORT_MARKER: marker }), error => runtimePreflightFailure(error) === 'PKW_RECOVERY_CWD_MISMATCH')
+    assert.equal(existsSync(marker), false) // Reject before importing another release's Harness modules.
+  } finally { rmSync(directory, { recursive: true, force: true }) }
+})
+
+test('runtime failure categories retain empty-stderr codes without exposing private child output', () => {
+  const secret = 'fixture-private-diagnostic-value'
+  for (const code of ['ENOENT', 'EACCES', 'ETIMEDOUT', 'ENOBUFS']) {
+    assert.equal(runtimePreflightFailure({ code, stderr: Buffer.alloc(0), message: secret }), code)
+  }
+  assert.equal(runtimePreflightFailure({ stderr: secret + ' only the launching environment may set' }), 'ENV_BOOTSTRAP_REJECTED')
+  assert.equal(runtimePreflightFailure({ stderr: secret + ' does not provide an export named' }), 'MODULE_EXPORT_MISSING')
+  assert.equal(runtimePreflightFailure({ code: secret, stderr: secret, message: secret }), 'UNCLASSIFIED')
 })

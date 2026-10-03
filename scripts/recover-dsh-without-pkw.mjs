@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Configuration-only incident recovery. Never opens or migrates a data store.
-import { copyFileSync, existsSync, readFileSync, writeFileSync, mkdirSync, statSync, lstatSync, chmodSync, chownSync, renameSync, unlinkSync } from 'node:fs'
+import { copyFileSync, existsSync, readFileSync, writeFileSync, mkdirSync, statSync, lstatSync, realpathSync, chmodSync, chownSync, renameSync, unlinkSync } from 'node:fs'
 import { resolve, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
@@ -223,6 +223,53 @@ export function collectEffectiveEnvironment({ baseFile, sourceSnapshot, unitName
   return validateEffectiveEnvironment(environment)
 }
 
+export function runtimeDirectoryIdentity(path) {
+  const canonical = realpathSync(path)
+  const info = statSync(path), target = statSync(canonical)
+  if (!info.isDirectory() || !target.isDirectory()) throw new Error('Runtime path is not a directory')
+  if (info.dev !== target.dev || info.ino !== target.ino || realpathSync(path) !== canonical) throw new Error('Runtime directory changed while reading')
+  return { canonical, dev: info.dev, ino: info.ino }
+}
+
+export function assertRuntimeDirectories(harness, expected, cwd, pwd) {
+  // Node reports the physical cwd after chdir through a release symlink.
+  // Compare all spellings against one fixed snapshot, never a fresh expectation.
+  try {
+    for (const path of [harness, cwd, ...(pwd === undefined ? [] : [pwd])]) {
+      const actual = runtimeDirectoryIdentity(path)
+      if (actual.canonical !== expected.canonical || actual.dev !== expected.dev || actual.ino !== expected.ino) throw new Error('Directory changed')
+    }
+  } catch { throw new Error('PKW_RECOVERY_CWD_MISMATCH') }
+}
+
+export function runtimeEnvironmentProbe(harness, expectedDirectory) {
+  return `import { realpathSync, statSync } from 'node:fs';
+    const runtimeDirectoryIdentity = ${runtimeDirectoryIdentity.toString()};
+    const assertRuntimeDirectories = ${assertRuntimeDirectories.toString()};
+    const expected = ${JSON.stringify(expectedDirectory)};
+    assertRuntimeDirectories(${JSON.stringify(harness)}, expected, process.cwd(), process.env.PWD);
+    const { loadLayeredEnv } = await import('@deepseek-ai/dsh-app-boot');
+    const { resolveDshHome } = await import('@deepseek-ai/dsh-home-paths');
+    loadLayeredEnv('dsh', process.cwd(), () => { throw new Error('PKW_RECOVERY_ENV_UNREADABLE') });
+    if (resolveDshHome() !== '/root/.dsh' || process.env.HOME !== '/root') throw new Error('PKW_RECOVERY_HOME_MISMATCH');
+    assertRuntimeDirectories(${JSON.stringify(harness)}, expected, process.cwd(), process.env.PWD);
+    process.stdout.write('environment-verified');`
+}
+
+export function runtimePreflightFailure(error) {
+  const stderr = String(error?.stderr ?? '')
+  // Only fixed categories leave the server. Child output/paths/values stay private.
+  for (const reason of ['PKW_RECOVERY_CWD_MISMATCH', 'PKW_RECOVERY_HOME_MISMATCH', 'PKW_RECOVERY_ENV_UNREADABLE']) {
+    if (stderr.includes(reason)) return reason
+  }
+  for (const code of ['ERR_MODULE_NOT_FOUND', 'ERR_PACKAGE_PATH_NOT_EXPORTED', 'ERR_UNKNOWN_FILE_EXTENSION', 'ERR_REQUIRE_ESM', 'ENOENT', 'EACCES', 'ETIMEDOUT', 'ENOBUFS']) {
+    if (error?.code === code || stderr.includes(code)) return code
+  }
+  if (stderr.includes('only the launching environment may set')) return 'ENV_BOOTSTRAP_REJECTED'
+  if (stderr.includes('does not provide an export named')) return 'MODULE_EXPORT_MISSING'
+  return 'UNCLASSIFIED'
+}
+
 async function main() {
   if (process.argv.length !== 3 || process.argv[2] !== '--apply') throw new Error('Usage: node recover-dsh-without-pkw.mjs --apply')
   if (process.getuid?.() !== 0) throw new Error('Run in the server root terminal')
@@ -235,6 +282,7 @@ async function main() {
   const serviceProperty = name => execFileSync('systemctl', ['show', unit, '-p', name, '--value'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
   const propertyNames = ['User', 'Group', 'WorkingDirectory', 'EnvironmentFiles', 'PassEnvironment', 'UnsetEnvironment', 'PAMName', 'RootDirectory', 'RootImage', 'DynamicUser', 'BindPaths', 'BindReadOnlyPaths', 'TemporaryFileSystem']
   const properties = Object.fromEntries(propertyNames.map(name => [name, serviceProperty(name)]))
+  const harnessIdentity = runtimeDirectoryIdentity(harness)
   if (execFileSync('ss', ['-ltnH', 'sport = :3080'], { encoding: 'utf8' }).trim()) throw new Error('Port 3080 is occupied; identify the running writer first')
   const serviceEnvironment = execFileSync('systemctl', ['show', unit, '-p', 'Environment', '--value'], { encoding: 'utf8' })
   const managerEnvironment = execFileSync('systemctl', ['show-environment'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
@@ -248,7 +296,7 @@ async function main() {
     if (!isDeepStrictEqual(environmentFileIdentity(lstatSync(environmentPath)), environmentIdentity)) throw new Error('Environment file changed while reading')
     environmentEvidence = { path: environmentPath, ...inspectEnvironmentFile(environmentBytes) }
   }
-  const yaml = createRequire(join(harness, 'vendor/include/package.json'))('js-yaml')
+  const yaml = createRequire(join(harnessIdentity.canonical, 'vendor/include/package.json'))('js-yaml')
   const expression = new yaml.Type('tag:yaml.org,2002:js', { kind: 'scalar', resolve: value => typeof value === 'string', construct: value => ({ __jsExpr: value }), predicate: value => typeof value?.__jsExpr === 'string', represent: value => value.__jsExpr })
   const schema = yaml.JSON_SCHEMA.extend(expression) // Parse and preserve expressions; never evaluate them.
   const manifestFile = join(profile, 'package.json'), patchFile = join(profile, 'cordis.patch.yml'), generatedFile = join(profile, 'cordis.yml')
@@ -276,6 +324,7 @@ async function main() {
   if (!Array.isArray(patches)) throw new Error('Profile patch must be an array')
   const records = { profile, state, backup, removedBundles: [...bundleNames].filter(name => manifest.dsh.profile.bundles.includes(name)) }
   const assertOriginalInputs = () => {
+    assertRuntimeDirectories(harness, harnessIdentity, harness, undefined)
     if (!['inactive', 'failed'].includes(serviceProperty('ActiveState')) || serviceProperty('ExecStart') !== command.trim() || propertyNames.some(name => serviceProperty(name) !== properties[name]) || serviceProperty('Environment') !== serviceEnvironment.trim() || execFileSync('systemctl', ['show-environment'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }) !== managerEnvironment) throw new Error('Service configuration changed during recovery')
     if (environmentPath && (!isDeepStrictEqual(environmentFileIdentity(lstatSync(environmentPath)), environmentIdentity) || !readFileSync(environmentPath).equals(environmentBytes) || !isDeepStrictEqual(environmentFileIdentity(lstatSync(environmentPath)), environmentIdentity))) throw new Error('Original environment file changed during recovery')
   }
@@ -289,23 +338,19 @@ async function main() {
     records.environmentProbe = 'systemd-fixed-snapshot-verified'
   }
   // Match CLI startup's environment preflight without calling boot or opening any data store.
-  const environmentProbe = `import { loadLayeredEnv } from '@deepseek-ai/dsh-app-boot';
-    import { resolveDshHome } from '@deepseek-ai/dsh-home-paths';
-    loadLayeredEnv('dsh', process.cwd(), () => { throw new Error('Environment file is unreadable') });
-    if (resolveDshHome() !== '/root/.dsh' || process.cwd() !== '/opt/deepseek-harness' || process.env.HOME !== '/root'
-      || process.env.PWD !== undefined && process.env.PWD !== process.cwd()) throw new Error('Runtime home or cwd differs');
-    process.stdout.write('environment-verified');`
+  const environmentProbe = runtimeEnvironmentProbe(harness, harnessIdentity)
   try {
-    const probe = execFileSync('/usr/local/bin/node', ['--import', 'tsx/esm', '--input-type=module', '-e', environmentProbe], { cwd: harness, timeout: 45000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: environment })
+    const probe = execFileSync('/usr/local/bin/node', ['--import', 'tsx/esm', '--input-type=module', '-e', environmentProbe], { cwd: harnessIdentity.canonical, timeout: 45000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: environment })
     if (probe !== 'environment-verified') throw new Error('Unexpected environment probe output')
   } catch (error) {
     const log = join(backup, 'environment-error.log')
-    writeFileSync(log, String(error.stderr ?? error.message), { mode: 0o600 })
-    throw new Error(`Runtime environment preflight failed; private error log: ${log}`)
+    writeFileSync(log, String(error.stderr?.length ? error.stderr : error.message), { mode: 0o600 })
+    throw new Error(`Runtime environment preflight failed (${runtimePreflightFailure(error)}); private error log: ${log}`)
   }
   const dump = label => {
     try {
-      const content = execFileSync('/usr/local/bin/node', ['--import', 'tsx/esm', join(harness, 'apps/cli/src/bin.ts'), 'web', '--dump-config'], { cwd: harness, timeout: 45000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: environment })
+      assertOriginalInputs()
+      const content = execFileSync('/usr/local/bin/node', ['--import', 'tsx/esm', join(harnessIdentity.canonical, 'apps/cli/src/bin.ts'), 'web', '--dump-config'], { cwd: harnessIdentity.canonical, timeout: 45000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: environment })
       writeFileSync(join(backup, label + '.yml'), content, { mode: 0o600 })
       return yaml.load(content, { schema })
     } catch (error) {
