@@ -3,10 +3,23 @@
   "version": "0.1.0",
   "description": "PKW Markdown Notes core (ctx.pkwNotes): Markdown is the content source of truth; NoteIndex is a rebuildable projection.",
   "type": "module",
-  "main": "src/index.ts",
-  "types": "src/index.ts",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
   "dependencies": {
     "@deepseek-ai/dsh-pkw-domain": "workspace:*",
     "@deepseek-ai/dsh-pkw-workspace": "workspace:*"
+  },
+  "files": [
+    "lib"
+  ],
+  "scripts": {
+    "build": "node ../../../scripts/build.mjs notes"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-fs": "*",
+    "@deepseek-ai/dsh-storage-domain": "*",
+    "@deepseek-ai/dsh-workspace": "*",
+    "@deepseek-ai/schemastery": "*"
   }
 }

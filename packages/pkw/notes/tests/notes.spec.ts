@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createHash } from 'node:crypto'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
@@ -9,7 +9,7 @@ import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { SqliteStorageBackend } from '@deepseek-ai/dsh-storage-sqlite'
 import WorkspaceRegistry from '@deepseek-ai/dsh-workspace'
 import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
-import { CorrelationId, NoteId, OperationId } from '@deepseek-ai/dsh-pkw-domain'
+import { CorrelationId, NoteId, NoteUpdateConflictError, OperationId } from '@deepseek-ai/dsh-pkw-domain'
 import PkwEventStoreService from '../../events/src/index.ts'
 import PkwWorkspaceService from '../../workspace/src/index.ts'
 import NotesService from '../src/index.ts'
@@ -59,6 +59,245 @@ function ch(md: string): string {
 }
 
 describe('pkw notes + attachments core', () => {
+  it('leaves active notes and events unchanged when moving a folder into trash fails', async () => {
+    const { notes, ctx, dir } = await boot()
+    const note = await notes.create({ relativePath: 'work/a.md', markdown: '# keep active\n' })
+    const eventsBefore = ctx.pkwEvents.list({ aggregateType: 'note', aggregateId: String(note.noteId) })
+    const mover = notes as unknown as { moveFile(src: unknown, dst: unknown): Promise<void> }
+    const spy = vi.spyOn(mover, 'moveFile').mockRejectedValueOnce(new Error('injected rename failure'))
+    try {
+      await expect(notes.trashFolder('work')).rejects.toThrow('injected rename failure')
+      expect(notes.get(note.noteId)).toEqual(note)
+      expect(await notes.listTrashFolders()).toEqual([])
+      expect(ctx.pkwEvents.list({ aggregateType: 'note', aggregateId: String(note.noteId) })).toEqual(eventsBefore)
+      expect(await readFile(join(dir, 'notes', 'work', 'a.md'), 'utf8')).toContain('# keep active')
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('retains the folder archive recovery entry if recording events fails after the physical move', async () => {
+    const { notes, ctx, dir } = await boot()
+    const note = await notes.create({ relativePath: 'work/a.md', markdown: '# recover me\n' })
+    const spy = vi.spyOn(ctx.pkwEvents, 'commit').mockRejectedValueOnce(new Error('injected event storage failure'))
+    try {
+      await expect(notes.trashFolder('work')).rejects.toThrow('injected event storage failure')
+    } finally {
+      spy.mockRestore()
+    }
+    const entry = (await notes.listTrashFolders())[0]!
+    expect(entry).toBeDefined()
+    expect(await readFile(join(dir, 'archive', entry.archivedPath, 'a.md'), 'utf8')).toContain('# recover me')
+    await notes.restoreFolder(entry.trashEntryId)
+    expect((await notes.getDocument(note.noteId)).markdown).toContain('# recover me')
+    expect(await notes.listTrashFolders()).toEqual([])
+  })
+
+  it('reads and reconciles the full binary after an external attachment grows', async () => {
+    const { attachments, dir } = await boot()
+    const attachment = await attachments.importFile({ content: Buffer.from('x'), filename: 'grow.txt', mimeType: 'text/plain' })
+    const replacement = Buffer.from('external edit is much larger than the original')
+    await writeFile(join(dir, attachment.relativePath), replacement)
+    expect(Buffer.from(await attachments.open(attachment.id))).toEqual(replacement)
+    const report = await attachments.reconcile()
+    expect(report.decisions.map(x => x.changeKind)).toEqual(['attachment.updated'])
+    expect(attachments.get(attachment.id)).toMatchObject({
+      sizeBytes: replacement.length,
+      sha256: createHash('sha256').update(replacement).digest('hex'),
+      observedRevision: attachment.observedRevision + 1,
+    })
+    expect((await attachments.reconcile()).decisions).toEqual([])
+  })
+
+  it('accepts only one of two concurrent writes based on the same note snapshot, then releases the queue', async () => {
+    const { notes } = await boot()
+    const note = await notes.create({ relativePath: 'compare.md', markdown: '# original\n' })
+    const guard = { expectedRevision: note.observedRevision, expectedContentHash: note.contentHash }
+    const writes = await Promise.allSettled([
+      notes.update(note.noteId, '# first\n', guard),
+      notes.update(note.noteId, '# stale second\n', guard),
+    ])
+    expect(writes[0]!.status).toBe('fulfilled')
+    expect(writes[1]).toMatchObject({ status: 'rejected', reason: { code: 'PKW_NOTE_CONFLICT' } })
+    expect((await notes.getDocument(note.noteId)).markdown).toContain('# first')
+    const latest = notes.get(note.noteId)!
+    await notes.update(note.noteId, '# next valid save\n', { expectedRevision: latest.observedRevision, expectedContentHash: latest.contentHash })
+    expect((await notes.getDocument(note.noteId)).markdown).toContain('# next valid save')
+  })
+
+  it('rejects concurrent creation of a second canonical file with an already owned NoteId', async () => {
+    const { notes, dir } = await boot()
+    const writes = await Promise.allSettled([
+      notes.create({ relativePath: 'first.md', markdown: '---\nid: note_shared\n---\n\n# first\n' }),
+      notes.create({ relativePath: 'second.md', markdown: '---\nid: note_shared\n---\n\n# second\n' }),
+    ])
+    expect(writes[0]!.status).toBe('fulfilled')
+    expect(writes[1]).toMatchObject({ status: 'rejected' })
+    expect(notes.list()).toHaveLength(1)
+    expect(notes.get(NoteId('note_shared'))!.relativePath).toBe('first.md')
+    await expect(readFile(join(dir, 'notes', 'second.md'))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('rejects a stale conditional write when canonical bytes changed outside the service', async () => {
+    const { notes, dir } = await boot()
+    const note = await notes.create({ relativePath: 'external.md', markdown: '# original\n' })
+    const external = `---\nid: ${note.noteId}\n---\n\n# edited externally\n`
+    await writeFile(join(dir, 'notes', 'external.md'), external)
+    await expect(notes.update(note.noteId, '# stale\n', {
+      expectedRevision: note.observedRevision,
+      expectedContentHash: note.contentHash,
+    })).rejects.toBeInstanceOf(NoteUpdateConflictError)
+    expect(await readFile(join(dir, 'notes', 'external.md'), 'utf8')).toBe(external)
+    const refreshed = await notes.getDocument(note.noteId)
+    await notes.update(note.noteId, '# saved after reading the external edit\n', {
+      expectedRevision: refreshed.note.observedRevision,
+      expectedContentHash: refreshed.note.contentHash,
+    })
+    expect((await notes.getDocument(note.noteId)).markdown).toContain('# saved after reading the external edit')
+  })
+
+  it('restores an individual note from its folder archive without touching another trash entry', async () => {
+    const { notes } = await boot()
+    const note = await notes.create({ relativePath: 'work/a.md', markdown: '# first\n' })
+    const folder = await notes.trashFolder('work')
+    await notes.restore(note.noteId)
+    expect((await notes.getDocument(note.noteId)).markdown).toContain('# first')
+    await notes.purgeFolder(folder.trashEntryId)
+    expect(notes.get(note.noteId)!.deletedAt).toBeUndefined()
+    expect((await notes.getDocument(note.noteId)).markdown).toContain('# first')
+  })
+
+  it('purges an individual note from a folder archive so restoring the folder cannot resurrect it', async () => {
+    const { notes, dir } = await boot()
+    const note = await notes.create({ relativePath: 'work/a.md', markdown: '# first\n' })
+    const folder = await notes.trashFolder('work')
+    await notes.purge(note.noteId)
+    await notes.restoreFolder(folder.trashEntryId)
+    await notes.reconcile()
+    expect(notes.list({ includeDeleted: true })).toEqual([])
+    await expect(readFile(join(dir, 'notes', 'work', 'a.md'))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('serializes a folder rename with an in-flight save and keeps only one canonical note', async () => {
+    const { notes, ctx, dir } = await boot()
+    const note = await notes.create({ relativePath: 'work/a.md', markdown: '# original\n' })
+    const entered = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    const writeText = ctx.fs.writeText.bind(ctx.fs)
+    const spy = vi.spyOn(ctx.fs, 'writeText').mockImplementationOnce(async (...args) => {
+      entered.resolve()
+      await release.promise
+      return writeText(...args)
+    })
+    try {
+      const save = notes.update(note.noteId, '# saved\n')
+      await entered.promise
+      const move = notes.renameFolder('work', 'moved')
+      release.resolve()
+      await Promise.all([save, move])
+      expect(notes.get(note.noteId)!.relativePath).toBe('moved/a.md')
+      expect(await readFile(join(dir, 'notes', 'moved', 'a.md'), 'utf8')).toContain('# saved')
+      await expect(readFile(join(dir, 'notes', 'work', 'a.md'))).rejects.toMatchObject({ code: 'ENOENT' })
+    } finally {
+      release.resolve()
+      spy.mockRestore()
+    }
+  })
+
+  it('restores only the identities belonging to the selected folder trash entry', async () => {
+    const { notes } = await boot()
+    const first = await notes.create({ relativePath: 'work/a.md', markdown: '# first\n' })
+    const firstTrash = await notes.trashFolder('work')
+    const second = await notes.create({ relativePath: 'work/a.md', markdown: '# second\n' })
+    const secondTrash = await notes.trashFolder('work')
+    await notes.restoreFolder(firstTrash.trashEntryId)
+    expect(notes.get(first.noteId)!.deletedAt).toBeUndefined()
+    expect(notes.get(second.noteId)!.deletedAt).toBeDefined()
+    expect((await notes.getDocument(first.noteId)).markdown).toContain('# first')
+    await notes.purgeFolder(secondTrash.trashEntryId)
+    expect(notes.resolveByPath('work/a.md')!.noteId).toBe(first.noteId)
+    expect(notes.get(second.noteId)).toBeUndefined()
+  })
+
+  it('refuses to overwrite an occupied note destination when moving or restoring', async () => {
+    const { notes, dir } = await boot()
+    const original = await notes.create({ relativePath: 'original.md', markdown: '# original\n' })
+    const occupied = await notes.create({ relativePath: 'occupied.md', markdown: '# occupied\n' })
+    const occupiedBytes = await readFile(join(dir, 'notes', 'occupied.md'))
+    await expect(notes.move(original.noteId, 'occupied.md')).rejects.toThrow()
+    expect(await readFile(join(dir, 'notes', 'occupied.md'))).toEqual(occupiedBytes)
+    expect((await notes.getDocument(original.noteId)).markdown).toContain('# original')
+    await notes.delete(original.noteId)
+    const replacement = await notes.create({ relativePath: 'original.md', markdown: '# replacement\n' })
+    await expect(notes.restore(original.noteId)).rejects.toThrow()
+    expect((await notes.getDocument(replacement.noteId)).markdown).toContain('# replacement')
+    expect(notes.get(original.noteId)!.deletedAt).toBeDefined()
+    expect(notes.resolveByPath('occupied.md')!.noteId).toBe(occupied.noteId)
+  })
+
+  it('purging a trashed note preserves a different note that reused its path', async () => {
+    const { notes, dir } = await boot()
+    const old = await notes.create({ relativePath: 'reuse.md', markdown: '# old\n' })
+    await notes.delete(old.noteId)
+    const current = await notes.create({ relativePath: 'reuse.md', markdown: '# current\n' })
+    const bytes = await readFile(join(dir, 'notes', 'reuse.md'))
+    await notes.purge(old.noteId)
+    expect(await readFile(join(dir, 'notes', 'reuse.md'))).toEqual(bytes)
+    expect(notes.get(old.noteId)).toBeUndefined()
+    expect(notes.resolveByPath('reuse.md')!.noteId).toBe(current.noteId)
+  })
+
+  it('rejects purging an active note without deleting its canonical file', async () => {
+    const { notes, dir } = await boot()
+    const note = await notes.create({ relativePath: 'active.md', markdown: '# keep\n' })
+    await expect(notes.purge(note.noteId)).rejects.toThrow('not trashed')
+    expect(await readFile(join(dir, 'notes', 'active.md'), 'utf8')).toContain('# keep')
+    expect(notes.get(note.noteId)).toBeDefined()
+  })
+
+  it('refuses to replace an earlier archived note when its path is reused', async () => {
+    const { notes, dir } = await boot()
+    const old = await notes.create({ relativePath: 'reuse.md', markdown: '# old archive\n' })
+    await notes.delete(old.noteId)
+    const archived = await readFile(join(dir, 'archive', 'reuse.md'))
+    const current = await notes.create({ relativePath: 'reuse.md', markdown: '# current\n' })
+    await expect(notes.delete(current.noteId)).rejects.toThrow()
+    expect(await readFile(join(dir, 'archive', 'reuse.md'))).toEqual(archived)
+    expect((await notes.getDocument(current.noteId)).markdown).toContain('# current')
+    expect(notes.get(current.noteId)!.deletedAt).toBeUndefined()
+  })
+
+  it('purging an old folder trash entry preserves notes in a recreated folder', async () => {
+    const { notes, dir } = await boot()
+    const old = await notes.create({ relativePath: 'work/a.md', markdown: '# old\n' })
+    const entry = await notes.trashFolder('work')
+    const current = await notes.create({ relativePath: 'work/a.md', markdown: '# current\n' })
+    const bytes = await readFile(join(dir, 'notes', 'work', 'a.md'))
+    await notes.purgeFolder(entry.trashEntryId)
+    expect(await readFile(join(dir, 'notes', 'work', 'a.md'))).toEqual(bytes)
+    expect(notes.get(current.noteId)).toBeDefined()
+    expect(notes.resolveByPath('work/a.md')!.noteId).toBe(current.noteId)
+    expect(notes.get(old.noteId)).toBeUndefined()
+  })
+
+  it('reconcile treats an external rename as the same active note and retains metadata', async () => {
+    const { notes, dir } = await boot()
+    const initial = await notes.create({ relativePath: 'before.md', markdown: '# retained\n', attachmentBacked: true })
+    const note = await notes.update(initial.noteId, '# updated\n')
+    await rename(join(dir, 'notes', 'before.md'), join(dir, 'notes', 'after.md'))
+    const report = await notes.reconcile()
+    const current = notes.get(note.noteId)!
+    expect(current.deletedAt).toBeUndefined()
+    expect(current.relativePath).toBe('after.md')
+    expect(current.observedRevision).toBe(note.observedRevision)
+    expect(current.attachmentBacked).toBe(true)
+    expect(current.createdAt).toBe(note.createdAt)
+    expect(notes.resolveByPath('before.md')).toBeUndefined()
+    expect(notes.resolveByPath('after.md')!.noteId).toBe(note.noteId)
+    expect(report.decisions.map(x => x.changeKind)).toEqual(['note.moved'])
+    expect((await notes.reconcile()).decisions).toEqual([])
+  })
+
   it('creates a note as a real .md file and reads a NoteDocument', async () => {
     const { notes, dir } = await boot()
     const note = await notes.create({ relativePath: '工作/a.md', markdown: '# Hello\n\nbody\n' })

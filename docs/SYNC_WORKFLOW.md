@@ -1,5 +1,7 @@
 # 两端同步工作流 — 本机 Codex CLI ↔ 云端容器
 
+> 最新构建、部署与测试状态见 [DELIVERY_STATUS.md](DELIVERY_STATUS.md)。下文的问题清单保留接手时背景。
+
 > **目的**：让「云端容器（DSH 运行环境）」和「你本机的开发端（ChatGPT Codex CLI / IDE 扩展）」
 > 通过 GitHub 保持同一份代码，并且**永远不产生需要人工仲裁的分叉**。
 >
@@ -17,7 +19,7 @@
         │  git push                              │  git pull
         ▼                                        ▼
    ┌──────────────────────────────────────────────────┐
-   │        GitHub: LlHmm001/zhishiku                 │
+   │        GitHub: LlHmm001/personal-knowledge-workspace                 │
    │        （唯一真相源，唯一中转站）                  │
    └──────────────────────────────────────────────────┘
 ```
@@ -37,9 +39,9 @@
 
 ```bash
 cd "/LlHmm9527/Personal Knowledge Workspace"
-git remote add origin https://github.com/LlHmm001/zhishiku.git
+git remote add origin https://github.com/LlHmm001/personal-knowledge-workspace.git
 git config credential.helper store      # 首次 push 输入 token 后会记住
-git push -u origin master
+git push -u origin main
 ```
 
 > token 需要 `repo` 权限（细粒度 token 则给 **Contents: Read and write**）。
@@ -53,14 +55,14 @@ ssh-keygen -t ed25519 -C "pkw-cloud" -f ~/.ssh/id_ed25519 -N ""
 cat ~/.ssh/id_ed25519.pub          # 把输出加到 GitHub → Settings → SSH keys
 ssh -T git@github.com              # 验证
 cd "/LlHmm9527/Personal Knowledge Workspace"
-git remote add origin git@github.com:LlHmm001/zhishiku.git
-git push -u origin master
+git remote add origin git@github.com:LlHmm001/personal-knowledge-workspace.git
+git push -u origin main
 ```
 
 ### 1.2 本机开发端
 
 ```bash
-git clone https://github.com/LlHmm001/zhishiku.git pkw
+git clone https://github.com/LlHmm001/personal-knowledge-workspace.git pkw
 cd pkw
 git config user.name  "你的名字"
 git config user.email "你的邮箱"
@@ -83,15 +85,15 @@ git switch -c feat/xxx            # 一个任务一个分支，别直接在 main
 # …让 Codex 干活…
 git add -A && git commit -m "feat(pkw): …"
 git push -u origin feat/xxx
-# 在 GitHub 上开 PR → 合并进 master（或直接推 master，见 §3）
+# 在 GitHub 上开 PR → 合并进 main（或直接推 main，见 §3）
 ```
 
 ```bash
 # ── 云端（这里）────────────────────────────────
 cd "/LlHmm9527/Personal Knowledge Workspace"
 git fetch origin
-git switch master                 # 注意：本仓库主分支叫 master，不是 main
-git pull --ff-only origin master
+git switch main                 # 主分支已核实为 main
+git pull --ff-only origin main
 pnpm install                      # 依赖变了才需要
 pnpm typecheck && pnpm test       # 先验证再谈部署
 ```
@@ -109,7 +111,7 @@ git push -u origin fix/yyy
 ```bash
 # ── 本机 ──────────────────────────────────────
 cd ~/dev/pkw
-git fetch origin && git switch master && git pull --ff-only
+git fetch origin && git switch main && git pull --ff-only
 ```
 
 ### 开工前的铁律
@@ -125,9 +127,9 @@ git fetch origin && git status
 
 ## 3. 分支策略（二选一，但必须选一个）
 
-### 策略 1：单人直接推 master（简单，推荐给你现在的规模）
+### 策略 1：单人直接推 main（简单，推荐给你现在的规模）
 
-- 两边都直接 `git push origin master`。
+- 两边都直接 `git push origin main`。
 - **代价**：没有 CI 拦截的机会；推坏了要 revert。
 - **前提**：`pnpm typecheck` 必须绿，`pnpm test` 必须稳定绿（**现在还不绿，见 §5**）。
 
@@ -135,7 +137,7 @@ git fetch origin && git status
 
 - Codex 在 `feat/*` / `fix/*` 分支上干活，开 PR。
 - CI（`.github/workflows/ci.yml`）在 PR 上跑 typecheck + test。
-- 绿了才合并进 `master`；云端永远只 `pull master`。
+- 绿了才合并进 `main`；云端永远只 `pull main`。
 - **推荐**：这样云端只需要"拉取"，永远不会产生需要仲裁的分叉。
 
 ---
@@ -153,7 +155,7 @@ git fetch origin && git status
 
 ```bash
 git fetch origin
-git rebase origin/master      # 或 merge，二选一但全仓保持一致
+git rebase origin/main      # 或 merge，二选一但全仓保持一致
 # 解决冲突 → git add → git rebase --continue
 pnpm typecheck && pnpm test   # 冲突解决后必须重新验证
 git push --force-with-lease   # 只有 rebase 后需要；绝不用 --force
@@ -173,7 +175,7 @@ git push --force-with-lease   # 只有 rebase 后需要；绝不用 --force
 | 线上 `lib/ui.js` 有手工改动未回流 | 仓库不是唯一真相源，同步会丢东西 | 见 `docs/HANDOVER.md` §9 P0-3 |
 | `@deepseek-ai/*` harness 依赖无法从公网安装 | 本机开发环境装不齐类型 | CI 里用 `HARNESS_REPO_URL` 变量；本机见 §1.2 说明 |
 
-**在 `pnpm test` 稳定之前，建议先用策略 2（PR）而不是直推 master** ——
+**在 `pnpm test` 稳定之前，建议先用策略 2（PR）而不是直推 main** ——
 否则一次随机红的推送就会让两端的基线都变得不可信。
 
 ---
@@ -204,14 +206,14 @@ Codex 在本机 clone 之后，**先让它读这两份**：
 git fetch origin && git status
 
 # 云端：把本机的改动拿过来
-git switch master && git pull --ff-only origin master
+git switch main && git pull --ff-only origin main
 
 # 本机：把云端的改动拿过来
-git fetch origin && git switch master && git pull --ff-only
+git fetch origin && git switch main && git pull --ff-only
 
 # 看两边差多少
-git log --oneline origin/master..HEAD      # 我领先的
-git log --oneline HEAD..origin/master      # 我落后的
+git log --oneline origin/main..HEAD      # 我领先的
+git log --oneline HEAD..origin/main      # 我落后的
 
 # 确认没把秘密推上去
 git status --short

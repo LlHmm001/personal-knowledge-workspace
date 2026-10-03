@@ -6,6 +6,8 @@ node_modules/
 dist/
 lib/
 *.tsbuildinfo
+.pkw-*/
+.pkw-tsconfig.test.json
 
 # ── test / coverage ──────────────────────────────────────────────────────────
 coverage/

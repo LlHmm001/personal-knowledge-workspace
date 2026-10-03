@@ -3,8 +3,8 @@
   "version": "0.1.0",
   "description": "PKW Web MVP: Host Web Bridge (PKW Core ↔ HTTP) + served browser UI for Notes / Attachments / Search / Sync status.",
   "type": "module",
-  "main": "src/index.ts",
-  "types": "src/index.ts",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
   "dependencies": {
     "@deepseek-ai/dsh-pkw-attachments": "workspace:*",
     "@deepseek-ai/dsh-pkw-domain": "workspace:*",
@@ -15,5 +15,22 @@
     "@deepseek-ai/dsh-pkw-weknora-sync": "workspace:*",
     "@deepseek-ai/dsh-pkw-workspace": "workspace:*",
     "vditor": "^3.11.1"
+  },
+  "files": [
+    "lib"
+  ],
+  "scripts": {
+    "build": "node ../../../scripts/build.mjs web"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-host-webserver": "*",
+    "@deepseek-ai/schemastery": "*",
+    "@deepseek-ai/cordis-plugin-timer": "*",
+    "@deepseek-ai/dsh-storage": "*",
+    "@deepseek-ai/dsh-storage-domain": "*",
+    "@deepseek-ai/dsh-storage-sqlite": "*",
+    "@deepseek-ai/dsh-workspace": "*",
+    "@deepseek-ai/dsh-fs-local": "*"
   }
 }

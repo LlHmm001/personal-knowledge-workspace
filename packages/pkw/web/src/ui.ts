@@ -8,14 +8,16 @@
  * remote-sync polling that never rebuilds the editor or the folder tree.
  */
 
-export function renderPage(): string {
+export function renderPage(version = 'development', basePath = '/pkw'): string {
+  if (typeof basePath !== 'string' || basePath.trim() !== basePath || !/^\/pkw(?:\/spaces\/[a-zA-Z0-9_-]+)?$/.test(basePath)) throw new Error('Invalid PKW base path')
+  const versionJson = JSON.stringify(version).replace(/</g, '\\u003c')
+  const basePathJson = JSON.stringify(basePath).replace(/</g, '\\u003c')
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>PKW — Personal Knowledge Workspace</title>
-<!-- PKW build: 1d93f55 -->
 <style>
 :root{--bg-app:#f6f7f9;--bg-sidebar:#fff;--bg-surface:#fff;--bg-elevated:#f8fafd;--bg-hover:#eef2f8;--bg-selected:#e7eefb;--bg-input:#fff;--text-primary:#1c2330;--text-secondary:#33415c;--text-muted:#6b7280;--border:#e3e6ea;--border-strong:#c6ccd4;--accent:#2f6fed;--accent-hover:#2456c9;--accent-soft:#eef4ff;--success:#178a4f;--warning:#b45309;--danger:#b91c1c;--shadow-sm:0 1px 3px rgba(0,0,0,.08);--shadow-md:0 8px 30px rgba(0,0,0,.18);--radius-sm:6px;--radius-md:8px;--radius-lg:12px;--space-1:4px;--space-2:8px;--space-3:12px;--space-4:16px;--space-5:24px;--code-bg:#0f172a;--code-fg:#e2e8f0;--mark-bg:#ffe9a8;--mark-fg:#1c2330;--co-note:#2f6fed;--co-note-bg:#eef4ff;--co-tip:#178a4f;--co-tip-bg:#e8f6ee;--co-info:#0e7f9e;--co-info-bg:#e7f5f9;--co-important:#7c3aed;--co-important-bg:#f2ecff;--co-warning:#b45309;--co-warning-bg:#fdf1e3;--co-question:#0891b2;--co-question-bg:#e8f8fb;--co-example:#6d28d9;--co-example-bg:#f3eefc;--co-success:#16a34a;--co-success-bg:#e9f9ef;--co-danger:#b91c1c;--co-danger-bg:#fdeaea;--bg:var(--bg-app);--panel:var(--bg-sidebar);--ink:var(--text-primary);--muted:var(--text-muted);--ok:var(--success);--warn:var(--warning);--err:var(--danger)}
 [data-theme="dark"]{--bg-app:#0f1218;--bg-sidebar:#161a22;--bg-surface:#161a22;--bg-elevated:#1c212c;--bg-hover:#232a38;--bg-selected:#2a3447;--bg-input:#161a22;--text-primary:#e5e9f0;--text-secondary:#b6c0cf;--text-muted:#8b95a7;--border:#2a3242;--border-strong:#3b4557;--accent:#5b8cff;--accent-hover:#7ba3ff;--accent-soft:#1e2b47;--success:#4ade80;--warning:#fbbf24;--danger:#f87171;--shadow-sm:0 1px 3px rgba(0,0,0,.5);--shadow-md:0 8px 30px rgba(0,0,0,.6);--code-bg:#0d1117;--code-fg:#e6edf3;--mark-bg:#5c4a1e;--mark-fg:#ffe9a8;--co-note:#7ba3ff;--co-note-bg:#1e2b47;--co-tip:#4ade80;--co-tip-bg:#12301f;--co-info:#38bdf8;--co-info-bg:#0f2a3a;--co-important:#a78bfa;--co-important-bg:#281d4d;--co-warning:#fbbf24;--co-warning-bg:#33250a;--co-question:#22d3ee;--co-question-bg:#0a2e33;--co-example:#c084fc;--co-example-bg:#2b1744;--co-success:#4ade80;--co-success-bg:#12301f;--co-danger:#f87171;--co-danger-bg:#3a1414}
@@ -44,6 +46,7 @@ aside{border-right:1px solid var(--border);background:var(--panel);display:flex;
 .tree-toolbar{display:flex;gap:4px;padding:6px 8px;border-bottom:1px solid var(--border);flex:0 0 auto;align-items:center}
 .tree-row{display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:7px;cursor:pointer;border:1px solid transparent;font-size:13px}
 .tree-row:hover{background:var(--bg-hover)}.tree-row.active{background:var(--bg-selected);border-color:var(--border-strong)}
+.row-action{appearance:none;border:0;background:none;color:inherit;font:inherit;text-align:left;padding:2px 0;cursor:pointer;min-width:0}.row-action:hover{text-decoration:underline}.row-action.mobile-open{display:block;width:100%;min-height:44px}.tree-row button.tw{padding:2px;border:0;background:none;cursor:pointer}.tree-row button.tw:hover{color:var(--accent)}
 .tree-row .tw{width:16px;text-align:center;color:var(--muted);flex:0 0 auto;font-size:11px}
 .tree-row .ic{flex:0 0 auto;font-size:12px}
 .tree-row .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1 1 auto}
@@ -61,7 +64,7 @@ aside{border-right:1px solid var(--border);background:var(--panel);display:flex;
 main{overflow:auto;padding:20px 24px;background:var(--bg)}
 main h2{margin:0 0 12px;font-size:18px;font-weight:650}
 .toolbar{display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap}
-button.btn{padding:7px 12px;border:1px solid var(--border);background:var(--panel);border-radius:8px;cursor:pointer;font-size:13px}
+button.btn{padding:7px 12px;border:1px solid var(--border);background:var(--panel);color:var(--ink);border-radius:8px;cursor:pointer;font-size:13px}
 button.btn:hover{border-color:var(--border-strong)}
 button.btn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
 button.btn.danger{color:var(--err)}
@@ -145,10 +148,17 @@ aside.right h3:first-child{margin-top:0}
 .hit .ref .spacer{flex:1 1 auto}
 .hit .t .badge{margin-left:6px;vertical-align:1px}
 .hit .reason{color:var(--text-secondary)}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+#kbSearch{flex:1;min-width:140px;padding:9px 12px;border:1px solid var(--border);border-radius:8px;background:var(--panel);color:var(--text-primary);font:inherit}
+#kbSearchStatus{font-size:13px;color:var(--muted);margin-bottom:12px}
+.note-conflict{padding:12px 16px;margin:12px 0;border:1px solid var(--warn);border-radius:10px;background:var(--panel)}.note-conflict p{margin:0 0 10px}.note-conflict summary{cursor:pointer}.note-conflict textarea{width:100%;min-height:160px;margin-top:10px;background:var(--panel);color:var(--ink);font:13px/1.6 ui-monospace,monospace}
+.search-error{max-width:560px;margin:16px auto 0;text-align:left;overflow-wrap:anywhere}.search-error summary{cursor:pointer}
 .kb-section-hint{font-size:12px;color:var(--muted);margin:0 0 12px}
 .empty{color:var(--muted);padding:28px;text-align:center}.empty .cta{margin-top:10px}
 .spinner{width:16px;height:16px;border:2px solid var(--border-strong);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite;display:inline-block;vertical-align:-3px}
 @keyframes spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.spinner{animation:none}}
 .check-row{display:flex;align-items:center;gap:6px;margin-bottom:8px;font-size:13px;cursor:pointer}
 .check-row input{margin:0}
 .radio-row{display:flex;align-items:flex-start;gap:8px;margin-bottom:8px;font-size:13px;cursor:pointer}
@@ -158,7 +168,7 @@ aside.right h3:first-child{margin-top:0}
 .form-label{display:block;font-size:12px;color:var(--muted);margin-bottom:4px}
 .stats{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-bottom:16px}
 .stat{border:1px solid var(--border);border-radius:10px;padding:12px 14px;background:var(--panel)}.stat .n{font-size:22px;font-weight:700}.stat .l{font-size:12px;color:var(--muted)}
-#toast{position:fixed;top:60px;left:50%;transform:translateX(-50%);z-index:60;display:none}
+#toast{position:fixed;top:60px;left:50%;transform:translateX(-50%);z-index:10000;display:none;pointer-events:none}
 #activity{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);z-index:60;display:none;align-items:center;gap:8px;padding:8px 14px;border-radius:999px;background:var(--panel);border:1px solid var(--border);box-shadow:0 4px 14px rgba(0,0,0,.15);font-size:13px;color:var(--text-secondary)}
 #activity .spinner{margin-right:2px}
 .toast{padding:9px 16px;border-radius:8px;color:#fff;font-size:13px;box-shadow:0 4px 14px rgba(0,0,0,.15)}
@@ -301,7 +311,7 @@ mark{background:var(--mark-bg);border-radius:2px;padding:0 2px}
 .mnote-title,.msrc-name,.mtask-title{font-size:15px;font-weight:600;line-height:1.3;word-break:break-word}
 .mnote-folder,.msrc-meta,.mtask-cat,.mtask-due{font-size:12px;color:var(--muted);margin-top:2px}
 .mnote-meta{font-size:11px;color:var(--muted);margin-top:4px}
-.mnote-more{flex:0 0 auto;border:0;background:none;font-size:18px;color:var(--muted);padding:0 4px;min-width:32px;min-height:36px;cursor:pointer}
+.mnote-more{flex:0 0 auto;border:0;background:none;font-size:18px;color:var(--muted);padding:0 4px;min-width:44px;min-height:44px;cursor:pointer}
 .msrc-thumbwrap{flex:0 0 auto;width:44px;height:44px;border-radius:8px;overflow:hidden;background:var(--bg-hover);display:flex;align-items:center;justify-content:center;border:1px solid var(--border)}
 .msrc-thumb{width:100%;height:100%;object-fit:cover}.msrc-ic{font-size:22px}
 .msrc-badges{margin-top:4px;display:flex;gap:4px;flex-wrap:wrap}
@@ -396,9 +406,16 @@ a.src-inline:hover{border-color:var(--accent)}
 .sel-bar{background:var(--accent-soft);border:1px solid var(--accent);border-radius:8px;padding:6px 8px}
 .exp-check{flex:0 0 auto;margin:0;cursor:pointer}
 .explorer-item .chev{color:var(--muted)}
+body.has-space{display:flex;flex-direction:column;height:100dvh}
+body.has-space #app{height:auto;flex:1;min-height:0}
+.space-context{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 12px;border-bottom:1px solid var(--border);background:var(--panel);font-size:12px}
+.space-context a{color:var(--accent)}
+.space-context .space-status{flex:1;min-width:140px;overflow-wrap:anywhere}
+[aria-disabled="true"]{opacity:.55;cursor:not-allowed}
 </style>
 </head>
-<body>
+<body${basePath === '/pkw' ? '' : ' class="has-space"'}>
+${basePath === '/pkw' ? '' : '<div class="space-context" id="spaceContext"><a href="/pkw" id="spaceBack">返回空间列表</a><span id="spaceStatus" class="space-status" role="status" aria-live="polite">正在读取空间权限…</span><a href="/pkw" id="spaceLogin" target="_blank" rel="noopener" hidden>在新窗口登录</a><button type="button" class="btn small" id="spaceRetry" hidden>重新验证会话</button></div>'}
 <div id="app">
   <header>
     <h1 id="pageTitle">PKW</h1>
@@ -426,7 +443,7 @@ a.src-inline:hover{border-color:var(--accent)}
     <div id="treeToolbar"></div>
     <div id="list"></div>
   </aside>
-  <main id="main"></main>
+  <main id="main" tabindex="-1"></main>
   <aside class="right" id="detail"></aside>
 </div>
 <nav id="bottomNav" aria-label="Workspace">
@@ -436,14 +453,26 @@ a.src-inline:hover{border-color:var(--accent)}
   <button data-view="attachments" class="bn-item"><span class="bn-ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M13 2v7h7"/></svg></span><span class="bn-label">来源</span></button>
   <button data-action="mobile-more" class="bn-item"><span class="bn-ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg></span><span class="bn-label">更多</span></button>
 </nav>
-<div id="toast"></div>
-<div id="activity"></div>
+<div id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
+<div id="activity" role="status" aria-live="polite"></div>
 <script>
 const STR = {
   zh: {
+    uploadRetained:'附件已上传到原笔记的来源中。你已切换页面，未向当前笔记插入链接。',
+    searchResultsCount:'「{q}」的检索结果 · {n} 条', searchBackHome:'返回知识主页', searchOfflineHint:'搜索暂时不可用。已保存的笔记和附件不受检索失败影响。检查连接后重试，或返回笔记。', searchErrorDetails:'查看错误详情', searchEvidenceHint:'以下结果由知识服务检索返回，请结合摘要核对相关性。',
+    searchLocalEvidenceHint:'以下为当前空间的本地关键词匹配，请结合摘要核对相关性。', attachmentNameMatch:'附件文件名检索',
+    editorOperationStale:'笔记或正文已变化，未应用旧操作。请在目标笔记中重试。', taskNewerEdits:'先前的修改已保存；保存期间新增的修改仍待保存。',
+    discardDraftConfirm:'放弃这个窗口中尚未保存的内容？', subtaskDraftPending:'子任务文本尚未添加。请先点击“+”添加，或清空文本后再关闭。',
+    taskConflict:'任务已在其他位置更新。当前草稿仍保留，服务器未被覆盖。请先复制草稿，再重新读取。', taskReload:'重新读取任务', taskReloadConfirm:'重新读取会替换当前任务草稿。请先复制需要保留的内容。继续？', taskVersionPending:'尚未取得这项任务的版本。请刷新任务后重试。', taskActionConflict:'任务已在其他位置更新，本次操作未应用。请查看最新任务后重试。',
+    subtaskEditPending:'子任务标题仍在编辑或保存中。请先按 Enter 保存，或按 Escape 取消后再关闭。',
+    spaceBack:'返回空间列表', spaceLogin:'在新窗口登录', spaceRetry:'重新验证会话', spaceLoading:'正在读取空间权限…', spaceReadOnly:'只读：可以阅读与检索，不能修改内容。', spaceLoginExpired:'登录已失效。当前草稿仍保留；请在新窗口登录后重新验证，再手动保存。', spaceDenied:'当前权限不允许此操作。草稿仍保留，请重新验证会话或联系空间管理员。', spaceDraftPending:'请先保存或关闭当前编辑窗口，再返回空间列表。', spaceRoleOwner:'所有者', spaceRoleAdmin:'管理员', spaceRoleEditor:'编辑者', spaceRoleViewer:'只读成员',
+    itemActions:'{name}的操作', selectItem:'选择{name}', expandFolder:'展开{name}', collapseFolder:'收起{name}', syncWaitingConfig:'等待配置', syncConfigUnavailable:'配置暂不可读', syncWaitingConfigHint:'内容已保存在本地；完成知识服务配置后可同步。', syncConfigUnavailableHint:'知识服务配置暂不可读取，本地阅读和保存不依赖此服务。',
+    reloadDraftChanged:'重新读取期间草稿又有修改，已保留当前草稿；复制完成后可再次重新读取。', reloadFailed:'重新读取失败，当前草稿仍保留，请检查连接后重试。',
+    noteConflict:'笔记已在其他位置更新。当前草稿仍保留，服务器内容未被覆盖。请先复制草稿，再重新读取最新版本。', copyDraft:'复制草稿', manualCopyDraft:'查看或手动复制草稿', reloadNote:'重新读取', reloadNoteConfirm:'重新读取会丢弃当前未保存的草稿。请先复制草稿，之后再把需要的内容合并到最新笔记中。继续重新读取？', copyDraftFailed:'自动复制失败，请展开下方草稿，选中后手动复制。',
+    navigationSaveFailed:'尚未离开：当前笔记保存失败。内容仍在编辑器中，请重试保存。',
     overview:'总览', notes:'笔记', attachments:'附件库', tasks:'待办', trash:'回收站', search:'搜索',
     searchPlaceholder:'搜索笔记与附件…', workspaceLabel:'工作区', localSummary:'本地: {n} 笔记 · {m} 文件',
-    connected:'已连接', unavailable:'不可用', notConfigured:'未配置', error:'错误',
+    connected:'已配置', unavailable:'不可用', notConfigured:'未配置', error:'错误',
     overviewTitle:'工作区概览', overviewNotes:'笔记', overviewAttachments:'附件', overviewMappings:'已同步对象', overviewPendingSync:'待同步', overviewSyncErrors:'同步错误',
     overviewIntegration:'WeKnora 集成', overviewRecent:'最近更新', overviewEmpty:'工作区为空。点击「新建笔记」开始。', recentNote:'笔记', recentAttachment:'附件', noRecent:'暂无最近更新',
     newNote:'新建笔记', newFolder:'新建文件夹', emptyNotes:'还没有笔记。', emptyNotesCta:'新建第一篇笔记', loading:'加载中…', deletedSuffix:'已删除',
@@ -469,7 +498,7 @@ const STR = {
     attSelectAll:'全选', attSelected:'已选择 {n} 项', attBatchTrash:'移入回收站', attBatchReparse:'重新解析', attBatchIndex:'重新索引', attClearSelection:'取消选择',
     attCompanion:'伴随笔记', attCreateCompanion:'创建伴随笔记', attOpenCompanion:'打开伴随笔记', attPreview:'预览', attCopyRef:'复制引用', attNoCompanion:'未建伴随笔记', attCopied:'已复制引用', attUploadResult:'上传完成：附件 {a} · 伴随笔记 {n} · 失败 {f}', attUploadResultNoNote:'上传完成：附件 {a} 成功，伴随笔记失败 {f}', attUploadPartial:'部分上传失败：{a}/{t} 成功', attCreatedNote:'已创建伴随笔记', attOpenedExisting:'该附件已有伴随笔记，已打开', attBatchNoSelection:'请先选择附件', companionUpgrade:'将伴随笔记作为独立知识同步', companionUpgraded:'已作为独立知识同步', attachmentBacked:'附件驱动（不独立同步）',
     uploadProgress:'上传中…', uploadSuccess:'已上传', uploadFailed:'上传失败', searching:'搜索中…', noHits:'没有命中「{q}」。', searchHint:'输入关键词搜索笔记与附件。',
-    score:'得分', openNote:'打开笔记', openAttachment:'打开附件', noteLabel:'笔记', attachmentLabel:'附件', noteBodyMatch:'正文命中', attMatch:'附件命中',
+    score:'得分', openNote:'打开笔记', openAttachment:'打开附件', noteLabel:'笔记', attachmentLabel:'附件', noteBodyMatch:'笔记内容检索', attMatch:'附件内容检索',
     details:'详情', noteId:'NoteId', attachmentId:'AttachmentId', path:'路径', revision:'版本', updated:'更新时间', lastError:'最近错误', maintenance:'维护', advanced:'高级',
     workspaceSummary:'工作区摘要', kb:'知识库', state:'状态', parse:'解析', syncSection:'WeKnora 同步', noSyncInfo:'尚未同步。',
     reconcileDone:'重建完成', reconcileResult:'笔记修复 {a} · 附件修复 {b} · 待同步 {c} · 已删 {d}', syncingAll:'正在同步…', genericError:'操作失败', ok:'完成', emptyPreview:'（空）', searchFailed:'搜索失败',
@@ -496,17 +525,31 @@ const STR = {
     tableDeleteRow:'删除当前行', tableDeleteCol:'删除当前列', tableDeleteTable:'删除表格', tableInsertSize:'插入表格',
     footnote:'脚注', footnoteContent:'脚注内容', footnoteInsert:'插入脚注', footnoteEdit:'编辑脚注', footnoteJump:'跳转到脚注', footnoteDelete:'删除脚注', footnoteBack:'回到引用', footnoteSelectText:'选中文字后插入脚注', footnoteEmpty:'（未选中文字，将在光标处插入引用）',
     trashAll:'全部', trashNotes:'笔记', trashFolders:'文件夹', trashAttachments:'附件', trashTypeFilter:'类型',
-    trashEmptyTrash:'清空回收站', trashSelectAll:'全选', trashSelected:'已选择 {n} 项', trashRestore:'恢复', trashPermanentDelete:'永久删除', trashClearSelection:'取消选择',
-    trashEmptyTitle:'回收站为空', trashEmptyBody:'删除的笔记、文件夹和附件会出现在这里。',
-    trashEmptyConfirmTitle:'清空回收站？', trashEmptyConfirmBody:'回收站中的全部 {n} 项内容将被永久删除，此操作无法撤销。',
+    trashEmptyTrash:'清空已删除资料', trashSelectAll:'全选', trashSelected:'已选择 {n} 项', trashRestore:'恢复', trashPermanentDelete:'永久删除', trashClearSelection:'取消选择',
+    trashEmptyTitle:'暂无删除的资料', trashEmptyBody:'删除的笔记、文件夹和附件会出现在这里。',
+    trashDocuments:'已删除资料', trashTasks:'已删除任务', trashTasksEmpty:'暂无已删除任务', trashTasksHint:'任务可逐项恢复，保留原有内容。原位置不可用时会调整到可访问的位置。上方清空资料操作不会删除这些任务。',
+    trashTasksReadFailed:'任务回收站读取失败，请重试。', trashTasksStale:'下方保留上次读取的列表，结果可能已变化。', trashTaskRestored:'任务已恢复，可在待办中查看', trashTaskRestoreFailed:'未能确认任务恢复结果，请刷新列表核对', trashTaskRestoreLabel:'恢复任务：{title}',
+    trashEmptyConfirmTitle:'清空已删除资料？', trashEmptyConfirmBody:'统计中的 {n} 项资料将被永久删除，此操作无法撤销；已删除任务不受影响。',
     trashEmptyConfirmStats:'笔记 {n} · 文件夹 {f} · 附件 {a}',
     trashPurgeConfirmTitle:'永久删除 {n} 项？', trashPurgeConfirmBody:'这些内容删除后无法从 PKW 回收站恢复。',
     trashRestoring:'正在恢复…', trashDeleting:'正在删除…', trashEmptied:'回收站已清空', trashRestored:'已恢复 {n} 项', trashRestoredPartial:'已恢复 {n} 项，{m} 项失败', trashPurged:'已永久删除 {n} 项', trashPurgedPartial:'已永久删除 {n} 项，{m} 项失败', trashDeletedTime:'删除于 {t}',
   },
   en: {
+    uploadRetained:'The file was uploaded to the original note’s sources. No link was inserted into your current note.',
+    searchResultsCount:'Results for “{q}” · {n}', searchBackHome:'Back to knowledge home', searchOfflineHint:'Search is currently unavailable. Saved notes and attachments are unaffected by search failures. Check your connection and retry, or return to Notes.', searchErrorDetails:'Error details', searchEvidenceHint:'These results come from knowledge search. Check the excerpts for relevance.',
+    searchLocalEvidenceHint:'These are local keyword matches in this space. Check the excerpts for relevance.', attachmentNameMatch:'Attachment filename search',
+    editorOperationStale:'The note or its text changed. The earlier operation was not applied; retry in the intended note.', taskNewerEdits:'Earlier edits were saved. Changes made while saving are still unsaved.',
+    discardDraftConfirm:'Discard the unsaved content in this dialog?', subtaskDraftPending:'The subtask text has not been added. Use “+” to add it, or clear the text before closing.',
+    taskConflict:'This task changed elsewhere. Your draft is still here and the server was not overwritten. Copy the draft before reloading.', taskReload:'Reload task', taskReloadConfirm:'Reloading will replace the current task draft. Copy anything you want to keep first. Continue?', taskVersionPending:'The task version is not available yet. Refresh the tasks and try again.', taskActionConflict:'This task changed elsewhere. The action was not applied. Review the latest task before trying again.',
+    subtaskEditPending:'A subtask title is being edited or saved. Press Enter to save, or Escape to cancel, before closing.',
+    spaceBack:'Back to spaces', spaceLogin:'Sign in in a new window', spaceRetry:'Verify session again', spaceLoading:'Loading space permissions…', spaceReadOnly:'Read only: you can read and search, but cannot change content.', spaceLoginExpired:'Your session expired. Your draft is still here. Sign in in a new window, verify the session again, then save manually.', spaceDenied:'Your current permissions do not allow this action. Your draft is still here. Verify the session again or contact a space administrator.', spaceDraftPending:'Save or close the current editing dialog before returning to spaces.', spaceRoleOwner:'Owner', spaceRoleAdmin:'Administrator', spaceRoleEditor:'Editor', spaceRoleViewer:'Read-only member',
+    itemActions:'Actions for {name}', selectItem:'Select {name}', expandFolder:'Expand {name}', collapseFolder:'Collapse {name}', syncWaitingConfig:'Awaiting setup', syncConfigUnavailable:'Configuration unavailable', syncWaitingConfigHint:'Content is saved locally. Complete knowledge service setup to sync it.', syncConfigUnavailableHint:'Knowledge service configuration cannot be read. Local reading and saving do not depend on this service.',
+    reloadDraftChanged:'Your draft changed while loading. It has been kept; copy it before trying again.', reloadFailed:'Could not load the latest note. Your draft is retained; check your connection and retry.',
+    noteConflict:'This note changed elsewhere. Your draft is retained and the server was not overwritten. Copy your draft before loading the latest note.', copyDraft:'Copy draft', manualCopyDraft:'View or manually copy draft', reloadNote:'Load latest note', reloadNoteConfirm:'Loading the latest note will discard your unsaved draft. Copy it first, then merge the text you need into the latest note. Continue?', copyDraftFailed:'Automatic copy failed. Expand the draft below and select the text to copy it manually.',
+    navigationSaveFailed:'Still here: your note could not be saved. Your edits remain in the editor; please retry saving.',
     overview:'Overview', notes:'Notes', attachments:'Attachment library', tasks:'Tasks', trash:'Trash', search:'Search',
     searchPlaceholder:'Search notes & attachments…', workspaceLabel:'Workspace', localSummary:'Local: {n} notes · {m} files',
-    connected:'Connected', unavailable:'Unavailable', notConfigured:'Not configured', error:'error',
+    connected:'Configured', unavailable:'Unavailable', notConfigured:'Not configured', error:'error',
     overviewTitle:'Workspace Overview', overviewNotes:'Notes', overviewAttachments:'Attachments', overviewMappings:'Synced objects', overviewPendingSync:'Pending sync', overviewSyncErrors:'Sync errors',
     overviewIntegration:'WeKnora integration', overviewRecent:'Recent', overviewEmpty:'Workspace is empty. Click 「New Note」 to start.', recentNote:'Note', recentAttachment:'Attachment', noRecent:'No recent changes',
     newNote:'New Note', newFolder:'New Folder', emptyNotes:'No notes yet.', emptyNotesCta:'Create your first note', loading:'Loading…', deletedSuffix:'deleted',
@@ -532,7 +575,7 @@ const STR = {
     attSelectAll:'Select all', attSelected:'{n} selected', attBatchTrash:'Trash', attBatchReparse:'Reparse', attBatchIndex:'Re-index', attClearSelection:'Clear selection',
     attCompanion:'Companion note', attCreateCompanion:'Create companion note', attOpenCompanion:'Open companion note', attPreview:'Preview', attCopyRef:'Copy reference', attNoCompanion:'No companion note', attCopied:'Reference copied', attUploadResult:'Upload done: {a} attachments · {n} companion notes · {f} failed', attUploadResultNoNote:'Upload done: {a} attachments, {f} companion notes failed', attUploadPartial:'Partial upload: {a}/{t} succeeded', attCreatedNote:'Companion note created', attOpenedExisting:'Companion note already exists — opened', attBatchNoSelection:'Select attachments first', companionUpgrade:'Sync companion note as independent knowledge', companionUpgraded:'Synced as independent knowledge', attachmentBacked:'Attachment-backed (not independently synced)',
     uploadProgress:'Uploading…', uploadSuccess:'Uploaded', uploadFailed:'Upload failed', searching:'Searching…', noHits:'No hits for 「{q}」.', searchHint:'Type a query to search notes & attachments.',
-    score:'score', openNote:'Open note', openAttachment:'Open attachment', noteLabel:'Note', attachmentLabel:'Attachment', noteBodyMatch:'Body match', attMatch:'Attachment match',
+    score:'score', openNote:'Open note', openAttachment:'Open attachment', noteLabel:'Note', attachmentLabel:'Attachment', noteBodyMatch:'Note content search', attMatch:'Attachment content search',
     details:'Details', noteId:'NoteId', attachmentId:'AttachmentId', path:'Path', revision:'Revision', updated:'Updated', lastError:'Last error', maintenance:'Maintenance', advanced:'Advanced',
     workspaceSummary:'Workspace summary', kb:'KB', state:'State', parse:'Parse', syncSection:'WeKnora Sync', noSyncInfo:'Not synced yet.',
     reconcileDone:'Reconcile done', reconcileResult:'Notes repaired {a} · attachments repaired {b} · dirty {c} · deleted {d}', syncingAll:'Syncing…', genericError:'Operation failed', ok:'Done', emptyPreview:'(empty)', searchFailed:'Search failed',
@@ -559,26 +602,102 @@ const STR = {
     tableDeleteRow:'Delete row', tableDeleteCol:'Delete column', tableDeleteTable:'Delete table', tableInsertSize:'Insert table',
     footnote:'Footnote', footnoteContent:'Footnote content', footnoteInsert:'Insert footnote', footnoteEdit:'Edit footnote', footnoteJump:'Jump to footnote', footnoteDelete:'Delete footnote', footnoteBack:'Back to reference', footnoteSelectText:'Select text then insert footnote', footnoteEmpty:'(no selection — reference inserted at cursor)',
     trashAll:'All', trashNotes:'Notes', trashFolders:'Folders', trashAttachments:'Attachments', trashTypeFilter:'Type',
-    trashEmptyTrash:'Empty Trash', trashSelectAll:'Select all', trashSelected:'{n} selected', trashRestore:'Restore', trashPermanentDelete:'Delete permanently', trashClearSelection:'Clear selection',
-    trashEmptyTitle:'Trash is empty', trashEmptyBody:'Deleted notes, folders and attachments will appear here.',
-    trashEmptyConfirmTitle:'Empty Trash?', trashEmptyConfirmBody:'All {n} items in Trash will be permanently deleted. This cannot be undone.',
+    trashEmptyTrash:'Empty deleted documents', trashSelectAll:'Select all', trashSelected:'{n} selected', trashRestore:'Restore', trashPermanentDelete:'Delete permanently', trashClearSelection:'Clear selection',
+    trashEmptyTitle:'No deleted documents', trashEmptyBody:'Deleted notes, folders and attachments will appear here.',
+    trashDocuments:'Deleted documents', trashTasks:'Deleted tasks', trashTasksEmpty:'No deleted tasks', trashTasksHint:'Restore tasks individually with their content intact. Unavailable locations are adjusted to an accessible location. Emptying deleted documents above does not delete these tasks.',
+    trashTasksReadFailed:'Could not load deleted tasks. Please retry.', trashTasksStale:'The last loaded list is shown below and may be out of date.', trashTaskRestored:'Task restored. Find it in Tasks.', trashTaskRestoreFailed:'Could not confirm task restoration. Refresh the list to check the result.', trashTaskRestoreLabel:'Restore task: {title}',
+    trashEmptyConfirmTitle:'Empty deleted documents?', trashEmptyConfirmBody:'The {n} listed documents will be permanently deleted. This cannot be undone. Deleted tasks are not affected.',
     trashEmptyConfirmStats:'{n} notes · {f} folders · {a} attachments',
     trashPurgeConfirmTitle:'Delete {n} items permanently?', trashPurgeConfirmBody:'These items cannot be restored from Trash afterwards.',
     trashRestoring:'Restoring…', trashDeleting:'Deleting…', trashEmptied:'Trash emptied', trashRestored:'Restored {n} items', trashRestoredPartial:'Restored {n} items, {m} failed', trashPurged:'Deleted {n} items permanently', trashPurgedPartial:'Deleted {n} items permanently, {m} failed', trashDeletedTime:'Deleted {t}',
   },
 }
-const PKW_BUILD = '1d93f55'
+const PKW_BUILD = ${versionJson}
+const PKW_BASE = ${basePathJson}
 let lang = localStorage.getItem('pkw-lang') === 'en' ? 'en' : 'zh'
 const t = (key, vars) => { let s = STR[lang][key] ?? STR.zh[key] ?? key; if (vars) for (const k in vars) s = s.split('{' + k + '}').join(String(vars[k])); return s }
+let workspaceSessionPromise = null
+let workspaceAccess = null
+let workspaceSessionError = ''
+async function ensureWorkspaceSession(){
+  if (PKW_BASE === '/pkw') return null
+  if (!workspaceSessionPromise) {
+    workspaceSessionPromise = (async () => {
+      const response = await fetch('/pkw/session', { credentials: 'same-origin', cache: 'no-store' })
+      let result = {}; try { result = await response.json() } catch (e) {}
+      if (!response.ok || result.ok !== true) {
+        const error = new Error(response.status === 401 ? t('spaceLoginExpired') : (result.error || t('genericError')))
+        error.code = result.code || (response.status === 401 ? 'PKW_AUTH_REQUIRED' : 'PKW_SESSION_FAILED'); throw error
+      }
+      const session = result.value
+      const space = session && Array.isArray(session.spaces) && session.spaces.find(item => item.id === PKW_BASE.split('/').pop())
+      if (!space || typeof session.csrf !== 'string' || !session.csrf || !['owner', 'admin', 'editor', 'viewer'].includes(space.role)) {
+        const error = new Error(t('spaceDenied')); error.code = 'PKW_FORBIDDEN'; throw error
+      }
+      workspaceAccess = { ...space, username: session.username, csrf: session.csrf }
+      workspaceSessionError = ''
+      paintWorkspaceSession()
+      return workspaceAccess
+    })().catch(error => { workspaceSessionPromise = null; workspaceSessionError = error.message; paintWorkspaceSession(); throw error })
+  }
+  return workspaceSessionPromise
+}
 const api = async (method, args = {}) => {
-  const res = await fetch('/pkw/api', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ method, args }) })
+  const session = await ensureWorkspaceSession()
+  const headers = { 'Content-Type': 'application/json' }
+  if (session) headers['X-PKW-CSRF'] = session.csrf
+  const res = await fetch(PKW_BASE + '/api', { method: 'POST', credentials: 'same-origin', headers, body: JSON.stringify({ method, args }) })
   let data = {}
   try { data = await res.json() } catch (e) {}
-  if (!res.ok || data.ok !== true) throw new Error((data && data.error) || ('HTTP ' + res.status))
+  if (!res.ok || data.ok !== true) {
+    const error = new Error((data && data.error) || ('HTTP ' + res.status)); error.code = data && data.code
+    if (PKW_BASE !== '/pkw' && (res.status === 401 || res.status === 403)) {
+      workspaceSessionPromise = null
+      workspaceSessionError = t(res.status === 401 ? 'spaceLoginExpired' : 'spaceDenied')
+      paintWorkspaceSession()
+    }
+    throw error
+  }
   return data.value
 }
 const $ = (s) => document.querySelector(s)
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))
+function workspaceReadOnly(){ return PKW_BASE !== '/pkw' && (!workspaceAccess || workspaceAccess.role === 'viewer') }
+function paintWorkspaceSession(){
+  const status = $('#spaceStatus'); if (!status) return
+  $('#spaceBack').textContent = t('spaceBack'); $('#spaceLogin').textContent = t('spaceLogin'); $('#spaceRetry').textContent = t('spaceRetry')
+  $('#spaceLogin').hidden = !workspaceSessionError; $('#spaceRetry').hidden = !workspaceSessionError
+  const labels = { owner: 'spaceRoleOwner', admin: 'spaceRoleAdmin', editor: 'spaceRoleEditor', viewer: 'spaceRoleViewer' }
+  const identity = workspaceAccess ? workspaceAccess.name + ' · ' + t(labels[workspaceAccess.role]) : ''
+  status.textContent = [identity, workspaceSessionError || (workspaceReadOnly() ? t('spaceReadOnly') : '')].filter(Boolean).join(' — ') || t('spaceLoading')
+  applyWorkspacePermissions()
+}
+const workspaceWriteActions = new Set(['new-note','new-note-here','new-folder','new-subfolder','explorer-bulk-move','explorer-bulk-trash','save-note','rename-note','move-note','delete-note','rescan-notes','remove-missing-note','rename-folder','delete-folder','sync-note','upgrade-companion','sync-now','reconcile','upload-attachment','reparse-attachment','delete-attachment','att-batch-trash','att-batch-reparse','att-batch-index','att-create-companion','new-task','new-task-matrix','new-task-mobile','new-matrix','note-to-task','selection-to-task','toggle-task','subtask-edit','subtask-toggle','task-due','task-delete','task-duplicate','matrix-rename','matrix-archive','matrix-remove','task-up','task-down','restore-task','restore-one','purge-one','trash-restore','trash-purge','empty-trash','mobile-note-create','mobile-notes-new'])
+const workspacePurgeActions = new Set(['purge-one','trash-purge','empty-trash','remove-missing-note'])
+const workspaceDisabledControls = new Map()
+function workspaceActionDenied(el){
+  if (PKW_BASE === '/pkw') return false
+  const action = el.dataset.action
+  if (workspacePurgeActions.has(action) && (!workspaceAccess || !['owner','admin'].includes(workspaceAccess.role))) return true
+  return workspaceReadOnly() && (workspaceWriteActions.has(action) || (action === 'set-mode' && el.dataset.mode !== 'reading'))
+}
+function applyWorkspacePermissions(){
+  if (PKW_BASE === '/pkw') return
+  for (const [el, prior] of workspaceDisabledControls) {
+    if ('disabled' in el) el.disabled = prior.disabled
+    if (prior.aria === null) el.removeAttribute('aria-disabled'); else el.setAttribute('aria-disabled', prior.aria)
+    el.tabIndex = prior.tabIndex
+  }
+  workspaceDisabledControls.clear()
+  const controls = Array.from(document.querySelectorAll('[data-action], #taskDetailModal input, #taskDetailModal select, #taskDetailModal textarea, #tdSave, #tdAddSub'))
+  for (const el of controls) {
+    if (el.id === 'tdDraft') continue
+    if (!workspaceActionDenied(el) && !(workspaceReadOnly() && el.closest('#taskDetailModal') && !el.dataset.action)) continue
+    workspaceDisabledControls.set(el, { disabled: el.disabled, aria: el.getAttribute('aria-disabled'), tabIndex: el.tabIndex })
+    if ('disabled' in el) el.disabled = true
+    el.setAttribute('aria-disabled', 'true'); el.tabIndex = -1
+  }
+}
 
 const state = {
   view: 'overview',
@@ -604,6 +723,10 @@ const state = {
   searchContext: null,
   searchQuery: '',
   searchResults: null,
+  searchStatus: 'idle',
+  searchError: '',
+  searchWarning: '',
+  searchMode: null,
   attMode: localStorage.getItem('pkw-att-mode') || 'list',
   attQuery: localStorage.getItem('pkw-att-query') || '',
   attType: localStorage.getItem('pkw-att-type') || 'all',
@@ -615,15 +738,115 @@ const state = {
   trashSelection: new Set(),
   trashFilter: 'all',
   trashBusy: false,
+  trashTaskBusy: null,
+  trashTaskError: '',
+  trashTasksLoadError: '',
   inspectorCollapsed: false,
   selectedTaskIds: new Set(),
   knowledgeCache: null,
   knowledgeShowAll: false,
 }
+// ── Dialog lifecycle: the top dialog owns keyboard focus and cancellation ──
+const dialogStack = []
+const dialogBackgrounds = new Map()
+let dialogObserver = null
+let dialogBodyOverflow = ''
+function dialogFocusable(panel){
+  return Array.from(panel.querySelectorAll('button, [href], input, select, textarea, [tabindex], [contenteditable="true"]'))
+    .filter(el => !el.disabled && el.tabIndex >= 0 && !el.closest('[hidden], [inert]') && el.getClientRects().length > 0)
+}
+function syncDialogBackground(){
+  const top = dialogStack[dialogStack.length - 1]
+  for (const [el, inert] of dialogBackgrounds) el.inert = inert
+  if (!top) { dialogBackgrounds.clear(); return }
+  for (const el of Array.from(document.body.children)) {
+    // Read-only live announcements remain available while all app controls are inert.
+    if (el.id === 'toast' || el.id === 'activity' || el.tagName === 'SCRIPT') continue
+    if (!dialogBackgrounds.has(el)) dialogBackgrounds.set(el, el.inert)
+    el.inert = el !== top.overlay
+  }
+}
+function mountDialog(overlay, options){
+  const panel = options.panel || overlay.querySelector('.modal') || overlay
+  const opener = document.activeElement
+  panel.setAttribute('role', 'dialog')
+  panel.setAttribute('aria-modal', 'true')
+  panel.setAttribute('aria-label', options.name)
+  panel.tabIndex = -1
+  const entry = { overlay, panel, options, opener, focus: () => {
+    const target = options.initialFocus && panel.querySelector(options.initialFocus)
+    const available = dialogFocusable(panel)
+    ;(target && available.includes(target) ? target : (available[0] || panel)).focus()
+  }, close: () => {
+    const index = dialogStack.indexOf(entry)
+    if (index < 0) return
+    // A parent owns its nested confirmations; tear them down in stack order.
+    while (dialogStack.length > index + 1) dialogStack[dialogStack.length - 1].close()
+    dialogStack.pop()
+    overlay.remove()
+    syncDialogBackground()
+    const top = dialogStack[dialogStack.length - 1]
+    if (!top) {
+      if (dialogObserver) { dialogObserver.disconnect(); dialogObserver = null }
+      document.body.style.overflow = dialogBodyOverflow
+    }
+    if (opener && opener.isConnected && !opener.closest('[inert]') && (!top || top.panel.contains(opener))) opener.focus()
+    else if (top) top.focus()
+    else { const main = document.getElementById('main'); if (main) main.focus() }
+  } }
+  if (!dialogStack.length) { dialogBodyOverflow = document.body.style.overflow; document.body.style.overflow = 'hidden' }
+  overlay.style.zIndex = String(100 + dialogStack.length * 10)
+  dialogStack.push(entry)
+  syncDialogBackground()
+  entry.focus()
+  if (!dialogObserver) {
+    dialogObserver = new MutationObserver(() => {
+      // Also release ownership if a host-level view teardown removes an overlay.
+      for (const item of dialogStack.slice()) if (!item.overlay.isConnected) item.close()
+      syncDialogBackground()
+      const top = dialogStack[dialogStack.length - 1]
+      if (top && !top.panel.contains(document.activeElement)) top.focus()
+    })
+    dialogObserver.observe(document.body, { childList: true, subtree: true })
+  }
+  return entry
+}
+function closeMountedDialog(overlay){
+  const entry = dialogStack.find(item => item.overlay === overlay)
+  if (entry) entry.close(); else overlay.remove()
+}
+document.addEventListener('keydown', (e) => {
+  const top = dialogStack[dialogStack.length - 1]
+  if (!top) return
+  if (e.key === 'Escape') {
+    if (e.isComposing) return
+    if (e.target.closest('[data-dialog-escape="local"]')) return
+    e.preventDefault(); e.stopImmediatePropagation()
+    if (top.options.onCancel) top.options.onCancel()
+  } else if (e.key === 'Tab') {
+    const items = dialogFocusable(top.panel), first = items[0] || top.panel, last = items[items.length - 1] || top.panel
+    if (!items.length || !items.includes(document.activeElement) || (e.shiftKey && document.activeElement === first) || (!e.shiftKey && document.activeElement === last)) {
+      e.preventDefault(); (e.shiftKey ? last : first).focus()
+    }
+    e.stopImmediatePropagation()
+  } else if ((e.metaKey || e.ctrlKey) && ['s', 'o'].includes(e.key.toLowerCase())) {
+    e.preventDefault(); e.stopImmediatePropagation()
+    if (e.key.toLowerCase() === 's' && top.options.onSave) top.options.onSave()
+  }
+}, true)
+document.addEventListener('focusin', (e) => {
+  const top = dialogStack[dialogStack.length - 1]
+  if (top && !top.panel.contains(e.target)) top.focus()
+}, true)
+function dialogHasDraft(){ return dialogStack.some(item => item.options.hasDraft && item.options.hasDraft()) }
 // ── View switching: navigation guard + single-flight + instrumentation ──────
 let viewSeq = 0
 let viewStart = 0
 let noteSeq = 0
+let navigationSeq = 0
+let searchSeq = 0
+let attachmentSeq = 0
+let trashSeq = 0
 const inFlight = {}
 function loadOnce(method, args){
   const key = method + ':' + JSON.stringify(args || {})
@@ -640,7 +863,7 @@ function invalidateLoad(method){
 // post-mutation data is authoritative (Local mutation is an event, not polling).
 function refreshTasks(){ invalidateLoad('listTasks'); invalidateLoad('listMatrices'); renderTasks() }
 function refreshAttachments(){ invalidateLoad('listAttachments'); renderAttachments() }
-function refreshTrash(){ invalidateLoad('listTrash'); invalidateLoad('listTrashAttachments'); invalidateLoad('listTrashFolders'); renderTrash() }
+function refreshTrash(){ invalidateLoad('listTrash'); invalidateLoad('listTrashAttachments'); invalidateLoad('listTrashFolders'); invalidateLoad('listTrashTasks'); return renderTrash() }
 function viewMark(phase, extra){
   console.debug('[pkw.view] view=' + state.view + ' phase=' + phase + ' ms=' + Math.round(performance.now() - viewStart) + (extra ? ' ' + extra : ''))
 }
@@ -670,7 +893,7 @@ function toast(msg, kind){ const el = $('#toast'); el.innerHTML = '<div class="t
 // can't show byte progress. Not a job system — just an indeterminate spinner.
 function showActivity(msg){ const el = $('#activity'); if (!el) return; el.innerHTML = '<span class="spinner"></span>' + esc(msg); el.style.display = 'flex'; clearTimeout(showActivity._t) }
 function clearActivity(){ const el = $('#activity'); if (!el) return; clearTimeout(showActivity._t); showActivity._t = setTimeout(() => { el.style.display = 'none' }, 150) }
-function applyLang(){ document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en'; $('#langBtn').textContent = lang === 'zh' ? 'EN' : '中文'; document.querySelectorAll('.nav .launch-item').forEach(b => { const l = b.querySelector('.li-label'); if (l) l.textContent = b.dataset.view === 'attachments' ? t('sources') : t(b.dataset.view) }); document.querySelectorAll('#bottomNav .bn-item').forEach(b => { const l = b.querySelector('.bn-label'); if (l) l.textContent = b.dataset.view === 'attachments' ? t('sources') : t(b.dataset.view) }) }
+function applyLang(){ document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en'; $('#langBtn').textContent = lang === 'zh' ? 'EN' : '中文'; document.querySelectorAll('.nav .launch-item').forEach(b => { const l = b.querySelector('.li-label'); if (l) l.textContent = b.dataset.view === 'attachments' ? t('sources') : t(b.dataset.view) }); document.querySelectorAll('#bottomNav .bn-item').forEach(b => { const l = b.querySelector('.bn-label'); if (l) l.textContent = b.dataset.action === 'mobile-more' ? t('mobileMore') : b.dataset.view === 'attachments' ? t('sources') : t(b.dataset.view) }) }
 // ── Theme (system / light / dark) — preference in localStorage, tokens in CSS ──
 function currentThemeMode(){ return localStorage.getItem('pkw-theme') || 'system' }
 function applyTheme(mode){
@@ -689,22 +912,39 @@ function showAppearanceMenu(x, y){
   ]
   showContextMenu(x, y, items)
 }
+function syncConfigurationState(sync){
+  if (!sync) return null
+  if (['missing_base_url', 'missing_credential', 'missing_kb'].includes(sync.configuration)) return { label: t('syncWaitingConfig'), hint: t('syncWaitingConfigHint') }
+  if (sync.configuration === 'unavailable') return { label: t('syncConfigUnavailable'), hint: t('syncConfigUnavailableHint') }
+  return null
+}
+function configurationBadge(sync){
+  const config = syncConfigurationState(sync)
+  return config ? '<span class="badge warn" title="' + esc(config.hint) + '">' + esc(config.label) + '</span>' : ''
+}
+function configurationHint(sync){
+  const config = syncConfigurationState(sync)
+  return config ? '<p class="muted small">' + esc(config.hint) + '</p>' : ''
+}
 function syncBadgeHtml(sync){
-  if (!sync || (!sync.pending && sync.syncState === undefined && sync.error === undefined)) return '<span class="badge">' + esc(t('notSynced')) + '</span>'
+  if (sync && sync.error) return '<span class="badge err">' + esc(t('failed')) + '</span>'
+  const config = configurationBadge(sync)
+  if (config) return config
+  if (!sync || (!sync.pending && sync.syncState === undefined)) return '<span class="badge">' + esc(t('notSynced')) + '</span>'
   let label, cls = 'warn'
-  if (sync.error) { label = t('failed'); cls = 'err' }
-  else if (sync.pending) { label = t('syncing'); cls = 'warn' }
+  if (sync.pending) label = t(sync.intentState === 'running' ? 'syncing' : 'pending')
   else if (sync.syncState === 'synced') { label = t('synced'); cls = 'ok' }
-  else if (sync.syncState === 'deleted') { label = t('deleted'); cls = 'warn' }
-  else if (sync.syncState === 'stale') { label = t('stale'); cls = 'warn' }
-  else { label = sync.syncState || t('notSynced'); cls = 'warn' }
+  else if (sync.syncState === 'deleted') label = t('deleted')
+  else if (sync.syncState === 'stale') label = t('stale')
+  else label = t('notSynced')
   return '<span class="badge ' + cls + '">' + esc(label) + '</span>'
 }
 function knowledgeBadge(s){
-  if (!s || (s.syncState === undefined && !s.pending && !s.error)) return '<span class="badge">' + esc(t('knowledgeNotIndexed')) + '</span>'
-  if (s.error || s.remoteParseStatus === 'failed') return '<span class="badge err">' + esc(t('knowledgeParseFailed')) + '</span>'
-  if (s.pending) return '<span class="badge warn">' + esc(t('knowledgePending')) + '</span>'
-  if (s.syncState === 'synced') return '<span class="badge ok">' + esc(t('knowledgeIndexed')) + '</span>'
+  if (s && (s.error || s.remoteParseStatus === 'failed')) return '<span class="badge err">' + esc(t('knowledgeParseFailed')) + '</span>'
+  const config = configurationBadge(s)
+  if (config) return config
+  if (s && s.pending) return '<span class="badge warn">' + esc(t(s.intentState === 'running' ? 'syncing' : 'pending')) + '</span>'
+  if (s && (s.syncState === 'synced' || s.indexed)) return '<span class="badge ok">' + esc(t('knowledgeIndexed')) + '</span>'
   return '<span class="badge">' + esc(t('knowledgeNotIndexed')) + '</span>'
 }
 function isTerminalSync(sync){ return !sync || (sync.syncState === 'synced' && !sync.pending) || sync.syncState === 'deleted' || sync.syncState === 'stale' }
@@ -715,13 +955,20 @@ async function refreshHeader(){
     $('#wsBadge').textContent = t('workspaceLabel') + ': ' + (s.workspaceName || 'Personal Workspace')
     $('#localBadge').textContent = t('localSummary', { n: s.notes, m: s.attachments })
     $('#localBadge').className = 'badge ok'
-    const integ = s.integration === 'ready'
-    $('#integBadge').textContent = 'WeKnora: ' + (integ ? t('connected') : (s.credential === 'configured' ? t('unavailable') : t('notConfigured')))
+    const integ = s.configuration ? s.configuration === 'configured' : s.integration === 'ready'
+    const config = syncConfigurationState(s)
+    $('#integBadge').textContent = 'WeKnora: ' + (config ? config.label : (integ ? t('connected') : t('notConfigured')))
+    $('#integBadge').title = config ? config.hint : ''
     $('#integBadge').className = 'badge ' + (integ ? 'ok' : 'warn')
   } catch (e) { $('#integBadge').textContent = 'WeKnora: ' + t('error'); $('#integBadge').className = 'badge err' }
 }
 
-function setView(v){
+async function setView(v){
+  if (v === state.view) return true // Keep active note/search requests owned by this surface.
+  if (!await prepareNoteNavigation()) return false
+  noteSeq++
+  if (v !== 'notes') { destroyVditor(); clearTimeout(onEditorInput._t) }
+  if (state.view === 'knowledge' && v !== 'knowledge') { searchSeq++; if (state.searchStatus === 'loading') state.searchStatus = 'idle' }
   saveScroll(state.view)
   state.view = v
   viewSeq++
@@ -730,11 +977,12 @@ function setView(v){
   if (v !== 'notes') { state.selectedNoteId = null; state.selectedFolder = null }
   if (v !== 'attachments') state.selectedAttachmentId = null
   render()
+  return true
 }
 function render(){
   applyLang()
-  document.querySelectorAll('.nav button').forEach(b => b.classList.toggle('active', b.dataset.view === state.view))
-  document.querySelectorAll('#bottomNav .bn-item').forEach(b => b.classList.toggle('active', b.dataset.view === state.view))
+  document.querySelectorAll('.nav button').forEach(b => { b.classList.toggle('active', b.dataset.view === state.view); if (b.dataset.view === state.view) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current') })
+  document.querySelectorAll('#bottomNav .bn-item').forEach(b => { b.classList.toggle('active', b.dataset.view === state.view); if (b.dataset.view === state.view) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current') })
   const pageTitle = $('#pageTitle')
   if (pageTitle) {
     let title = isMobile() ? (state.view === 'attachments' ? t('sources') : t(state.view)) : 'PKW'
@@ -753,7 +1001,7 @@ function render(){
 
 // ── Overview ────────────────────────────────────────────────────────────────
 function renderOverviewFrom(s){
-  const integ = s.integration === 'ready'
+  const integ = s.configuration ? s.configuration === 'configured' : s.integration === 'ready'
   const rows = [
     '<div class="stat"><div class="n">' + s.notes + '</div><div class="l">' + esc(t('overviewNotes')) + '</div></div>',
     '<div class="stat"><div class="n">' + s.attachments + '</div><div class="l">' + esc(t('overviewAttachments')) + '</div></div>',
@@ -761,7 +1009,7 @@ function renderOverviewFrom(s){
     '<div class="stat"><div class="n">' + s.pendingSync + '</div><div class="l">' + esc(t('overviewPendingSync')) + '</div></div>',
     '<div class="stat"><div class="n">' + s.syncErrors + '</div><div class="l">' + esc(t('overviewSyncErrors')) + '</div></div>',
   ]
-  const integBadge = '<span class="badge ' + (integ ? 'ok' : 'warn') + '">' + (integ ? t('connected') : (s.credential === 'configured' ? t('unavailable') : t('notConfigured'))) + '</span>'
+  const integBadge = configurationBadge(s) || '<span class="badge ' + (integ ? 'ok' : 'warn') + '">' + (integ ? t('connected') : t('notConfigured')) + '</span>'
   const recentHtml = (s.recent || []).length ? (s.recent || []).map(r => '<div class="tree-row" data-action="' + (r.kind === 'note' ? 'open-note' : 'open-attachment') + '" data-id="' + esc(r.id) + '"><span class="nm">' + esc(r.title) + '</span></div>').join('') : '<div class="empty">' + esc(t('noRecent')) + '</div>'
   $('#main').innerHTML = '<h2>' + esc(t('overviewTitle')) + '<span class="sub">' + esc(s.workspaceName || '') + '</span></h2>' +
     '<div class="toolbar"><button class="btn primary" data-action="new-note">+ ' + esc(t('newNote')) + '</button><button class="btn" data-action="sync-now">' + esc(t('syncNow')) + '</button><button class="btn" data-action="reconcile">' + esc(t('reconcile')) + '</button></div>' +
@@ -791,7 +1039,7 @@ function detailWorkspace(s){
 
 // ── Notes tree ──────────────────────────────────────────────────────────────
 function renderTreeToolbar(){
-  const sel = '<select id="sortSel" class="sel"><option value="manual"' + (state.sortMode === 'manual' ? ' selected' : '') + '>' + esc(t('sortManual')) + '</option><option value="title"' + (state.sortMode === 'title' ? ' selected' : '') + '>' + esc(t('sortTitle')) + '</option><option value="updated"' + (state.sortMode === 'updated' ? ' selected' : '') + '>' + esc(t('sortUpdated')) + '</option></select>'
+  const sel = '<select id="sortSel" class="sel" aria-label="' + esc(t('sortMode')) + '"><option value="manual"' + (state.sortMode === 'manual' ? ' selected' : '') + '>' + esc(t('sortManual')) + '</option><option value="title"' + (state.sortMode === 'title' ? ' selected' : '') + '>' + esc(t('sortTitle')) + '</option><option value="updated"' + (state.sortMode === 'updated' ? ' selected' : '') + '>' + esc(t('sortUpdated')) + '</option></select>'
   $('#treeToolbar').innerHTML = '<div class="tree-toolbar"><button class="btn small primary" data-action="new-note">+ ' + esc(t('newNote')) + '</button><button class="btn small" data-action="new-folder">+ ' + esc(t('newFolder')) + '</button></div><div class="tree-toolbar" style="border-top:0">' + esc(t('sortMode')) + ' ' + sel + '</div>'
   $('#sortSel').addEventListener('change', (e) => { state.sortMode = e.target.value; localStorage.setItem('pkw-sort', state.sortMode); renderTree() })
 }
@@ -812,11 +1060,11 @@ function renderTreeNodes(nodes){ if (!nodes.length) return ''; return nodes.map(
 function renderFolderNode(n){
   const sel = state.selectedFolder === n.path ? ' active' : ''
   const collapsed = state.collapsed.has(n.path)
-  return '<div><div class="tree-row folder ' + sel + '" data-action="select-folder" data-path="' + esc(n.path) + '"><span class="tw" data-action="toggle-folder" data-path="' + esc(n.path) + '">' + (collapsed ? '▸' : '▾') + '</span><span class="ic">📁</span><span class="nm">' + esc(n.name) + '</span></div><div class="tree-children" data-folder="' + esc(n.path) + '"' + (collapsed ? ' style="display:none"' : '') + '>' + renderTreeNodes(n.children || []) + '</div></div>'
+  return '<div><div class="tree-row folder ' + sel + '" data-action="select-folder" data-path="' + esc(n.path) + '"><button type="button" class="tw" data-action="toggle-folder" data-path="' + esc(n.path) + '" aria-label="' + esc(t(collapsed ? 'expandFolder' : 'collapseFolder', { name: n.name })) + '" aria-expanded="' + !collapsed + '">' + (collapsed ? '▸' : '▾') + '</button><span class="ic" aria-hidden="true">📁</span><button type="button" class="nm row-action" data-action="select-folder" data-path="' + esc(n.path) + '">' + esc(n.name) + '</button></div><div class="tree-children" data-folder="' + esc(n.path) + '"' + (collapsed ? ' style="display:none"' : '') + '>' + renderTreeNodes(n.children || []) + '</div></div>'
 }
 function renderNoteNode(n){
   const sel = state.selectedNoteId === n.noteId ? ' active' : ''
-  return '<div class="tree-row note ' + sel + '" data-action="open-note" data-id="' + esc(n.noteId) + '"><span class="tw"></span><span class="ic">📄</span><span class="nm note-title" data-id="' + esc(n.noteId) + '">' + esc(n.title || n.relativePath) + '</span> <span class="syncbadge" data-sync="note:' + esc(n.noteId) + '">' + syncBadgeHtml(n.sync) + '</span></div>'
+  return '<div class="tree-row note ' + sel + '" data-action="open-note" data-id="' + esc(n.noteId) + '"><span class="tw"></span><span class="ic">📄</span><button type="button" class="nm note-title row-action" data-action="open-note" data-id="' + esc(n.noteId) + '">' + esc(n.title || n.relativePath) + '</button> <span class="syncbadge" data-sync="note:' + esc(n.noteId) + '">' + syncBadgeHtml(n.sync) + '</span></div>'
 }
 function renderDetail(){
   if (state.view !== 'notes') return
@@ -833,9 +1081,9 @@ function renderDetail(){
 function explorerNoteRow(n, checked){
   const key = 'note:' + n.noteId
   return '<div class="tree-row note explorer-item" data-action="explorer-note" data-id="' + esc(n.noteId) + '">' +
-    '<input type="checkbox" class="exp-check" data-action="explorer-toggle" data-key="' + esc(key) + '"' + (checked ? ' checked' : '') + '>' +
+    '<input type="checkbox" class="exp-check" aria-label="' + esc(t('selectItem', { name: n.title || n.relativePath })) + '" data-action="explorer-toggle" data-key="' + esc(key) + '"' + (checked ? ' checked' : '') + '>' +
     '<span class="ic">📄</span>' +
-    '<span class="nm note-title" data-id="' + esc(n.noteId) + '">' + esc(n.title || n.relativePath) + '</span>' +
+    '<button type="button" class="nm note-title row-action" data-action="explorer-note" data-id="' + esc(n.noteId) + '">' + esc(n.title || n.relativePath) + '</button>' +
     '<span class="spacer" style="flex:1 1 auto"></span>' +
     '<span class="muted small">' + esc(fmtStamp(n.updatedAt)) + '</span>' +
     '<span class="syncbadge" data-sync="note:' + esc(n.noteId) + '">' + syncBadgeHtml(n.sync) + '</span>' +
@@ -845,9 +1093,9 @@ function explorerNoteRow(n, checked){
 function explorerFolderRow(f, checked){
   const key = 'folder:' + f.path
   return '<div class="tree-row folder explorer-item" data-action="explorer-folder" data-path="' + esc(f.path) + '">' +
-    '<input type="checkbox" class="exp-check" data-action="explorer-toggle" data-key="' + esc(key) + '"' + (checked ? ' checked' : '') + '>' +
+    '<input type="checkbox" class="exp-check" aria-label="' + esc(t('selectItem', { name: f.name })) + '" data-action="explorer-toggle" data-key="' + esc(key) + '"' + (checked ? ' checked' : '') + '>' +
     '<span class="ic">📁</span>' +
-    '<span class="nm">' + esc(f.name) + '</span>' +
+    '<button type="button" class="nm row-action" data-action="explorer-folder" data-path="' + esc(f.path) + '">' + esc(f.name) + '</button>' +
     '<span class="muted small">' + esc(t('notesCount', { n: folderNoteCount(f) })) + '</span>' +
     '<span class="spacer" style="flex:1 1 auto"></span>' +
     '<span class="chev">›</span>' +
@@ -918,6 +1166,7 @@ function explorerToggleSel(key){
   if (state.explorerSel.has(key)) state.explorerSel.delete(key)
   else state.explorerSel.add(key)
   renderNotesExplorer()
+  const input = document.querySelector('.exp-check[data-key="' + CSS.escape(key) + '"]'); if (input) input.focus()
 }
 function explorerClearSel(){ state.explorerSel.clear(); renderNotesExplorer() }
 function explorerSelectAllScope(){
@@ -993,8 +1242,8 @@ function mobileFolderCard(f){
   const count = folderNoteCount(f)
   return '<div class="mfolder" data-action="mobile-folder-open" data-path="' + esc(f.path) + '">' +
     '<span class="mfolder-ic">📁</span>' +
-    '<div class="mfolder-main"><div class="mfolder-name">' + esc(f.name) + '</div><div class="mfolder-count">' + esc(t('notesCount', { n: count })) + '</div></div>' +
-    '<button class="mnote-more" data-action="mobile-folder-menu" data-path="' + esc(f.path) + '">⋯</button>' +
+    '<div class="mfolder-main"><button type="button" class="mfolder-name row-action mobile-open" data-action="mobile-folder-open" data-path="' + esc(f.path) + '">' + esc(f.name) + '</button><div class="mfolder-count">' + esc(t('notesCount', { n: count })) + '</div></div>' +
+    '<button class="mnote-more" aria-label="' + esc(t('itemActions', { name: f.name })) + '" data-action="mobile-folder-menu" data-path="' + esc(f.path) + '">⋯</button>' +
     '<span class="chev">›</span></div>'
 }
 function renderMobileNotesHome(){
@@ -1007,7 +1256,7 @@ function renderMobileNotesHome(){
   const unfiledHtml = unfiled.length ? unfiled.map(n => mobileNoteRow(n)).join('') : '<div class="empty small">' + esc(t('emptyNotes')) + '</div>'
   const recentHtml = recent.length ? recent.map(n => mobileNoteRow(n)).join('') : ''
   $('#main').innerHTML =
-    '<div class="toolbar"><button class="btn primary" data-action="mobile-notes-new">+</button></div>' +
+    '<div class="toolbar"><button class="btn primary" data-action="mobile-notes-new" aria-label="' + esc(t('newNote')) + '">+</button></div>' +
     '<div class="list-section">' + esc(t('foldersSection')) + '</div>' + foldersHtml +
     '<div class="list-section">' + esc(t('unfiled')) + '</div>' + unfiledHtml +
     (recentHtml ? '<div class="list-section">' + esc(t('recentNotes')) + '</div>' + recentHtml : '')
@@ -1018,7 +1267,7 @@ function renderMobileFolderView(path){
   const folderNotes = notes.filter(n => parentOfPath(n.relativePath || '') === path)
   const name = path.split('/').pop()
   $('#main').innerHTML =
-    '<div class="toolbar"><button class="btn" data-action="mobile-notes-back">← ' + esc(t('back')) + '</button><span class="mfolder-title">📁 ' + esc(name) + '</span><span class="spacer" style="flex:1"></span><button class="btn primary" data-action="mobile-notes-new">+</button><button class="btn small" data-action="mobile-folder-menu" data-path="' + esc(path) + '">⋯</button></div>' +
+    '<div class="toolbar"><button class="btn" data-action="mobile-notes-back">← ' + esc(t('back')) + '</button><span class="mfolder-title">📁 ' + esc(name) + '</span><span class="spacer" style="flex:1"></span><button class="btn primary" data-action="mobile-notes-new" aria-label="' + esc(t('newNote')) + '">+</button><button class="btn small" data-action="mobile-folder-menu" data-path="' + esc(path) + '">⋯</button></div>' +
     (folderNotes.length ? folderNotes.map(n => mobileNoteRow(n)).join('') : '<div class="empty">' + esc(t('emptyNotes')) + '</div>')
 }
 function mobileNotesScopeSheet(){
@@ -1130,7 +1379,8 @@ function renderTableMd(tblLines){
 let vditor = null // active Vditor instance (Live mode only)
 function destroyVditor(){ if (setupLiveAttachmentRewrite._obs) { setupLiveAttachmentRewrite._obs.disconnect(); setupLiveAttachmentRewrite._obs = null } if (vditor) { try { vditor.destroy() } catch (e) {} vditor = null } }
 
-async function openNote(noteId){
+async function openNote(noteId, loaded = null){
+  if (!await prepareNoteNavigation()) return
   const seq = ++noteSeq
   state.selectedNoteId = noteId; state.selectedFolder = null
   destroyVditor()
@@ -1139,9 +1389,9 @@ async function openNote(noteId){
   $('#main').innerHTML = '<div class="empty">' + esc(t('loading')) + '</div>'
   $('#detail').innerHTML = '' // clear stale Inspector immediately
   try {
-    const d = await api('getNote', { noteId })
-    if (seq !== noteSeq || state.view !== 'notes') return // stale: a newer note/view owns the surface
-    state.editor = { noteId, persistedMarkdown: d.markdown, body: d.body || '', frontmatter: d.frontmatter || '', dirty: false, saving: false, mode: isMobile() ? 'reading' : (localStorage.getItem('pkw-editor-mode') || 'live'), observedRevision: d.note && d.note.observedRevision, contentHash: d.note && d.note.contentHash }
+    const d = loaded || await api('getNote', { noteId })
+    if (seq !== noteSeq || state.view !== 'notes' || state.selectedNoteId !== noteId) return // stale: a newer note/view owns the surface
+    state.editor = { noteId, persistedMarkdown: d.markdown, body: d.body || '', frontmatter: d.frontmatter || '', dirty: false, saving: false, mode: isMobile() || workspaceReadOnly() ? 'reading' : (localStorage.getItem('pkw-editor-mode') || 'live'), observedRevision: d.note && d.note.observedRevision, contentHash: d.note && d.note.contentHash }
     state.noteAttachments = d.attachments || []
     // Expand parent folders so the opened Note is visible + highlighted in the tree
     // (identity stays NoteId; path is only used to reveal ancestors).
@@ -1155,7 +1405,7 @@ async function openNote(noteId){
     await renderTree()
     kickSyncPoll(d.sync)
   } catch (e) {
-    if (seq !== noteSeq) return // stale error: ignore
+    if (seq !== noteSeq || state.view !== 'notes' || state.selectedNoteId !== noteId) return // stale error: ignore
     if (String(e.message || '').indexOf('file is missing') >= 0) renderMissingNote(noteId)
     else { $('#main').innerHTML = '<div class="empty">' + esc(t('genericError')) + ': ' + esc(e.message) + '</div>'; $('#detail').innerHTML = '' }
   }
@@ -1176,6 +1426,7 @@ function searchContextBanner(ctx){
   let label = t('noteBodyMatch')
   if (ctx.reason === 'both') label = t('noteBodyMatch') + ' · ' + t('attMatch') + ' · ' + esc(ctx.attName || '')
   else if (ctx.reason === 'attachment') label = t('attMatch') + ' · ' + esc(ctx.attName || '')
+  else if (ctx.reason === 'attachment-name') label = t('attachmentNameMatch') + ' · ' + esc(ctx.attName || '')
   return '<div class="search-context-banner">' + label + '</div>'
 }
 function renderEditorShell(d){
@@ -1202,11 +1453,12 @@ function renderEditorShell(d){
     (d.note && d.note.attachmentBacked ? '<button class="btn" data-action="upgrade-companion" data-id="' + esc(state.selectedNoteId) + '">' + esc(t('companionUpgrade')) + '</button>' : '<button class="btn" data-action="sync-note" data-id="' + esc(state.selectedNoteId) + '">' + esc(t('syncNow')) + '</button>') +
     '<button class="btn" data-action="selection-to-task">' + esc(t('selectionToTask')) + '</button>' +
     '<button class="btn danger" data-action="delete-note">' + esc(t('del')) + '</button>' +
-    '<span id="saveStatus" class="saved">✓ ' + esc(t('saved')) + '</span>' +
+    '<span id="saveStatus" class="saved" role="status" aria-live="polite">✓ ' + esc(t('saved')) + '</span>' +
     '<span class="spacer"></span>' + modeBtn('live', 'modeLive') + modeBtn('source', 'modeSource') + modeBtn('reading', 'modeReading') +
     '</div>' +
     '<div class="editor-head"><span class="title note-title" data-id="' + esc(state.selectedNoteId) + '">' + esc(fm.title || d.note.title || '') + '</span><span class="path">' + esc(d.note.relativePath) + '</span></div>' +
     (state.searchContext ? searchContextBanner(state.searchContext) : '') +
+    '<div id="noteSaveError"></div>' +
     '<div id="editorPane">' +
       (mode === 'live' ? '<div id="vditor" style="min-height:calc(100vh - 180px)"><div class="empty">' + esc(t('editorLoading')) + '</div></div>' : '') +
       (mode === 'source' ? '<textarea id="editor" aria-label="Markdown">' + esc(d.markdown) + '</textarea>' : '') +
@@ -1276,9 +1528,9 @@ function ensureVditorLoaded(){
   if (window.Vditor) return Promise.resolve()
   if (vditorLoadPromise) return vditorLoadPromise
   vditorLoadPromise = Promise.all([
-    loadCss('/pkw/assets/vditor/3.11.3/dist/index.css'),
-    loadScript('/pkw/assets/vditor/3.11.3/dist/js/lute/lute.min.js'),
-    loadScript('/pkw/assets/vditor/3.11.3/dist/index.min.js'),
+    loadCss(PKW_BASE + '/assets/vditor/3.11.3/dist/index.css'),
+    loadScript(PKW_BASE + '/assets/vditor/3.11.3/dist/js/lute/lute.min.js'),
+    loadScript(PKW_BASE + '/assets/vditor/3.11.3/dist/index.min.js'),
   ]).then(() => { if (!window.Vditor) throw new Error('Vditor failed to initialize') })
   return vditorLoadPromise
 }
@@ -1306,7 +1558,7 @@ function managedAttachmentUrl(src){
   if (slash < 0) return null
   const id = after.slice(0, slash)
   if (!id) return null
-  return '/pkw/attachment/' + id
+  return PKW_BASE + '/attachment/' + id
 }
 function rewriteLiveAttachmentImgs(root){
   if (!root || !root.querySelectorAll) return
@@ -1319,7 +1571,7 @@ function rewriteLiveAttachmentImgs(root){
     for (let a = 0; a < attrs.length; a++) {
       const attr = attrs[a]
       const src = img.getAttribute(attr) || ''
-      if (src.indexOf('/pkw/attachment/') === 0) continue
+      if (src.indexOf(PKW_BASE + '/attachment/') === 0) continue
       const resolved = managedAttachmentUrl(src)
       if (resolved) {
         console.debug('[pkw.live-img] ' + attr + '=' + src + ' currentSrc=' + (img.currentSrc || '') + ' resolved=' + resolved)
@@ -1334,7 +1586,7 @@ function rewriteLiveAttachmentImgs(root){
   for (let i = 0; i < links.length; i++) {
     const a = links[i]
     const href = a.getAttribute('href') || ''
-    if (href.indexOf('/pkw/attachment/') === 0) continue
+    if (href.indexOf(PKW_BASE + '/attachment/') === 0) continue
     const resolved = managedAttachmentUrl(href)
     if (resolved) {
       a.setAttribute('href', resolved + '/preview')
@@ -1364,7 +1616,7 @@ async function initVditor(){
     vditor = new window.Vditor(el, {
       mode: 'ir',
       cache: { enable: false },
-      cdn: '/pkw/assets/vditor/3.11.3',
+      cdn: PKW_BASE + '/assets/vditor/3.11.3',
       height: 'calc(100vh - 180px)',
       value: state.editor.body || '',
       toolbar: vditorToolbar(),
@@ -1393,7 +1645,8 @@ function vditorToolbar(){
   return [
     'undo', 'redo', '|',
     'headings', '|',
-    'bold', 'italic', 'strike', 'mark', '|',
+    'bold', 'italic', 'strike',
+    { name: 'mark', tip: t('highlight'), icon: ic('H'), click: () => editorWrap('==', '==') }, '|',
     'list', 'ordered-list', 'check', '|',
     'quote',
     { name: 'callout', tip: t('slashCallout'), icon: ic('💡'), toolbar: calloutTypes.map(ty => ({ name: 'callout-' + ty, tip: ty, icon: ic('💡'), click: (_e, vd) => vd.insertValue('> [!' + ty + ']\\n> ') })) },
@@ -1436,14 +1689,15 @@ function mobileFormatSheet(){
     ['🖼 · ' + t('slashImage'), () => editorInsert('![alt](url)')],
     ['① · ' + t('slashFootnote'), () => editorInsert('[^1]')],
   ]
-  document.querySelectorAll('.mobile-sheet-overlay').forEach(o => o.remove())
+  document.querySelectorAll('.mobile-sheet-overlay').forEach(closeMountedDialog)
   const ov = document.createElement('div')
   ov.className = 'mobile-sheet-overlay'
   ov.innerHTML = '<div class="mobile-sheet"><div class="ms-title">' + esc(t('mobileMore')) + '</div>' +
     items.map((it, i) => '<button class="ms-item" data-mf="' + i + '">' + esc(it[0]) + '</button>').join('') +
     '<button class="ms-cancel">' + esc(t('cancel')) + '</button></div>'
   document.body.appendChild(ov)
-  ov.addEventListener('click', (e) => { const b = e.target.closest('[data-mf]'); if (b) { items[Number(b.dataset.mf)][1](); ov.remove() } else if (e.target === ov || e.target.closest('.ms-cancel')) ov.remove() })
+  const dialog = mountDialog(ov, { name: t('mobileMore'), panel: ov.querySelector('.mobile-sheet'), onCancel: () => dialog.close() })
+  ov.addEventListener('click', (e) => { const b = e.target.closest('[data-mf]'); if (b) { dialog.close(); items[Number(b.dataset.mf)][1]() } else if (e.target === ov || e.target.closest('.ms-cancel')) dialog.close() })
 }
 function pickAttachment(){
   const inp = document.createElement('input')
@@ -1480,6 +1734,8 @@ function slashMenu(){
   ]
 }
 function uploadVditorFiles(files, asImage){
+  const editor = state.editor, noteId = state.selectedNoteId, instance = vditor
+  if (!noteId) return
   for (const file of files) {
     showActivity(t('uploadProgress') + ' · ' + esc(file.name))
     const reader = new FileReader()
@@ -1487,13 +1743,14 @@ function uploadVditorFiles(files, asImage){
       const base64 = String(reader.result).split(',')[1]
       // Note-editor upload → NOTE-SCOPED: this file belongs to the note being
       // edited, so it does NOT become an independent WeKnora Knowledge.
-      api('uploadAttachment', { filename: file.name, mimeType: file.type || 'application/octet-stream', contentBase64: base64, knowledgeMode: 'note-scoped', ownerNoteId: state.selectedNoteId }).then(up => {
+      api('uploadAttachment', { filename: file.name, mimeType: file.type || 'application/octet-stream', contentBase64: base64, knowledgeMode: 'note-scoped', ownerNoteId: noteId }).then(up => {
         // Reference the STORED filename (up.filename), never the raw File.name, so the
         // managed link always resolves to the persisted binary. The filename segment
         // is URL-encoded (space/()/#/…/CJK/emoji) so it is a valid Markdown destination.
         const ref = 'attachments/' + up.attachmentId + '/' + encodeAttachmentPath(up.filename)
         const md = asImage === false ? '[' + up.filename + '](' + ref + ')' : '![](' + ref + ')'
-        if (vditor) vditor.insertValue(md)
+        if (editor === state.editor && state.selectedNoteId === noteId && instance && instance === vditor) instance.insertValue(md)
+        else toast(t('uploadRetained'), 'ok')
         refreshHeader()
         clearActivity()
       }).catch(e => { clearActivity(); toast(t('uploadFailed') + ': ' + e.message, 'err') })
@@ -1509,16 +1766,54 @@ function getEditorValue(){
 }
 function onEditorInput(){
   const v = getEditorValue().value
-  const dirty = state.editor.mode === 'source' ? (v !== state.editor.persistedMarkdown) : (v !== state.editor.body)
+  const dirty = state.editor.conflict || (state.editor.mode === 'source' ? (v !== state.editor.persistedMarkdown) : (v !== state.editor.body))
   if (dirty !== state.editor.dirty) { state.editor.dirty = dirty; updateSaveStatus() }
   clearTimeout(onEditorInput._t)
-  onEditorInput._t = setTimeout(autosave, 1500)
+  if (!state.editor.conflict) onEditorInput._t = setTimeout(autosave, 1500)
+  else updateNoteConflict()
 }
 function updateSaveStatus(){
+  updateNoteConflict()
   const st = $('#saveStatus'); if (!st) return
   if (state.editor.saving) { st.className = 'saving'; st.textContent = '… ' + t('saving') }
   else if (state.editor.dirty) { st.className = 'dirty'; st.textContent = '● ' + t('unsaved') }
   else { st.className = 'saved'; st.textContent = '✓ ' + t('saved') }
+}
+function updateNoteConflict(){
+  const box = $('#noteSaveError')
+  if (!box) return
+  if (!state.editor.conflict) { box.innerHTML = ''; return }
+  if (!box.querySelector('#noteConflictDraft')) {
+    box.innerHTML = '<div class="note-conflict"><p role="alert">' + esc(t('noteConflict')) + '</p><div class="toolbar"><button class="btn primary" data-action="copy-note-draft">' + esc(t('copyDraft')) + '</button><button class="btn" data-action="reload-note-conflict">' + esc(t('reloadNote')) + '</button></div><details><summary>' + esc(t('manualCopyDraft')) + '</summary><textarea id="noteConflictDraft" readonly aria-label="' + esc(t('manualCopyDraft')) + '"></textarea></details></div>'
+  }
+  const draft = box.querySelector('#noteConflictDraft')
+  if (draft) draft.value = getEditorValue().value
+  const reload = box.querySelector('[data-action="reload-note-conflict"]')
+  if (reload) { reload.disabled = !!state.editor.reloading; reload.textContent = t(state.editor.reloading ? 'loading' : 'reloadNote') }
+}
+async function copyNoteDraft(){
+  try { await navigator.clipboard.writeText(getEditorValue().value); toast(t('attCopied'), 'ok') }
+  catch (e) {
+    toast(t('copyDraftFailed'), 'warn')
+    const draft = $('#noteConflictDraft')
+    if (draft) { draft.closest('details').open = true; draft.focus(); draft.select() }
+  }
+}
+async function reloadConflictedNote(){
+  if (!state.editor.conflict || state.editor.reloading || !confirm(t('reloadNoteConfirm'))) return
+  const editor = state.editor, noteId = state.selectedNoteId, draft = getEditorValue().value
+  const navigation = ++navigationSeq
+  editor.reloading = true; updateNoteConflict()
+  try {
+    // Do not destroy the only remaining draft until the latest note was read.
+    const latest = await api('getNote', { noteId })
+    if (navigation !== navigationSeq || editor !== state.editor || noteId !== state.selectedNoteId) return
+    if (getEditorValue().value !== draft) { toast(t('reloadDraftChanged'), 'warn'); return }
+    clearTimeout(onEditorInput._t)
+    editor.dirty = false; editor.conflict = false
+    await openNote(noteId, latest)
+  } catch (e) { if (editor === state.editor) toast(t('reloadFailed'), 'err') }
+  finally { editor.reloading = false; if (editor === state.editor) updateNoteConflict() }
 }
 function applyPreviewHighlight(pv){
   const q = state.highlightText
@@ -1556,11 +1851,13 @@ function renderPreview(){
   }).catch(() => { finish() })
 }
 async function openWikiTarget(target){
+  const navigation = navigationSeq
   // resolve [[Note]] target to a stable NoteId via the tree/title index.
   try {
     const tree = await api('getTree', { sortMode: 'manual' })
+    if (navigation !== navigationSeq) return
     const found = findNoteByTitleOrPath(tree.root, target)
-    if (found) { setView('notes'); openNote(found.noteId) }
+    if (found) { if (await setView('notes')) await openNote(found.noteId) }
     else toast(t('noHits', { q: target }), 'warn')
   } catch (e) { toast(t('genericError') + ': ' + e.message, 'err') }
 }
@@ -1584,12 +1881,11 @@ function detailNote(d){
     '<div class="kv"><b>' + esc(t('path')) + '</b> <span class="v mono">' + esc(d.note.relativePath) + '</span></div>' +
     (d.attachments && d.attachments.length ? '<h3>' + esc(t('refAttachments')) + '</h3><div class="kv">' + d.attachments.length + '</div><div id="noteAttachmentKnowledge"></div>' : '') +
     '<h3>' + esc(t('outline')) + '</h3><div class="outline" id="outlineBox">' + outlineHtml(d.markdown) + '</div>' +
-    '<h3>' + esc(t('syncSection')) + '</h3><div id="detailSync">' + syncBadgeHtml(s) + '</div>' +
+    '<h3>' + esc(t('syncSection')) + '</h3><div id="detailSync">' + syncBadgeHtml(s) + configurationHint(s) + '</div>' +
     (s && s.error ? '<div class="kv"><b>' + esc(t('lastError')) + '</b> <span class="v">' + esc(s.error) + '</span></div>' : '') +
     '<h3>' + esc(t('advanced')) + '</h3>' +
     '<div class="kv"><b>' + esc(t('noteId')) + '</b> <span class="v mono">' + esc(d.note.noteId) + '</span></div>' +
-    '<div class="kv"><b>' + esc(t('revision')) + '</b> ' + d.note.observedRevision + '</div>' +
-    (s && s.knowledgeId ? '<div class="kv"><b>' + esc(t('knowledgeId')) + '</b> <span class="v mono">' + esc(s.knowledgeId) + '</span></div>' : '')
+    '<div class="kv"><b>' + esc(t('revision')) + '</b> ' + d.note.observedRevision + '</div>'
 }
 function renderNoteAttachmentKnowledge(d){
   if (!d.attachments || !d.attachments.length) return
@@ -1600,7 +1896,11 @@ function renderNoteAttachmentKnowledge(d){
     if (rows) box.innerHTML = '<h3>' + esc(t('summary')) + '</h3>' + rows
   }).catch(() => {})
 }
-function procStateBadge(state){
+function procStateBadge(state, sync){
+  if (state === 'failed' || (sync && sync.error)) return '<span class="badge err">' + esc(t('attFailed')) + '</span>'
+  const config = configurationBadge(sync)
+  if (config) return config
+  if (sync && sync.pending) return syncBadgeHtml(sync)
   if (state === 'ready') return '<span class="badge ok">' + esc(t('attReady')) + '</span>'
   if (state === 'failed') return '<span class="badge err">' + esc(t('attFailed')) + '</span>'
   if (state === 'optimizing') return '<span class="badge warn">' + esc(t('attOptimizing')) + '</span>'
@@ -1620,7 +1920,7 @@ function renderSources(noteId, attachments){
     const rows = (sums || []).map(s => {
       const isImage = (s.mimeType || '').indexOf('image/') === 0
       const thumb = isImage
-        ? '<img class="bk-thumb" src="/pkw/attachment/' + esc(s.attachmentId) + '" alt="" loading="lazy" data-action="att-preview" data-id="' + esc(s.attachmentId) + '">'
+        ? '<img class="bk-thumb" src="' + PKW_BASE + '/attachment/' + esc(s.attachmentId) + '" alt="" loading="lazy" data-action="att-preview" data-id="' + esc(s.attachmentId) + '">'
         : '<span class="bk-ic" data-action="att-preview" data-id="' + esc(s.attachmentId) + '">📄</span>'
       const summary = s.description ? '<div class="bk-summary muted">' + esc(s.description) + '</div>' : ''
       const ownerHint = s.ownerCount > 1 ? '<span class="badge">' + esc(t('usedByN', { n: s.ownerCount })) + '</span>' : ''
@@ -1633,7 +1933,7 @@ function renderSources(noteId, attachments){
           '<div class="muted small">' + esc(s.mimeType || '') + (s.sizeBytes != null ? ' · ' + fmtSize(s.sizeBytes) : '') + '</div>' +
           summary +
         '</div>' +
-        '<div class="bk-att-side">' + procStateBadge(s.processingState) + ownerHint + retryBtn + '</div>' +
+        '<div class="bk-att-side">' + procStateBadge(s.processingState, s) + ownerHint + retryBtn + '</div>' +
         '</div>'
     }).join('')
     box.innerHTML = '<h3>' + esc(t('sourceFiles')) + ' <button class="btn small" data-action="refresh-sources">' + esc(t('refresh')) + '</button></h3>' + rows
@@ -1673,38 +1973,74 @@ function outlineHtml(md){
   return items.map(h => '<a class="lv' + h.lv + '" href="#preview" data-outline="' + esc(h.text) + '">' + esc(h.text) + '</a>').join('')
 }
 
+// A save owns one editor object and one immutable content snapshot. The UI may
+// change while the RPC is pending; only the submitted snapshot becomes saved.
+let noteSavePromise = null
+async function persistNote(editor){
+  if (noteSavePromise) return noteSavePromise
+  if (editor !== state.editor || state.selectedNoteId !== editor.noteId) return false
+  const noteId = editor.noteId
+  if (editor.conflict) return false
+  const value = getEditorValue()
+  const expected = { ...(editor.observedRevision !== undefined ? { expectedRevision: editor.observedRevision } : {}), ...(editor.contentHash ? { expectedContentHash: editor.contentHash } : {}) }
+  editor.saving = true; updateSaveStatus()
+  const request = (async () => {
+    try {
+      const saved = value.kind === 'body'
+        ? await api('saveNoteBody', { noteId, body: value.value, ...expected })
+        : await api('saveNote', { noteId, markdown: value.value, ...expected })
+      if (editor !== state.editor || state.selectedNoteId !== noteId) return false
+      if (value.kind === 'body') editor.body = value.value
+      else editor.persistedMarkdown = value.value
+      const current = getEditorValue()
+      editor.dirty = current.kind !== value.kind || current.value !== value.value
+      editor.observedRevision = saved.observedRevision
+      if (saved.contentHash) editor.contentHash = saved.contentHash
+      refreshHeader(); renderTree(); kickSyncPoll({ pending: true })
+      return true
+    } catch (e) {
+      if (editor === state.editor) {
+        editor.dirty = true
+        if (e.code === 'PKW_NOTE_CONFLICT') { editor.conflict = true; clearTimeout(onEditorInput._t) }
+        toast(editor.conflict ? t('noteConflict') : t('saveFailed') + ': ' + e.message, 'err')
+      }
+      return false
+    } finally {
+      editor.saving = false
+      if (editor === state.editor) updateSaveStatus()
+    }
+  })()
+  noteSavePromise = request
+  try { return await request }
+  finally { if (noteSavePromise === request) noteSavePromise = null }
+}
+async function flushNoteEdits(){
+  const editor = state.editor
+  if (state.view !== 'notes' || state.selectedNoteId === null) return true
+  clearTimeout(onEditorInput._t)
+  while (editor.dirty || editor.saving) {
+    if (!await persistNote(editor)) return false
+    if (editor !== state.editor) return false
+  }
+  return true
+}
+async function prepareNoteNavigation(){
+  const request = ++navigationSeq
+  const saved = await flushNoteEdits()
+  if (!saved && request === navigationSeq) toast(t(state.editor.conflict ? 'noteConflict' : 'navigationSaveFailed'), 'err')
+  return saved && request === navigationSeq
+}
 async function saveNote(){
   if (state.selectedNoteId === null) return
-  const btn = document.querySelector('[data-action="save-note"]'); if (btn) btn.disabled = true
-  state.editor.saving = true; updateSaveStatus()
-  try {
-    const v = getEditorValue()
-    const d = v.kind === 'body'
-      ? await api('saveNoteBody', { noteId: state.selectedNoteId, body: v.value })
-      : await api('saveNote', { noteId: state.selectedNoteId, markdown: v.value })
-    if (v.kind === 'body') state.editor.body = v.value
-    else state.editor.persistedMarkdown = v.value
-    state.editor.dirty = false; state.editor.saving = false; updateSaveStatus()
-    toast(t('localSavedR', { r: d.observedRevision }), 'ok')
-    refreshHeader(); renderTree()
-    kickSyncPoll({ pending: true })
-  } catch (e) { state.editor.saving = false; updateSaveStatus(); toast(t('saveFailed') + ': ' + e.message, 'err') }
-  finally { if (btn) btn.disabled = false }
+  if (await flushNoteEdits()) toast(t('localSaved'), 'ok')
 }
 async function autosave(){
-  if (!state.editor.dirty || state.selectedNoteId === null || state.editor.saving) return
-  state.editor.saving = true; updateSaveStatus()
-  try {
-    const v = getEditorValue()
-    const d = v.kind === 'body'
-      ? await api('saveNoteBody', { noteId: state.selectedNoteId, body: v.value })
-      : await api('saveNote', { noteId: state.selectedNoteId, markdown: v.value })
-    if (v.kind === 'body') state.editor.body = v.value
-    else state.editor.persistedMarkdown = v.value
-    state.editor.dirty = false; state.editor.saving = false; updateSaveStatus()
-    refreshHeader()
-    kickSyncPoll({ pending: true })
-  } catch (e) { state.editor.saving = false; updateSaveStatus(); toast(t('autosaveFailed'), 'err') }
+  if (!state.editor.dirty || state.selectedNoteId === null || state.editor.saving || state.editor.conflict) return
+  const editor = state.editor
+  if (await persistNote(editor) && editor === state.editor && editor.dirty) {
+    clearTimeout(onEditorInput._t)
+    onEditorInput._t = setTimeout(autosave, 1500)
+  }
 }
 
 // ── Adaptive remote-sync polling (never rebuilds editor/tree) ───────────────
@@ -1722,14 +2058,17 @@ function scheduleSyncPoll(){
 }
 async function pollSync(){
   if (document.hidden || state.view !== 'notes' || state.selectedNoteId === null) return
+  const noteId = state.selectedNoteId, editor = state.editor
+  const current = () => state.view === 'notes' && state.selectedNoteId === noteId && state.editor === editor
   try {
-    const d = await api('getNote', { noteId: state.selectedNoteId })
-    const syncEl = $('#detailSync'); if (syncEl) syncEl.innerHTML = syncBadgeHtml(d.sync)
-    patchNoteBadge(state.selectedNoteId, d.sync)
+    const d = await api('getNote', { noteId })
+    if (!current()) return
+    const syncEl = $('#detailSync'); if (syncEl) syncEl.innerHTML = syncBadgeHtml(d.sync) + configurationHint(d.sync)
+    patchNoteBadge(noteId, d.sync)
     if (isTerminalSync(d.sync)) { syncPollDelay = 2000; return } // done: stop polling
     syncPollDelay = Math.min(15000, Math.max(3000, Date.now() - syncPollStarted < 20000 ? 3000 : syncPollDelay * 1.6))
     scheduleSyncPoll()
-  } catch (e) { scheduleSyncPoll() }
+  } catch (e) { if (current()) scheduleSyncPoll() }
 }
 function patchNoteBadge(noteId, sync){
   const el = document.querySelector('[data-sync="note:' + CSS.escape(noteId) + '"]')
@@ -1738,6 +2077,7 @@ function patchNoteBadge(noteId, sync){
 
 // ── Create / rename / delete / folders / order (change-driven) ──────────────
 async function newNote(){
+  if (!await prepareNoteNavigation()) return
   const title = prompt(t('newNotePrompt'), '')
   if (title === null) return
   const slug = (title.trim() || 'untitled').replace(/[\\/:*?"<>|#]+/g, ' ').trim().replace(/\s+/g, '-').slice(0, 60) || 'untitled'
@@ -1745,7 +2085,7 @@ async function newNote(){
   const rel = base + slug + '.md'
   try {
     const r = await api('createNote', { relativePath: rel, markdown: '# ' + (title.trim() || 'New note') + '\\n' })
-    state.selectedNoteId = r.noteId; state.selectedFolder = null
+    if (state.view !== 'notes' && !await setView('notes')) return
     await openNote(r.noteId); refreshHeader()
   } catch (e) { toast(t('genericError') + ': ' + e.message, 'err') }
 }
@@ -1758,10 +2098,11 @@ function inlineRenameTitle(targetEl, noteId){
   targetEl.replaceWith(input)
   input.focus(); input.select()
   let done = false
-  const finish = () => {
+  const finish = async () => {
     if (done) return; done = true
     const v = input.value.trim()
     if (!v || v === current) { input.replaceWith(targetEl); return }
+    if (!await prepareNoteNavigation()) { input.replaceWith(targetEl); return }
     api('renameNoteTitle', { noteId, title: v }).then(() => {
       toast(t('localSaved'), 'ok'); refreshHeader()
       if (state.selectedNoteId === noteId) openNote(noteId)
@@ -1780,6 +2121,7 @@ function renameNote(noteId){
   inlineRenameTitle(target, id)
 }
 async function delNote(noteId){
+  if (!await prepareNoteNavigation()) return
   const id = noteId || state.selectedNoteId
   if (id === null) return
   if (!confirm(t('delNoteConfirm'))) return
@@ -1801,20 +2143,24 @@ function removeMissingNote(noteId){
   })
 }
 async function newFolder(parentPath){
+  if (!await prepareNoteNavigation()) return
   const name = prompt(t('createFolderPrompt'), ''); if (!name || !name.trim()) return
   const path = (parentPath ? parentPath + '/' : '') + name.trim()
-  try { await api('createFolder', { path }); state.selectedFolder = path; state.selectedNoteId = null; toast(t('folderCreated'), 'ok'); await renderTree(); renderDetail(); renderFolderMain(path) }
+  const navigation = navigationSeq
+  try { await api('createFolder', { path }); if (navigation !== navigationSeq || !await prepareNoteNavigation()) return; state.selectedFolder = path; state.selectedNoteId = null; toast(t('folderCreated'), 'ok'); await renderTree(); renderDetail(); renderFolderMain(path) }
   catch (e) { toast(t('genericError') + ': ' + e.message, 'err') }
 }
 function renderFolderMain(path){
   renderDesktopExplorer(path)
 }
 async function renameFolder(path){
+  if (!await prepareNoteNavigation()) return
   const name = prompt(t('folderRenamePrompt'), path.split('/').pop()); if (!name || !name.trim()) return
   const parent = parentOfPath(path); const newPath = (parent ? parent + '/' : '') + name.trim()
   if (newPath === path) return
   const span = mutSpan('renameFolder')
-  try { await api('renameFolder', { path, newPath }); span.mark('rpc'); state.selectedFolder = newPath; await renderTree(); span.mark('tree'); renderDetail(); renderFolderMain(newPath); span.end('paint') }
+  const navigation = navigationSeq
+  try { await api('renameFolder', { path, newPath }); span.mark('rpc'); if (navigation !== navigationSeq || !await prepareNoteNavigation()) return; state.selectedNoteId = null; state.selectedFolder = newPath; await renderTree(); span.mark('tree'); renderDetail(); renderFolderMain(newPath); span.end('paint') }
   catch (e) { span.end('error'); toast(t('genericError') + ': ' + e.message, 'err') }
 }
 function folderCounts(path){
@@ -1829,6 +2175,7 @@ function folderCounts(path){
   return { notes, subfolders }
 }
 async function deleteFolder(path){
+  if (!await prepareNoteNavigation()) return
   const { notes, subfolders } = folderCounts(path)
   const name = path.split('/').pop()
   if (notes === 0 && subfolders === 0) {
@@ -1846,6 +2193,7 @@ async function moveNote(noteId){
     (async () => {
       span.mark('pick')
       try {
+        if (!await prepareNoteNavigation()) return
         const cur = await api('getNote', { noteId }); span.mark('getNote')
         const rel = (target ? target + '/' : '') + cur.note.relativePath.split('/').pop()
         if (rel === cur.note.relativePath) { span.end('noop'); return }
@@ -1861,13 +2209,14 @@ function showFolderPicker(currentPath, cb){
   api('listFolders').then(folders => {
     const overlay = document.createElement('div')
     overlay.className = 'modal-overlay'
-    overlay.innerHTML = '<div class="modal"><h3>' + esc(t('moveTo')) + '</h3><select id="pickFolder"><option value="">' + esc(t('rootFolder')) + '</option>' + folders.map(f => '<option value="' + esc(f) + '"' + (f === currentPath ? ' selected' : '') + '>' + esc(f) + '</option>').join('') + '</select><div class="modal-actions"><button class="btn" data-act="pick-cancel">' + esc(t('cancel')) + '</button><button class="btn primary" data-act="pick-ok">' + esc(t('ok')) + '</button></div></div>'
+    overlay.innerHTML = '<div class="modal"><h3>' + esc(t('moveTo')) + '</h3><select id="pickFolder" aria-label="' + esc(t('folder')) + '"><option value="">' + esc(t('rootFolder')) + '</option>' + folders.map(f => '<option value="' + esc(f) + '"' + (f === currentPath ? ' selected' : '') + '>' + esc(f) + '</option>').join('') + '</select><div class="modal-actions"><button class="btn" data-act="pick-cancel">' + esc(t('cancel')) + '</button><button class="btn primary" data-act="pick-ok">' + esc(t('ok')) + '</button></div></div>'
     document.body.appendChild(overlay)
     const okBtn = overlay.querySelector('[data-act="pick-ok"]')
     // Scoped handles: never 'document.querySelector(.modal-overlay)' — with
     // stacked overlays the global selector removes the WRONG (first) one and
     // leaves the top overlay stuck (the "move dialog never closes" bug).
-    const done = (val) => { overlay.remove(); if (val !== undefined) cb(val) }
+    const dialog = mountDialog(overlay, { name: t('moveTo'), initialFocus: '#pickFolder', onCancel: () => done(undefined) })
+    const done = (val) => { dialog.close(); if (val !== undefined) cb(val) }
     overlay.querySelector('[data-act="pick-cancel"]').onclick = () => done(undefined)
     okBtn.onclick = () => { okBtn.disabled = true; done(overlay.querySelector('#pickFolder').value) }
     overlay.addEventListener('click', (e) => { if (e.target === overlay) done(undefined) })
@@ -1896,7 +2245,7 @@ function attFilteredList(){
 }
 function fmtStamp(iso){ return String(iso || '').slice(0, 16).replace('T', ' ') }
 function attIcon(a){
-  if (attTypeOf(a.mimeType) === 'image') return '<img class="att-thumb" src="/pkw/attachment/' + esc(a.attachmentId) + '" alt="" loading="lazy">'
+  if (attTypeOf(a.mimeType) === 'image') return '<img class="att-thumb" src="' + PKW_BASE + '/attachment/' + esc(a.attachmentId) + '" alt="" loading="lazy">'
   if (attTypeOf(a.mimeType) === 'document') return '<span class="att-ic">📄</span>'
   return '<span class="att-ic">📦</span>'
 }
@@ -1916,7 +2265,7 @@ function attRowHtml(a){
     '<span class="nm">' + esc(a.filename) + '</span>' +
     '<span class="muted small">' + esc(attTypeOf(a.mimeType)) + '</span>' +
     '<span class="muted small">' + fmtSize(a.sizeBytes) + '</span>' +
-    procStateBadge(a.processingState) +
+    procStateBadge(a.processingState, a) +
     sourceOwnerBadge(a) +
     attCompanionHtml(a) +
     '</div>'
@@ -1925,10 +2274,10 @@ function attCardHtml(a){
   const sel = state.attSelection.has(a.attachmentId)
   return '<div class="att-card ' + (sel ? 'selected' : '') + '" data-action="open-attachment" data-id="' + esc(a.attachmentId) + '">' +
     '<input type="checkbox" class="att-check" data-action="att-toggle" data-id="' + esc(a.attachmentId) + '"' + (sel ? ' checked' : '') + '>' +
-    '<div class="att-thumbwrap">' + (attTypeOf(a.mimeType) === 'image' ? '<img class="att-thumb" src="/pkw/attachment/' + esc(a.attachmentId) + '" alt="" loading="lazy">' : '<span class="att-ic big">📄</span>') + '</div>' +
+    '<div class="att-thumbwrap">' + (attTypeOf(a.mimeType) === 'image' ? '<img class="att-thumb" src="' + PKW_BASE + '/attachment/' + esc(a.attachmentId) + '" alt="" loading="lazy">' : '<span class="att-ic big">📄</span>') + '</div>' +
     '<div class="att-card-name">' + esc(a.filename) + '</div>' +
     '<div class="muted small">' + fmtSize(a.sizeBytes) + ' · ' + esc(fmtStamp(a.createdAt)) + '</div>' +
-    '<div>' + procStateBadge(a.processingState) + sourceOwnerBadge(a) + '</div>' +
+    '<div>' + procStateBadge(a.processingState, a) + sourceOwnerBadge(a) + '</div>' +
     '</div>'
 }
 function attToolbarHtml(){
@@ -1937,7 +2286,7 @@ function attToolbarHtml(){
   const sortLabel = state.attSort === 'name' ? t('attSortName') : state.attSort === 'size' ? t('attSortSize') : t('attSortRecent')
   return '<div class="toolbar">' +
     (isMobile() ? '' : '<button class="btn small" data-action="att-mode" data-mode="' + (state.attMode === 'list' ? 'grid' : 'list') + '">' + esc(state.attMode === 'list' ? t('attGridView') : t('attListView')) + '</button>') +
-    '<input id="attSearch" type="search" placeholder="' + esc(t('attSearchPlaceholder')) + '" value="' + esc(state.attQuery) + '">' +
+    '<input id="attSearch" type="search" aria-label="' + esc(t('attSearchPlaceholder')) + '" placeholder="' + esc(t('attSearchPlaceholder')) + '" value="' + esc(state.attQuery) + '">' +
     typeBtn('all', t('attTypeAll')) + typeBtn('image', t('attTypeImage')) + typeBtn('document', t('attTypeDocument')) + typeBtn('other', t('attTypeOther')) +
     (isMobile()
       ? '<button class="btn small" data-action="att-sort-sheet">' + esc(t('attSort')) + '：' + esc(sortLabel) + ' ▼</button>'
@@ -2011,11 +2360,12 @@ async function refreshSourcesData(){
   } catch (e) { /* offline → background worker will retry */ }
 }
 async function openAttachment(id){
+  const request = ++attachmentSeq
   const seq = viewSeq
   state.selectedAttachmentId = id
   try {
     const d = await api('getAttachment', { attachmentId: id })
-    if (seq !== viewSeq || state.view !== 'attachments') return
+    if (request !== attachmentSeq || seq !== viewSeq || state.view !== 'attachments' || state.selectedAttachmentId !== id) return
     const a = d.attachment, c = d.companionNote
     const owners = d.owners || []
     const summaryHtml = d.summary
@@ -2030,7 +2380,7 @@ async function openAttachment(id){
     const reparseBtn = (d.processingState === 'failed' || d.processingState === 'ready')
       ? ' <button class="btn small" data-action="reparse-attachment" data-id="' + esc(id) + '">' + esc(t('reparse')) + '</button>'
       : ''
-    const html = '<h3>' + esc(t('sources')) + '</h3>' + procStateBadge(d.processingState) +
+    const html = '<h3>' + esc(t('sources')) + '</h3>' + procStateBadge(d.processingState, d) + configurationHint(d) +
       '<div class="kv"><b>' + esc(t('mime')) + '</b> <span class="v mono">' + esc(a.mimeType) + '</span></div>' +
       '<div class="kv"><b>' + esc(t('size')) + '</b> <span class="v">' + fmtSize(a.sizeBytes) + '</span></div>' +
       '<div class="kv"><b>' + esc(t('updated')) + '</b> <span class="v">' + esc(fmtStamp(a.createdAt)) + '</span></div>' +
@@ -2047,7 +2397,7 @@ async function openAttachment(id){
       '<h3>' + esc(t('details')) + '</h3><div class="kv"><b>' + esc(t('attachmentId')) + '</b> <span class="v mono">' + esc(a.attachmentId) + '</span></div>'
     if (isMobile()) mobileDetail(a.filename, html)
     else $('#detail').innerHTML = html
-  } catch (e) { toast(t('genericError') + ': ' + e.message, 'err') }
+  } catch (e) { if (request === attachmentSeq && seq === viewSeq && state.selectedAttachmentId === id) toast(t('genericError') + ': ' + e.message, 'err') }
 }
 function fileToBase64(file){
   return new Promise((resolve, reject) => {
@@ -2066,7 +2416,7 @@ async function uploadFileBinary(file, indexable){
 // ── Companion Note (idempotent Host orchestration; local-first, never waits on WeKnora) ──
 async function ensureCompanionForAttachment(id, folder){
   const r = await api('createCompanionNote', { attachmentId: id, folder: folder || '' })
-  if (r.created === false) { toast(t('attOpenedExisting'), 'ok'); setView('notes'); openNote(r.noteId); return r }
+  if (r.created === false) { toast(t('attOpenedExisting'), 'ok'); if (await setView('notes')) await openNote(r.noteId); return r }
   toast(t('attCreatedNote'), 'ok')
   await refreshAttachments(); refreshHeader()
   if (state.view === 'notes') renderTree()
@@ -2074,16 +2424,16 @@ async function ensureCompanionForAttachment(id, folder){
 }
 async function openCompanionForAttachment(id){
   const c = await api('getCompanionNote', { attachmentId: id }).catch(() => null)
-  if (c && c.noteId) { setView('notes'); openNote(c.noteId) }
+  if (c && c.noteId) { if (await setView('notes')) await openNote(c.noteId) }
   else toast(t('attNoCompanion'), 'warn')
 }
 async function previewAttachment(id){
   // Mobile → browser native viewer (new tab). Desktop → right Inspector preview pane.
-  if (isMobile()) { window.open('/pkw/attachment/' + id + '/preview', '_blank'); return }
+  if (isMobile()) { window.open(PKW_BASE + '/attachment/' + id + '/preview', '_blank'); return }
   try {
     const d = await api('getAttachment', { attachmentId: id })
     const a = d.attachment
-    const url = '/pkw/attachment/' + id + '/preview'
+    const url = PKW_BASE + '/attachment/' + id + '/preview'
     const mime = a.mimeType || ''
     const isPdf = mime === 'application/pdf'
     const isImage = mime.indexOf('image/') === 0
@@ -2160,26 +2510,29 @@ async function uploadFilesWithCompanion(files, withNote, folder, index){
 function uploadDialog(){
   const overlay = document.createElement('div'); overlay.className = 'modal-overlay'
   overlay.innerHTML = '<div class="modal"><h3>' + esc(t('upload')) + '</h3>' +
-    '<input type="file" id="upFiles" multiple style="margin-bottom:10px">' +
+    '<input type="file" id="upFiles" aria-label="' + esc(t('upload')) + '" multiple style="margin-bottom:10px">' +
     '<label class="check-row"><input type="checkbox" id="upNote" checked> ' + esc(t('companionNote')) + '</label>' +
-    '<label class="form-label">' + esc(t('noteLocation')) + '</label><select id="upFolder" style="margin-bottom:10px"></select>' +
+    '<label for="upFolder" class="form-label">' + esc(t('noteLocation')) + '</label><select id="upFolder" style="margin-bottom:10px"></select>' +
     '<label class="check-row"><input type="checkbox" id="upIndex" checked> ' + esc(t('kbIndex')) + ' <span class="muted small">' + esc(t('kbIndexHint')) + '</span></label>' +
     '<div class="toolbar" style="margin-top:12px"><button class="btn" id="upCancel">' + esc(t('cancel')) + '</button><button class="btn primary" id="upOk">' + esc(t('upload')) + '</button></div></div>'
   document.body.appendChild(overlay)
   const q = (s) => overlay.querySelector(s)
+  const hasDraft = () => !!q('#upFiles').files.length
+  const cancel = () => { if (!hasDraft() || confirm(t('discardDraftConfirm'))) dialog.close() }
+  const dialog = mountDialog(overlay, { name: t('upload'), initialFocus: '#upFiles', onCancel: cancel, hasDraft })
   api('listFolders').then(folders => {
     const sel = q('#upFolder')
     if (sel) sel.innerHTML = '<option value="">' + esc(t('rootFolder')) + '</option>' + (folders || []).map(f => '<option value="' + esc(f) + '">' + esc(f) + '</option>').join('')
   }).catch(() => {})
-  q('#upCancel').addEventListener('click', () => overlay.remove())
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove() })
+  q('#upCancel').addEventListener('click', cancel)
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) cancel() })
   q('#upOk').addEventListener('click', () => {
     const files = Array.prototype.slice.call(q('#upFiles').files || [])
     if (!files.length) { toast(t('uploadFailed'), 'warn'); return }
     const withNote = q('#upNote').checked
     const folder = q('#upFolder').value || ''
     const index = q('#upIndex').checked
-    overlay.remove()
+    dialog.close()
     uploadFilesWithCompanion(files, withNote, folder, index)
   })
 }
@@ -2331,7 +2684,7 @@ function renderMobileTasks(){
 function mobileCompletedTaskRow(x){
   return '<div class="mtask done" data-action="open-task-detail" data-id="' + esc(x.taskId) + '">' +
     '<span class="mtask-check">✓</span>' +
-    '<div class="mtask-main"><div class="mtask-title">' + esc(x.title) + '</div>' +
+    '<div class="mtask-main"><button type="button" class="mtask-title row-action mobile-open" data-action="open-task-detail" data-id="' + esc(x.taskId) + '">' + esc(x.title) + '</button>' +
     (x.completedAt ? '<div class="mtask-due muted">' + esc(fmtStamp(x.completedAt)) + '</div>' : '') + '</div>' +
     '</div>'
 }
@@ -2419,7 +2772,49 @@ function updateTrashSelectionUI(){
       '<button class="btn small" data-action="trash-clear-selection" ' + (state.trashBusy ? 'disabled' : '') + '>' + esc(t('trashClearSelection')) + '</button>'
     : ''
 }
-function renderTrashFrom(notes, atts, folders){
+function trashTasksHtml(tasks){
+  const readOnly = workspaceReadOnly(), busy = !!state.trashTaskBusy
+  const loadError = state.trashTasksLoadError
+    ? '<p class="muted" role="alert">' + esc(t('trashTasksReadFailed')) + ' ' + esc(state.trashTasksLoadError) + (tasks.length ? ' ' + esc(t('trashTasksStale')) : '') + '</p><button class="btn small" data-action="retry-trash-tasks">' + esc(t('retry')) + '</button>'
+    : ''
+  const restoreError = state.trashTaskError ? '<p role="alert">' + esc(state.trashTaskError) + '</p>' + (loadError ? '' : '<button class="btn small" data-action="retry-trash-tasks">' + esc(t('retry')) + '</button>') : ''
+  const rows = tasks.map(task => '<div class="tree-row trash-item">' +
+    '<span class="ic" aria-hidden="true">☑</span><span class="trash-main"><span class="trash-name">' + esc(task.title) + '</span>' +
+    '<span class="muted small">' + esc(t('trashDeletedTime', { t: task.deletedAt || '' })) + '</span></span>' +
+    '<button type="button" class="btn small" data-action="restore-task" data-id="' + esc(task.taskId) + '" aria-label="' + esc(t('trashTaskRestoreLabel', { title: task.title })) + '"' + (readOnly || busy ? ' disabled' : '') + '>' + esc(t(state.trashTaskBusy === task.taskId ? 'trashRestoring' : 'trashRestore')) + '</button></div>').join('')
+  return '<h3 id="trashTasksTitle" tabindex="-1">' + esc(t('trashTasks')) + '<span class="sub">' + tasks.length + '</span></h3>' +
+    '<p class="muted small">' + esc(t('trashTasksHint')) + '</p>' + (readOnly ? '<p class="muted small">' + esc(t('spaceReadOnly')) + '</p>' : '') +
+    loadError + restoreError + (rows || (loadError ? '' : '<p class="muted">' + esc(t('trashTasksEmpty')) + '</p>'))
+}
+function renderTrashTasksInto(){
+  const box = $('#trashTasks')
+  if (state.view === 'trash' && box) box.innerHTML = trashTasksHtml((state.trashCache && state.trashCache.tasks) || [])
+}
+async function restoreTrashedTask(taskId){
+  if (workspaceReadOnly() || state.trashTaskBusy) return false
+  const task = ((state.trashCache && state.trashCache.tasks) || []).find(item => item.taskId === taskId)
+  if (!task) return false
+  state.trashTaskBusy = taskId; state.trashTaskError = ''; renderTrashTasksInto()
+  try {
+    await api('restoreTask', { taskId })
+    if (state.trashCache) state.trashCache.tasks = (state.trashCache.tasks || []).filter(item => item.taskId !== taskId)
+    state.tasksCache = []; subtaskCache.clear()
+    invalidateLoad('listTasks'); invalidateLoad('listTrashTasks')
+    toast(t('trashTaskRestored'), 'ok')
+    if (state.view === 'trash') await refreshTrash()
+    else if (state.view === 'tasks') refreshTasks()
+    if (taskDetailRefreshSubtasks) taskDetailRefreshSubtasks()
+    return true
+  } catch (error) {
+    state.trashTaskError = t('trashTaskRestoreFailed') + ': ' + error.message
+    toast(state.trashTaskError, 'err')
+    return false
+  } finally {
+    state.trashTaskBusy = null
+    renderTrashTasksInto()
+  }
+}
+function renderTrashFrom(notes, atts, folders, tasks = []){
   const visible = trashVisible(notes, atts, folders)
   const keys = visible.map(x => x.key)
   state.trashSelection = trashReconcile(state.trashSelection, keys)
@@ -2429,11 +2824,12 @@ function renderTrashFrom(notes, atts, folders){
   $('#list').innerHTML = '<div class="list-head">' + esc(t('trash')) + '</div><div class="list-section">' + esc(t('trashTypeFilter')) + '</div>' + filterRows
   const sa = trashSelectAllState(state.trashSelection, keys)
   const rows = visible.map(it => trashItemRow(it, state.trashSelection.has(it.key))).join('')
-  $('#main').innerHTML = '<h2>' + esc(t('trash')) + '<span class="sub">' + counts.all + '</span></h2>' +
+  $('#main').innerHTML = '<h2>' + esc(t('trash')) + '</h2><h3>' + esc(t('trashDocuments')) + '<span class="sub">' + counts.all + '</span></h3>' +
     '<div class="toolbar"><label class="select-all"><input type="checkbox" id="trashSelectAll"' + (sa === 'all' ? ' checked' : '') + ' ' + (state.trashBusy ? 'disabled' : '') + '> ' + esc(t('trashSelectAll')) + '</label><span class="spacer"></span>' +
     '<button class="btn danger" data-action="empty-trash" ' + (counts.all === 0 || state.trashBusy ? 'disabled' : '') + '>' + esc(t('trashEmptyTrash')) + '</button></div>' +
     '<div id="trashSelBar" class="trash-selbar"></div>' +
-    (rows ? rows : '<div class="empty"><h3>' + esc(t('trashEmptyTitle')) + '</h3><p class="muted">' + esc(t('trashEmptyBody')) + '</p></div>')
+    (rows ? rows : '<div class="empty"><h3>' + esc(t('trashEmptyTitle')) + '</h3><p class="muted">' + esc(t('trashEmptyBody')) + '</p></div>') +
+    '<section id="trashTasks" aria-labelledby="trashTasksTitle" style="margin-top:28px">' + trashTasksHtml(tasks) + '</section>'
   const saEl = $('#trashSelectAll'); if (saEl) saEl.indeterminate = (sa === 'partial')
   updateTrashSelectionUI()
   restoreScroll()
@@ -2492,9 +2888,10 @@ function trashConfirmDialog(title, body, okLabel, onOk){
   overlay.innerHTML = '<div class="modal trash-confirm"><h3>' + esc(title) + '</h3><p class="muted">' + body + '</p><div class="toolbar"><button class="btn" id="tcCancel">' + esc(t('cancel')) + '</button><button class="btn danger" id="tcOk">' + esc(okLabel) + '</button></div></div>'
   document.body.appendChild(overlay)
   const q = (s) => overlay.querySelector(s)
-  q('#tcCancel').addEventListener('click', () => overlay.remove())
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove() })
-  q('#tcOk').addEventListener('click', () => { overlay.remove(); onOk() })
+  const dialog = mountDialog(overlay, { name: title, initialFocus: '#tcCancel', onCancel: () => dialog.close() })
+  q('#tcCancel').addEventListener('click', () => dialog.close())
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) dialog.close() })
+  q('#tcOk').addEventListener('click', () => { dialog.close(); onOk() })
 }
 function confirmBatchPurge(keys){
   trashConfirmDialog(t('trashPurgeConfirmTitle', { n: keys.length }), esc(t('trashPurgeConfirmBody')), t('trashPermanentDelete'), () => doBatchPurge(keys))
@@ -2511,19 +2908,23 @@ function confirmEmptyTrash(){
   })
 }
 async function renderTrash(){
-  const seq = viewSeq
+  const seq = viewSeq, request = ++trashSeq
   $('#detail').innerHTML = ''
-  if (state.trashCache) { renderTrashFrom(state.trashCache.notes, state.trashCache.atts, state.trashCache.folders); viewMark('warm-paint', 'cache=hit') }
+  if (state.trashCache) { renderTrashFrom(state.trashCache.notes, state.trashCache.atts, state.trashCache.folders, state.trashCache.tasks); viewMark('warm-paint', 'cache=hit') }
   else { $('#list').innerHTML = ''; $('#treeToolbar').innerHTML = ''; $('#main').innerHTML = '<div class="empty">' + esc(t('loading')) + '</div>'; viewMark('shell', 'cache=miss') }
   try {
-    const notes = await loadOnce('listTrash', {})
-    const atts = await loadOnce('listTrashAttachments', {})
-    const folders = await loadOnce('listTrashFolders', {})
-    if (seq !== viewSeq) return // stale navigation guard
-    state.trashCache = { notes, atts, folders }
-    renderTrashFrom(notes, atts, folders)
+    const [notes, atts, folders, taskResult] = await Promise.all([
+      loadOnce('listTrash', {}), loadOnce('listTrashAttachments', {}), loadOnce('listTrashFolders', {}),
+      loadOnce('listTrashTasks', {}).then(tasks => ({ tasks, error: '' }), error => ({ tasks: null, error: error.message }))
+    ])
+    if (seq !== viewSeq || request !== trashSeq) return // stale navigation guard
+    const tasks = taskResult.tasks || (state.trashCache && state.trashCache.tasks) || []
+    state.trashTasksLoadError = taskResult.error
+    if (!taskResult.error) state.trashTaskError = ''
+    state.trashCache = { notes, atts, folders, tasks }
+    renderTrashFrom(notes, atts, folders, tasks)
     viewMark('data-ready')
-  } catch (e) { if (seq === viewSeq) $('#main').innerHTML = '<div class="empty">' + esc(t('genericError')) + ': ' + esc(e.message) + '</div>' }
+  } catch (e) { if (seq === viewSeq && request === trashSeq) $('#main').innerHTML = '<div class="empty">' + esc(t('genericError')) + ': ' + esc(e.message) + '</div>' }
 }
 
 // ── Knowledge view: unified Discovery (browse + RAG retrieval). Search and
@@ -2533,17 +2934,47 @@ function renderKnowledgeView(){
   $('#treeToolbar').innerHTML = ''; $('#detail').innerHTML = ''
   const q = state.searchQuery || ''
   $('#main').innerHTML = '<h2>' + esc(t('knowledgeBrowseTitle')) + '</h2>' +
-    '<div class="toolbar"><input id="kbSearch" placeholder="' + esc(t('searchPlaceholder')) + '" value="' + esc(q) + '" style="flex:1;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--panel);color:var(--text-primary)">' +
-    (q ? '<button class="btn" data-action="kb-clear-search">' + esc(t('cancel')) + '</button>' : '') +
-    '</div><div id="kbBody"></div>'
-  const input = $('#kbSearch')
-  if (input) input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { const v = input.value.trim(); if (v) runSearch(v) } })
+    '<form id="kbSearchForm" class="toolbar" role="search"><label class="sr-only" for="kbSearch">' + esc(t('search')) + '</label>' +
+    '<input id="kbSearch" type="search" placeholder="' + esc(t('searchPlaceholder')) + '" value="' + esc(q) + '">' +
+    '<button class="btn primary" type="submit">' + esc(t('search')) + '</button>' +
+    '<button class="btn" id="kbClearSearch" type="button" data-action="kb-clear-search"' + (q ? '' : ' hidden') + '>' + esc(t('searchBackHome')) + '</button>' +
+    '</form><div id="kbSearchStatus" role="status" aria-live="polite"></div><div id="kbBody" aria-busy="false"></div>'
+  $('#kbSearchForm').addEventListener('submit', (e) => {
+    e.preventDefault()
+    const query = $('#kbSearch').value.trim()
+    if (query) runSearch(query)
+    else clearKnowledgeSearch()
+  })
   if (q) {
-    if (state.searchResults) { const html = searchCardsHtml(state.searchResults); $('#kbBody').innerHTML = html || '<div class="empty">' + esc(t('noHits', { q })) + '</div>' }
-    else $('#kbBody').innerHTML = '<div class="empty">' + esc(t('searching')) + '</div>'
-    return
+    if (state.searchStatus === 'idle') runSearch(q)
+    else renderKnowledgeSearchState()
+  } else renderKnowledgeBrowseInto()
+}
+function renderKnowledgeSearchState(){
+  const box = $('#kbBody')
+  if (!box || state.view !== 'knowledge') return
+  const status = $('#kbSearchStatus'), clear = $('#kbClearSearch')
+  if (clear) clear.hidden = false
+  box.setAttribute('aria-busy', state.searchStatus === 'loading' ? 'true' : 'false')
+  if (state.searchStatus === 'loading') {
+    if (status) status.textContent = t('searching')
+    box.innerHTML = '<div class="empty"><span class="spinner" aria-hidden="true"></span> ' + esc(t('searching')) + '</div>'
+  } else if (state.searchStatus === 'error') {
+    if (status) status.textContent = t('searchFailed')
+    box.innerHTML = '<div class="empty"><p>' + esc(t('searchOfflineHint')) + '</p><button class="btn primary" data-action="kb-retry-search">' + esc(t('retry')) + '</button>' +
+      '<details class="search-error"><summary>' + esc(t('searchErrorDetails')) + '</summary><p class="mono">' + esc(state.searchError) + '</p></details></div>'
+  } else {
+    const results = state.searchResults || []
+    if (status) status.textContent = t('searchResultsCount', { q: state.searchQuery, n: results.length })
+    const warning = state.searchWarning ? '<p class="kb-section-hint" role="status">' + esc(state.searchWarning) + '</p>' : ''
+    box.innerHTML = warning + (results.length ? '<p class="kb-section-hint">' + esc(t(state.searchMode === 'local-keyword' ? 'searchLocalEvidenceHint' : 'searchEvidenceHint')) + '</p>' + searchCardsHtml(results) : '<div class="empty">' + esc(t('noHits', { q: state.searchQuery })) + '</div>')
   }
-  renderKnowledgeBrowseInto()
+}
+function clearKnowledgeSearch(){
+  searchSeq++
+  state.searchQuery = ''; state.searchResults = null; state.searchStatus = 'idle'; state.searchError = ''; state.searchWarning = ''; state.searchMode = null
+  renderKnowledgeView()
+  const input = $('#kbSearch'); if (input) input.focus()
 }
 // Unified knowledge card: shared by Knowledge Discovery browse + Search results
 // so "finding knowledge" reads identically regardless of entry point. Exposes
@@ -2560,7 +2991,7 @@ function knowledgeCardHtml(c){
   const snippetHtml = snippets.slice(0, 2).map(s => '<div class="snippet">' + esc(s) + '</div>').join('')
   if (isMobile() && c.open) {
     return '<div class="hit hit-clickable" data-action="' + esc(c.open.action) + '" data-id="' + esc(c.open.id) + '"' + (c.reasonAttrs || '') + '>' +
-      '<div class="t">' + esc(c.title) + (c.badges || '') + '<span class="chev">›</span></div>' +
+      '<div class="t"><button type="button" class="row-action mobile-open" data-action="' + esc(c.open.action) + '" data-id="' + esc(c.open.id) + '"' + (c.reasonAttrs || '') + '>' + esc(c.title) + '</button>' + (c.badges || '') + '</div>' +
       snippetHtml +
       '<div class="ref"><span class="meta">' + meta.join(' · ') + '</span></div>' +
       '</div>'
@@ -2577,7 +3008,7 @@ async function renderKnowledgeBrowseInto(){
   if (!box) return
   const card = (it) => {
     const badges = (it.attachmentCount ? '<span class="badge">' + esc(t('attachmentsN', { n: it.attachmentCount })) + '</span>' : '') +
-      (it.indexed ? '<span class="badge ok">' + esc(t('knowledgeIndexed')) + '</span>' : (it.pending ? '<span class="badge warn">' + esc(t('knowledgePending')) + '</span>' : ''))
+      knowledgeBadge(it)
     return knowledgeCardHtml({
       title: it.title || it.relativePath || '',
       snippet: it.summary,
@@ -2612,28 +3043,30 @@ async function renderKnowledgeBrowseInto(){
   else { box.innerHTML = '<div class="empty">' + esc(t('loading')) + '</div>'; viewMark('shell', 'cache=miss') }
   try {
     const list = await api('listKnowledge', {})
-    if (seq !== viewSeq) return
+    if (seq !== viewSeq || state.view !== 'knowledge' || state.searchQuery || box !== $('#kbBody')) return
     state.knowledgeCache = list
     draw()
     viewMark('data-ready')
   } catch (e) {
-    if (seq !== viewSeq) return
+    if (seq !== viewSeq || state.view !== 'knowledge' || state.searchQuery || box !== $('#kbBody')) return
     if (box) box.innerHTML = '<div class="empty">' + esc(t('knowledgeOffline')) + '</div><div class="empty"><button class="btn" data-action="knowledge-tab" data-tab="browse">' + esc(t('retry')) + '</button></div>'
   }
 }
 function searchCardsHtml(results){
   return results.map(r => {
+    const attachmentReason = t(state.searchMode === 'local-keyword' ? 'attachmentNameMatch' : 'attMatch')
     const local = r.local
     const title = r.remote.title || r.remote.filename || (local && local.title) || (local && local.entityId) || t('untitled')
     const attName = r.remote.filename || (local && local.matchedAttachmentId) || ''
     let reason = ''
     let reasonValue = 'note'
     if (local) {
-      if (local.matchReason === 'both') { reason = t('noteBodyMatch') + ' · ' + t('attMatch') + ' · ' + esc(attName); reasonValue = 'both' }
-      else if (local.matchReason === 'attachment' || local.matchedAttachmentId) { reason = t('attMatch') + ' · ' + esc(attName); reasonValue = 'attachment' }
-      else if (local.entityType === 'attachment') { reason = t('attMatch') + ' · ' + esc(attName); reasonValue = 'attachment' }
+      if (local.matchReason === 'both') { reason = t('noteBodyMatch') + ' · ' + attachmentReason + ' · ' + esc(attName); reasonValue = 'both' }
+      else if (local.matchReason === 'attachment' || local.matchedAttachmentId) { reason = attachmentReason + ' · ' + esc(attName); reasonValue = 'attachment' }
+      else if (local.entityType === 'attachment') { reason = attachmentReason + ' · ' + esc(attName); reasonValue = 'attachment' }
       else reason = t('noteBodyMatch')
     }
+    if (state.searchMode === 'local-keyword' && reasonValue === 'attachment') reasonValue = 'attachment-name'
     const kindBadge = local
       ? (local.entityType === 'note' ? '<span class="badge">' + esc(t('noteLabel')) + '</span>' : '<span class="badge">' + esc(t('attachmentLabel')) + '</span>')
       : ''
@@ -2661,20 +3094,27 @@ function renderSearchResults(q, results){
   $('#main').innerHTML = '<h2>' + esc(t('search')) + '<span class="sub">' + esc(q) + '</span></h2>' + searchCardsHtml(results)
 }
 async function runSearch(q){
+  const request = ++searchSeq, view = viewSeq
   state.searchQuery = q
   state.searchResults = null
-  const box = $('#kbBody')
-  if (box) box.innerHTML = '<div class="empty">' + esc(t('searching')) + '</div>'
-  else $('#main').innerHTML = '<div class="empty">' + esc(t('searching')) + '</div>'
+  state.searchStatus = 'loading'; state.searchError = ''; state.searchWarning = ''; state.searchMode = null
+  renderKnowledgeSearchState()
+  const current = () => request === searchSeq && view === viewSeq && state.view === 'knowledge' && state.searchQuery === q
   try {
     const payload = await api('search', { query: q, limit: 10 })
-    const results = payload && Array.isArray(payload.results) ? payload.results : (Array.isArray(payload) ? payload : [])
-    state.searchResults = results
-    // Dev-only retrieval trace (C4): localize "no hits" to a layer; never in UI.
+    if (!current()) return
+    state.searchResults = payload && Array.isArray(payload.results) ? payload.results : (Array.isArray(payload) ? payload : [])
+    state.searchWarning = payload && typeof payload.warning === 'string' ? payload.warning : ''
+    state.searchMode = payload && payload.mode === 'local-keyword' ? 'local-keyword' : 'remote'
+    state.searchStatus = 'success'
+    // Dev-only retrieval trace: never render remote IDs or ranking scores.
     if (payload && payload.trace) console.debug('[pkw.retrieval]', payload.trace)
-    if (box) box.innerHTML = searchCardsHtml(results) || '<div class="empty">' + esc(t('noHits', { q })) + '</div>'
-    else renderSearchResults(q, results)
-  } catch (e) { state.searchResults = null; const msg = '<div class="empty">' + esc(t('knowledgeOffline')) + '</div><div class="empty muted">' + esc(e.message || '') + '</div>'; if (box) box.innerHTML = msg; else $('#main').innerHTML = msg }
+    renderKnowledgeSearchState()
+  } catch (e) {
+    if (!current()) return
+    state.searchResults = null; state.searchStatus = 'error'; state.searchError = String(e.message || ''); state.searchWarning = ''; state.searchMode = null
+    renderKnowledgeSearchState()
+  }
 }
 async function syncNow(){ toast(t('syncingAll'), 'warn'); try { await api('syncNow'); toast(t('ok'), 'ok'); await render() } catch (e) { toast(t('genericError') + ': ' + e.message, 'err') } }
 async function syncEntity(et, id){ try { await api('syncEntity', { entityType: et, entityId: id }); toast(t('ok'), 'ok'); if (et === 'note' && state.selectedNoteId === id) await openNote(id); else await renderTree() } catch (e) { toast(t('genericError') + ': ' + e.message, 'err') } }
@@ -2687,23 +3127,25 @@ function quickSwitch(){
     collectNotes(tree.root, notes)
     const overlay = document.createElement('div')
     overlay.className = 'modal-overlay'
-    overlay.innerHTML = '<div class="modal"><h3>' + esc(t('quickSwitch')) + '</h3><input id="qsInput" placeholder="' + esc(t('typeToSearch')) + '" /><div id="qsList" style="max-height:300px;overflow:auto"></div></div>'
+    overlay.innerHTML = '<div class="modal"><h3>' + esc(t('quickSwitch')) + '</h3><input id="qsInput" aria-label="' + esc(t('typeToSearch')) + '" placeholder="' + esc(t('typeToSearch')) + '" /><div id="qsList" style="max-height:300px;overflow:auto"></div><button class="btn" id="qsCancel">' + esc(t('cancel')) + '</button></div>'
     document.body.appendChild(overlay)
-    const input = overlay.querySelector('#qsInput'); input.focus()
+    const input = overlay.querySelector('#qsInput')
+    const dialog = mountDialog(overlay, { name: t('quickSwitch'), initialFocus: '#qsInput', onCancel: () => dialog.close() })
+    overlay.querySelector('#qsCancel').addEventListener('click', () => dialog.close())
     const listEl = overlay.querySelector('#qsList')
     const render = () => {
       const q = input.value.trim().toLowerCase()
       const list = notes.filter(n => !q || n.title.toLowerCase().includes(q) || n.relativePath.toLowerCase().includes(q)).slice(0, 30)
-      listEl.innerHTML = list.map(n => '<div class="tree-row" data-qsid="' + esc(n.noteId) + '"><span class="ic">📄</span><span class="nm">' + esc(n.title) + '</span><span class="muted mono">' + esc(n.relativePath) + '</span></div>').join('') || '<div class="empty">' + esc(t('noHits', { q: '' })) + '</div>'
+      listEl.innerHTML = list.map(n => '<button type="button" class="tree-row row-action" data-qsid="' + esc(n.noteId) + '"><span class="ic">📄</span><span class="nm">' + esc(n.title) + '</span><span class="muted mono">' + esc(n.relativePath) + '</span></button>').join('') || '<div class="empty">' + esc(t('noHits', { q: '' })) + '</div>'
     }
     render()
     input.addEventListener('input', render)
-    listEl.addEventListener('click', (e) => {
+    listEl.addEventListener('click', async (e) => {
       const row = e.target.closest('[data-qsid]')
-      if (row) { overlay.remove(); setView('notes'); openNote(row.dataset.qsid) }
+      if (row) { dialog.close(); if (await setView('notes')) await openNote(row.dataset.qsid) }
     })
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove() })
-  })
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) dialog.close() })
+  }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
 }
 function collectNotes(nodes, out){ for (const n of nodes) { if (n.kind === 'note') out.push(n); else collectNotes(n.children || [], out) } }
 
@@ -2711,23 +3153,24 @@ function collectNotes(nodes, out){ for (const n of nodes) { if (n.kind === 'note
 document.addEventListener('paste', async (e) => {
   // Vditor (Live mode) handles paste via its own upload hook; this manual handler
   // is for Source mode only (a raw textarea with no upload integration).
-  if (state.view !== 'notes' || state.selectedNoteId === null || state.editor.mode !== 'source') return
-  const items = (e.clipboardData && e.clipboardData.items) || []
+  if (dialogStack.length || state.view !== 'notes' || state.selectedNoteId === null || state.editor.mode !== 'source') return
+  const editor = state.editor, noteId = state.selectedNoteId, input = $('#editor')
+  const items = Array.from((e.clipboardData && e.clipboardData.items) || []).filter(item => item.type.indexOf('image/') === 0)
+  if (!items.length) return
+  e.preventDefault()
   for (const item of items) {
-    if (item.type.indexOf('image/') === 0) {
-      const file = item.getAsFile()
-      if (!file) continue
+    const file = item.getAsFile()
+    if (!file) continue
+    try {
       const contentBase64 = await fileToBase64(file)
-      const up = await api('uploadAttachment', { filename: 'paste-' + Date.now() + '.png', mimeType: file.type || 'image/png', contentBase64, knowledgeMode: 'note-scoped', ownerNoteId: state.selectedNoteId })
-      const el = $('#editor')
-      if (el) {
-        // Reference the STORED filename so the managed link resolves to the binary.
+      const up = await api('uploadAttachment', { filename: 'paste-' + Date.now() + '.png', mimeType: file.type || 'image/png', contentBase64, knowledgeMode: 'note-scoped', ownerNoteId: noteId })
+      if (editor === state.editor && state.selectedNoteId === noteId && input && input === $('#editor')) {
         const ref = '![](attachments/' + up.attachmentId + '/' + encodeAttachmentPath(up.filename) + ')'
-        insertAtCursor(el, '\\n' + ref + '\\n')
-      }
-      toast(t('uploadSuccess'), 'ok'); refreshHeader()
-      e.preventDefault()
-    }
+        insertAtCursor(input, '\\n' + ref + '\\n')
+        toast(t('uploadSuccess'), 'ok')
+      } else toast(t('uploadRetained'), 'ok')
+      refreshHeader()
+    } catch (error) { toast(t('uploadFailed') + ': ' + error.message, 'err') }
   }
 })
 function insertAtCursor(el, text){
@@ -2761,7 +3204,7 @@ function isMobile(){ return window.innerWidth <= 768 }
 let lastWasMobile = null
 window.addEventListener('resize', () => { const m = isMobile(); if (m !== lastWasMobile) { lastWasMobile = m; render() } })
 function mobileActionSheet(title, items){
-  document.querySelectorAll('.mobile-sheet-overlay').forEach(o => o.remove())
+  document.querySelectorAll('.mobile-sheet-overlay').forEach(closeMountedDialog)
   const ov = document.createElement('div')
   ov.className = 'mobile-sheet-overlay'
   ov.innerHTML = '<div class="mobile-sheet"><div class="ms-title">' + esc(title) + '</div>' +
@@ -2773,44 +3216,46 @@ function mobileActionSheet(title, items){
     }).join('') +
     '<button class="ms-cancel">' + esc(t('cancel')) + '</button></div>'
   document.body.appendChild(ov)
-  ov.addEventListener('click', (e) => { if (e.target === ov || e.target.closest('.ms-item') || e.target.closest('.ms-cancel')) ov.remove() })
+  const dialog = mountDialog(ov, { name: title, panel: ov.querySelector('.mobile-sheet'), onCancel: () => dialog.close() })
+  ov.addEventListener('click', (e) => { if (e.target === ov || e.target.closest('.ms-item') || e.target.closest('.ms-cancel')) dialog.close() })
 }
 function mobileNoteRow(n){
   const folder = (n.relativePath || '').includes('/') ? (n.relativePath).slice(0, (n.relativePath).lastIndexOf('/')) : ''
   return '<div class="mnote" data-action="open-note" data-id="' + esc(n.noteId) + '">' +
-    '<div class="mnote-main"><div class="mnote-title">' + esc(n.title || n.relativePath) + '</div>' +
+    '<div class="mnote-main"><button type="button" class="mnote-title row-action mobile-open" data-action="open-note" data-id="' + esc(n.noteId) + '">' + esc(n.title || n.relativePath) + '</button>' +
     (folder ? '<div class="mnote-folder">' + esc(folder) + '</div>' : '') +
     '<div class="mnote-meta">' + esc(fmtStamp(n.updatedAt)) + ' · ' + syncBadgeHtml(n.sync) + '</div></div>' +
-    '<button class="mnote-more" data-action="mobile-note-menu" data-id="' + esc(n.noteId) + '">⋯</button></div>'
+    '<button class="mnote-more" aria-label="' + esc(t('itemActions', { name: n.title || n.relativePath })) + '" data-action="mobile-note-menu" data-id="' + esc(n.noteId) + '">⋯</button></div>'
 }
 function mobileSourceCard(a){
   const isImage = (a.mimeType || '').indexOf('image/') === 0
-  const thumb = isImage ? '<img class="msrc-thumb" src="/pkw/attachment/' + esc(a.attachmentId) + '" alt="" loading="lazy">' : '<span class="msrc-ic">📄</span>'
+  const thumb = isImage ? '<img class="msrc-thumb" src="' + PKW_BASE + '/attachment/' + esc(a.attachmentId) + '" alt="" loading="lazy">' : '<span class="msrc-ic">📄</span>'
   const summary = a.summary ? '<div class="msrc-summary">' + esc(String(a.summary).slice(0, 120)) + '</div>' : ''
   return '<div class="msrc" data-action="open-attachment" data-id="' + esc(a.attachmentId) + '">' +
     '<div class="msrc-thumbwrap">' + thumb + '</div>' +
-    '<div class="msrc-main"><div class="msrc-name">' + esc(a.filename) + '</div>' +
+    '<div class="msrc-main"><button type="button" class="msrc-name row-action mobile-open" data-action="open-attachment" data-id="' + esc(a.attachmentId) + '">' + esc(a.filename) + '</button>' +
     '<div class="msrc-meta">' + esc(attTypeOf(a.mimeType)) + ' · ' + fmtSize(a.sizeBytes) + '</div>' +
-    '<div class="msrc-badges">' + procStateBadge(a.processingState) + (a.ownerCount ? '<span class="badge">' + esc(t('usedByN', { n: a.ownerCount })) + '</span>' : '<span class="badge warn">' + esc(t('isolated')) + '</span>') + '</div>' +
+    '<div class="msrc-badges">' + procStateBadge(a.processingState, a) + (a.ownerCount ? '<span class="badge">' + esc(t('usedByN', { n: a.ownerCount })) + '</span>' : '<span class="badge warn">' + esc(t('isolated')) + '</span>') + '</div>' +
     summary + '</div>' +
-    '<button class="mnote-more" data-action="mobile-source-menu" data-id="' + esc(a.attachmentId) + '">⋯</button></div>'
+    '<button class="mnote-more" aria-label="' + esc(t('itemActions', { name: a.filename })) + '" data-action="mobile-source-menu" data-id="' + esc(a.attachmentId) + '">⋯</button></div>'
 }
 function mobileTaskCard(x, matrices, inMatrix){
   const badge = (inMatrix ? '' : (x.matrixId ? '<div class="mtask-cat">' + esc(matrixName(matrices, x.matrixId)) + '</div>' : ''))
   const due = x.dueAt ? '<div class="mtask-due">' + esc(dueLabel(x.dueAt)) + '</div>' : ''
   return '<div class="mtask" data-action="open-task-detail" data-id="' + esc(x.taskId) + '">' +
-    '<span class="mtask-check" data-action="toggle-task" data-completed="' + (x.status === 'completed' ? '1' : '0') + '" data-id="' + esc(x.taskId) + '">' + (x.status === 'completed' ? '☑' : '☐') + '</span>' +
-    '<div class="mtask-main"><div class="mtask-title">' + esc(x.title) + '</div>' + badge + due + '</div>' +
-    '<button class="mnote-more" data-action="mobile-task-menu" data-id="' + esc(x.taskId) + '">⋯</button></div>'
+    '<button type="button" class="mtask-check row-action" aria-label="' + esc(x.title) + '" aria-pressed="' + (x.status === 'completed') + '" data-action="toggle-task" data-completed="' + (x.status === 'completed' ? '1' : '0') + '" data-id="' + esc(x.taskId) + '">' + (x.status === 'completed' ? '☑' : '☐') + '</button>' +
+    '<div class="mtask-main"><button type="button" class="mtask-title row-action mobile-open" data-action="open-task-detail" data-id="' + esc(x.taskId) + '">' + esc(x.title) + '</button>' + badge + due + '</div>' +
+    '<button class="mnote-more" aria-label="' + esc(t('itemActions', { name: x.title })) + '" data-action="mobile-task-menu" data-id="' + esc(x.taskId) + '">⋯</button></div>'
 }
 // Full-screen mobile detail (replaces the hidden desktop Inspector on mobile).
 function mobileDetail(title, bodyHtml){
-  document.querySelectorAll('.mobile-detail').forEach(o => o.remove())
+  document.querySelectorAll('.mobile-detail').forEach(closeMountedDialog)
   const ov = document.createElement('div')
   ov.className = 'mobile-detail'
   ov.innerHTML = '<div class="md-head"><button class="btn small" data-action="mobile-detail-back">← ' + esc(t('back')) + '</button><span class="md-title">' + esc(title) + '</span></div><div class="md-body">' + bodyHtml + '</div>'
   document.body.appendChild(ov)
-  ov.addEventListener('click', (e) => { if (e.target === ov) ov.remove() })
+  const dialog = mountDialog(ov, { name: title, panel: ov, initialFocus: '[data-action="mobile-detail-back"]', onCancel: () => dialog.close() })
+  ov.addEventListener('click', (e) => { if (e.target === ov) dialog.close() })
 }
 function showNoteContextMenu(x, y, noteId){
   showContextMenu(x, y, [
@@ -2947,8 +3392,10 @@ function matrixDeleteDialog(matrixId, name){
     '<div class="toolbar" id="mdActions" style="margin-top:12px"><button class="btn" id="mdCancel">' + esc(t('cancel')) + '</button><button class="btn danger" id="mdOk">' + esc(t('matrixRemove')) + '</button></div></div>'
   document.body.appendChild(overlay)
   const q = (s) => overlay.querySelector(s)
-  q('#mdCancel').addEventListener('click', () => { if (!matrixDeleting) overlay.remove() })
-  overlay.addEventListener('click', (e) => { if (e.target === overlay && !matrixDeleting) overlay.remove() })
+  const cancel = () => { if (!matrixDeleting) dialog.close() }
+  const dialog = mountDialog(overlay, { name: t('matrixRemove') + (name ? ': ' + name : ''), initialFocus: '#mdCancel', onCancel: cancel, hasDraft: () => matrixDeleting })
+  q('#mdCancel').addEventListener('click', cancel)
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) cancel() })
   q('#mdOk').addEventListener('click', () => {
     const disp = q('input[name="mdDisp"]:checked').value
     // Deleting state takes effect immediately; the visible busy state is delayed
@@ -2961,15 +3408,16 @@ function matrixDeleteDialog(matrixId, name){
     const showBusy = () => { q('#mdActions').innerHTML = '<div><span class="spinner"></span> <span class="muted">' + esc(t('matrixDeleting')) + '</span></div><p class="muted small">' + esc(busyText) + '</p>' }
     const busyTimer = setTimeout(showBusy, 200)
     api('removeMatrix', { matrixId, taskDisposition: disp }).then(r => {
-      clearTimeout(busyTimer); matrixDeleting = false; overlay.remove()
+      clearTimeout(busyTimer); matrixDeleting = false; dialog.close()
       const doneText = disp === 'delete-tasks' ? t('matrixDeletedTasks', { n: (r && r.deleted) || 0 }) : t('matrixDeleted', { n: (r && r.moved) || 0 })
       toast(doneText, 'ok')
       refreshTasks()
     }).catch(e => {
       clearTimeout(busyTimer); matrixDeleting = false
       q('#mdActions').innerHTML = '<p class="muted">' + esc(t('matrixDeleteFailed')) + ': ' + esc(e.message) + '</p><div class="toolbar"><button class="btn" id="mdClose">' + esc(t('taskClose')) + '</button><button class="btn danger" id="mdRetry">' + esc(t('retry')) + '</button></div>'
-      q('#mdClose').addEventListener('click', () => overlay.remove())
-      q('#mdRetry').addEventListener('click', () => { overlay.remove(); matrixDeleteDialog(matrixId, name) })
+      q('#mdClose').addEventListener('click', () => dialog.close())
+      q('#mdRetry').addEventListener('click', () => { dialog.close(); matrixDeleteDialog(matrixId, name) })
+      q('#mdClose').focus()
     })
   })
 }
@@ -3055,14 +3503,29 @@ function restoreCellCaret(tableIndex, isHeader, rowIndex, columnIndex){
   const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range)
   vditor.focus()
 }
+function captureEditorSnapshot(){
+  if (state.view !== 'notes' || state.selectedNoteId === null || !['live', 'source'].includes(state.editor.mode)) return null
+  const surface = state.editor.mode === 'live' ? vditor : $('#editor')
+  if (!surface) return null
+  const value = getEditorValue()
+  return { editor: state.editor, noteId: state.selectedNoteId, mode: state.editor.mode, surface, kind: value.kind, value: value.value }
+}
+function acceptEditorSnapshot(snapshot){
+  const current = snapshot && state.view === 'notes' && state.editor === snapshot.editor && state.selectedNoteId === snapshot.noteId && state.editor.mode === snapshot.mode &&
+    (snapshot.mode === 'live' ? vditor : $('#editor')) === snapshot.surface
+  const value = current ? getEditorValue() : null
+  if (!value || value.kind !== snapshot.kind || value.value !== snapshot.value) { toast(t('editorOperationStale'), 'warn'); return false }
+  return true
+}
 function applyTableMutation(cell, op, align){
   if (!vditor) return
   const ctx = resolveCellInEditor(cell); if (!ctx) return
-  const markdown = vditor.getValue()
+  const snapshot = captureEditorSnapshot(); if (!snapshot) return
+  const markdown = snapshot.value
   const irEl = vditor.vditor.ir.element
   const scrollTop = irEl ? irEl.scrollTop : 0
   api('tableMutation', { markdown, op, tableIndex: ctx.tableIndex, isHeader: ctx.isHeader, rowIndex: ctx.rowIndex, columnIndex: ctx.columnIndex, align }).then(r => {
-    if (!vditor || r.unchanged || !r.markdown) return
+    if (!acceptEditorSnapshot(snapshot) || r.unchanged || typeof r.markdown !== 'string') return
     vditor.setValue(r.markdown)
     const el = vditor.vditor.ir.element; if (el && scrollTop) el.scrollTop = scrollTop
     restoreCellCaret(ctx.tableIndex, ctx.isHeader, ctx.rowIndex, ctx.columnIndex)
@@ -3164,15 +3627,19 @@ function appendFootnoteDefinitionAtEnd(key, content){
   el.dispatchEvent(new Event('input'))
 }
 function applyFootnoteEdit(key, content){
-  const md = getEditorValue().value
+  const snapshot = captureEditorSnapshot(); if (!snapshot) return
+  const md = snapshot.value
   api('footnoteEdit', { markdown: md, key, content }).then(r => {
+    if (!acceptEditorSnapshot(snapshot)) return
     if (r.unchanged) { toast(t('genericError'), 'warn'); return }
     setEditorValue(r.markdown); onEditorInput()
   }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
 }
 function applyFootnoteDelete(key){
-  const md = getEditorValue().value
+  const snapshot = captureEditorSnapshot(); if (!snapshot) return
+  const md = snapshot.value
   api('footnoteDelete', { markdown: md, key }).then(r => {
+    if (!acceptEditorSnapshot(snapshot)) return
     setEditorValue(r.markdown); onEditorInput()
   }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
 }
@@ -3212,23 +3679,28 @@ function showFootnoteDefMenu(x, y, key){
 }
 function footnoteModal(title, initial, placeholder, onOk){
   const overlay = document.createElement('div'); overlay.className = 'modal-overlay'
-  overlay.innerHTML = '<div class="modal footnote-modal"><h3>' + esc(title) + '</h3><textarea id="fnContent" rows="4" placeholder="' + esc(placeholder) + '"></textarea><div class="toolbar"><button class="btn" id="fnCancel">' + esc(t('cancel')) + '</button><button class="btn primary" id="fnOk">' + esc(t('footnoteInsert')) + '</button></div></div>'
+  overlay.innerHTML = '<div class="modal footnote-modal"><h3>' + esc(title) + '</h3><textarea id="fnContent" aria-label="' + esc(placeholder) + '" rows="4" placeholder="' + esc(placeholder) + '"></textarea><div class="toolbar"><button class="btn" id="fnCancel">' + esc(t('cancel')) + '</button><button class="btn primary" id="fnOk">' + esc(t('footnoteInsert')) + '</button></div></div>'
   document.body.appendChild(overlay)
   const q = (s) => overlay.querySelector(s)
-  const ta = q('#fnContent'); ta.value = initial || ''; ta.focus()
-  q('#fnCancel').addEventListener('click', () => overlay.remove())
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove() })
+  const ta = q('#fnContent'); ta.value = initial || ''
+  const hasDraft = () => ta.value !== (initial || '')
+  const cancel = () => { if (!hasDraft() || confirm(t('discardDraftConfirm'))) dialog.close() }
+  const dialog = mountDialog(overlay, { name: title, initialFocus: '#fnContent', onCancel: cancel, hasDraft })
+  q('#fnCancel').addEventListener('click', cancel)
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) cancel() })
   q('#fnOk').addEventListener('click', () => {
     const content = ta.value.trim()
     if (!content) { ta.focus(); return }
-    overlay.remove(); onOk(content)
+    dialog.close(); onOk(content)
   })
 }
 function footnoteDialog(){
-  if (state.selectedNoteId === null) return
+  const snapshot = captureEditorSnapshot(); if (!snapshot) return
   const hasSel = !!(getEditorSelection() || '').trim()
   footnoteModal(t('footnoteInsert'), '', t('footnoteContent'), (content) => {
-    api('nextFootnoteKey', { markdown: getEditorValue().value }).then(r => {
+    if (!acceptEditorSnapshot(snapshot)) return
+    api('nextFootnoteKey', { markdown: snapshot.value }).then(r => {
+      if (!acceptEditorSnapshot(snapshot)) return
       insertFootnoteReference(r.key)
       appendFootnoteDefinitionAtEnd(r.key, content)
       onEditorInput()
@@ -3238,8 +3710,9 @@ function footnoteDialog(){
   if (hint) hint.insertAdjacentHTML('afterbegin', '<p class="muted">' + esc(hasSel ? t('footnoteSelectText') : t('footnoteEmpty')) + '</p>')
 }
 function editFootnoteDialog(key){
-  const cur = footnoteDefinitionContent(getEditorValue().value, key)
-  footnoteModal(t('footnoteEdit'), cur, t('footnoteContent'), (content) => applyFootnoteEdit(key, content))
+  const snapshot = captureEditorSnapshot(); if (!snapshot) return
+  const cur = footnoteDefinitionContent(snapshot.value, key)
+  footnoteModal(t('footnoteEdit'), cur, t('footnoteContent'), (content) => { if (acceptEditorSnapshot(snapshot)) applyFootnoteEdit(key, content) })
 }
 document.addEventListener('contextmenu', (e) => {
   const editorPane = e.target.closest('#editorPane')
@@ -3318,14 +3791,19 @@ document.addEventListener('mouseup', (e) => {
 })
 
 // ── Task drag/drop (HTML5 DnD, client-side) ────
+let taskDragSnapshot = null
 document.addEventListener('dragstart', (e) => {
   const card = e.target.closest('.task-card[draggable="true"]')
   if (!card) return
+  if (workspaceReadOnly()) { e.preventDefault(); return }
+  const task = (state.tasksCache || []).find(item => item.taskId === card.dataset.id)
+  taskDragSnapshot = task ? { taskId: task.taskId, contentHash: task.contentHash } : null
   e.dataTransfer.setData('text/plain', card.dataset.id)
   e.dataTransfer.effectAllowed = 'move'
   card.classList.add('dragging')
 })
 document.addEventListener('dragend', () => {
+  taskDragSnapshot = null
   document.querySelectorAll('.dragging').forEach(el => el.classList.remove('dragging'))
   document.querySelectorAll('.drop-over').forEach(el => el.classList.remove('drop-over'))
 })
@@ -3341,32 +3819,33 @@ document.addEventListener('dragleave', (e) => {
   if (t) t.classList.remove('drop-over')
 })
 document.addEventListener('drop', (e) => {
-  const t = e.target.closest('[data-drop]')
-  if (!t) return
+  const target = e.target.closest('[data-drop]')
+  if (!target) return
   e.preventDefault()
-  t.classList.remove('drop-over')
+  target.classList.remove('drop-over')
   const taskId = e.dataTransfer.getData('text/plain')
   if (!taskId) return
-  const task = (state.tasksCache || []).find(x => x.taskId === taskId)
-  if (!task) return
+  const task = taskDragSnapshot
+  if (!task || task.taskId !== taskId || workspaceReadOnly()) return
+  taskDragSnapshot = null
   let patch = null
-  const kind = t.dataset.drop
+  const kind = target.dataset.drop
   if (kind === 'matrix-quadrant') {
-    const q = Number(t.dataset.quadrant)
-    patch = { matrixId: t.dataset.matrixid, important: q === 1 || q === 2, urgent: q === 1 || q === 3 }
+    const q = Number(target.dataset.quadrant)
+    patch = { matrixId: target.dataset.matrixid, important: q === 1 || q === 2, urgent: q === 1 || q === 3 }
   } else if (kind === 'matrix') {
-    patch = { matrixId: t.dataset.matrixid }
+    patch = { matrixId: target.dataset.matrixid }
   } else if (kind === 'inbox') {
     patch = { matrixId: null }
   } else if (kind === 'today') {
     patch = { scheduledAt: new Date().toISOString().slice(0, 10) }
   }
   if (!patch) return
-  api('updateTask', { taskId, patch }).then(() => refreshTasks()).catch(e => { toast(t('genericError') + ': ' + e.message, 'err'); renderTasks() })
+  api('updateTask', { taskId, expectedContentHash: task.contentHash, patch }).then(() => refreshTasks()).catch(e => { toast(e.code === 'PKW_TASK_CONFLICT' ? t('taskActionConflict') : t('genericError') + ': ' + e.message, 'err'); refreshTasks() })
 })
 
 // ── Delegated events ────────────────────────────────────────────────────────
-document.addEventListener('click', (e) => {
+document.addEventListener('click', async (e) => {
   if (!e.target.closest('#wikiSuggest')) dismissWikiSuggest()
   if (!e.target.closest('#ctxMenu')) dismissContextMenu()
   if (!e.target.closest('#selTaskBtn')) dismissSelButton()
@@ -3390,12 +3869,13 @@ document.addEventListener('click', (e) => {
   }
   const el = e.target.closest('[data-action]'); if (!el) return
   const act = el.dataset.action, id = el.dataset.id, path = el.dataset.path, mode = el.dataset.mode
+  if (['select-folder', 'explorer-up', 'explorer-crumb', 'explorer-open-folder', 'explorer-folder', 'mobile-back-notes', 'set-mode'].includes(act) && !await prepareNoteNavigation()) return
   if (act === 'new-note') newNote()
   else if (act === 'new-note-here') { state.selectedFolder = path; newNote() }
   else if (act === 'new-folder') newFolder(state.selectedFolder || '')
   else if (act === 'new-subfolder') newFolder(path)
-  else if (act === 'open-note') { setView('notes'); if (el.dataset.reason) state.searchContext = { reason: el.dataset.reason, attName: el.dataset.attname || '' }; else state.searchContext = null; openNote(id) }
-  else if (act === 'open-attachment') { setView('attachments'); openAttachment(id) }
+  else if (act === 'open-note') { if (!await setView('notes')) return; if (el.dataset.reason) state.searchContext = { reason: el.dataset.reason, attName: el.dataset.attname || '' }; else state.searchContext = null; openNote(id) }
+  else if (act === 'open-attachment') { if (await setView('attachments')) openAttachment(id) }
   else if (act === 'select-folder') { state.selectedFolder = path; state.selectedNoteId = null; state.explorerSel.clear(); renderTree(); renderFolderMain(path); renderDetail() }
   else if (act === 'explorer-up') { state.selectedFolder = parentOfPath(state.selectedFolder || ''); state.selectedNoteId = null; state.explorerSel.clear(); renderTree(); renderFolderMain(state.selectedFolder || '') }
   else if (act === 'explorer-crumb') { state.selectedFolder = path || null; state.selectedNoteId = null; state.explorerSel.clear(); renderTree(); renderFolderMain(path || '') }
@@ -3408,12 +3888,14 @@ document.addEventListener('click', (e) => {
   else if (act === 'explorer-bulk-trash') explorerBulkTrash()
   else if (act === 'folder-menu') {
     showContextMenu(e.clientX, e.clientY, [
-      { label: t('renameFolder'), action: 'rename-folder', id: path },
-      { label: t('deleteFolder'), action: 'delete-folder', id: path },
+      { label: t('renameFolder'), action: 'rename-folder', path },
+      { label: t('deleteFolder'), action: 'delete-folder', path },
     ])
   }
-  else if (act === 'toggle-folder') { if (state.collapsed.has(path)) state.collapsed.delete(path); else state.collapsed.add(path); const c = document.querySelector('.tree-children[data-folder="' + CSS.escape(path) + '"]'); if (c) { c.style.display = state.collapsed.has(path) ? 'none' : ''; el.textContent = state.collapsed.has(path) ? '▸' : '▾' } }
+  else if (act === 'toggle-folder') { if (state.collapsed.has(path)) state.collapsed.delete(path); else state.collapsed.add(path); const c = document.querySelector('.tree-children[data-folder="' + CSS.escape(path) + '"]'); if (c) { c.style.display = state.collapsed.has(path) ? 'none' : ''; el.textContent = state.collapsed.has(path) ? '▸' : '▾'; el.setAttribute('aria-expanded', String(!state.collapsed.has(path))); el.setAttribute('aria-label', t(state.collapsed.has(path) ? 'expandFolder' : 'collapseFolder', { name: path.split('/').pop() })) } }
   else if (act === 'save-note') saveNote()
+  else if (act === 'copy-note-draft') copyNoteDraft()
+  else if (act === 'reload-note-conflict') reloadConflictedNote()
   else if (act === 'set-mode') { state.editor.mode = mode; localStorage.setItem('pkw-editor-mode', mode); const d = state.editor.noteId; if (d) openNote(d) }
   else if (act === 'rename-note') {
     const nid = id || state.selectedNoteId
@@ -3487,17 +3969,25 @@ document.addEventListener('click', (e) => {
     }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
   }
   else if (act === 'selection-to-task') { const ref = selectionSourceRef(); if (ref) quickTaskDialog(null, [ref], { title: ref.exact.replace(/\\n/g, ' ').trim().slice(0, 60), description: ref.exact }); else toast(t('taskNoTasks'), 'warn') }
-  else if (act === 'open-task-source') { state.highlightText = el.dataset.exact || ''; setView('notes'); openNote(id) }
+  else if (act === 'open-task-source') { if (!await setView('notes')) return; state.highlightText = el.dataset.exact || ''; openNote(id) }
   else if (act === 'toggle-task') {
     const task = (state.tasksCache || []).find(x => x.taskId === id)
     const isSubtask = task && task.parentTaskId !== null
-    const t = el.dataset.completed === '1' ? api('reopenTask', { taskId: id }) : api('completeTask', { taskId: id })
-    t.then(() => { if (!isSubtask) refreshTasks(); if (taskDetailRefreshSubtasks) taskDetailRefreshSubtasks() }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
+    const operation = el.dataset.completed === '1' ? api('reopenTask', { taskId: id }) : api('completeTask', { taskId: id })
+    operation.then(() => { if (!isSubtask) refreshTasks(); if (taskDetailRefreshSubtasks) taskDetailRefreshSubtasks() }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
   }
   else if (act === 'subtask-edit') { inlineEditSubtask(el, id) }
   else if (act === 'subtask-toggle') { if (taskDetailToggleSubtask) taskDetailToggleSubtask(id) }
   else if (act === 'open-task-detail') taskDetailDialog(id)
-  else if (act === 'task-due') { const due = prompt(t('taskDue'), ''); if (due !== null) api('updateTask', { taskId: id, patch: { dueAt: due } }).then(() => refreshTasks()) }
+  else if (act === 'task-due') {
+    const task = (state.tasksCache || []).find(item => item.taskId === id)
+    if (!task) return
+    const expectedContentHash = task.contentHash
+    const due = prompt(t('taskDue'), task.dueAt || '')
+    if (due !== null) api('updateTask', { taskId: id, expectedContentHash, patch: { dueAt: due } }).then(() => refreshTasks()).catch(error => {
+      showTaskPatchDraft({ dueAt: due }, undefined, error.code === 'PKW_TASK_CONFLICT' ? t('taskConflict') : t('genericError') + ': ' + error.message)
+    })
+  }
   else if (act === 'task-delete') { const task = (state.tasksCache || []).find(x => x.taskId === id); const isSubtask = task && task.parentTaskId !== null; api('deleteTask', { taskId: id }).then(() => { if (!isSubtask) refreshTasks(); if (taskDetailRefreshSubtasks) taskDetailRefreshSubtasks() }).catch(e => toast(t('genericError') + ': ' + e.message, 'err')) }
   else if (act === 'task-duplicate') { const t = (state.tasksCache || []).find(x => x.taskId === id); if (t) api('createTask', { title: t.title + ' (copy)', ...(t.matrixId ? { matrixId: t.matrixId } : {}), important: t.important, urgent: t.urgent, ...(t.description ? { description: t.description } : {}), ...(t.dueAt ? { dueAt: t.dueAt } : {}), tags: t.tags || [] }).then(() => refreshTasks()) }
   else if (act === 'matrix-rename') { const name = prompt(t('folderRenamePrompt'), ''); if (name && name.trim()) api('renameMatrix', { matrixId: id, name: name.trim() }).then(() => refreshTasks()) }
@@ -3506,7 +3996,9 @@ document.addEventListener('click', (e) => {
   else if (act === 'copy-wikilink') { api('getNote', { noteId: id }).then(d => navigator.clipboard.writeText('[[' + (d.note.title || id) + ']]')).then(() => toast(t('ok'), 'ok')).catch(e => toast(t('genericError') + ': ' + e.message, 'err')) }
   else if (act === 'task-up') moveTaskOrder(id, -1)
   else if (act === 'task-down') moveTaskOrder(id, 1)
-  else if (act === 'trash-filter') { state.trashFilter = el.dataset.filter || 'all'; if (state.trashCache) renderTrashFrom(state.trashCache.notes, state.trashCache.atts, state.trashCache.folders) }
+  else if (act === 'trash-filter') { state.trashFilter = el.dataset.filter || 'all'; if (state.trashCache) renderTrashFrom(state.trashCache.notes, state.trashCache.atts, state.trashCache.folders, state.trashCache.tasks) }
+  else if (act === 'restore-task') { await restoreTrashedTask(id) }
+  else if (act === 'retry-trash-tasks') { await refreshTrash() }
   else if (act === 'restore-one') { doBatchRestore([el.dataset.key]) }
   else if (act === 'purge-one') { confirmBatchPurge([el.dataset.key]) }
   else if (act === 'trash-restore') { doBatchRestore(Array.from(state.trashSelection)) }
@@ -3517,7 +4009,8 @@ document.addEventListener('click', (e) => {
   else if (act === 'theme-light') setTheme('light')
   else if (act === 'theme-dark') setTheme('dark')
   else if (act === 'knowledge-tab') { renderKnowledgeView() }
-  else if (act === 'kb-clear-search') { state.searchQuery = ''; state.searchResults = null; renderKnowledgeView() }
+  else if (act === 'kb-clear-search') clearKnowledgeSearch()
+  else if (act === 'kb-retry-search') { const query = ($('#kbSearch').value || '').trim() || state.searchQuery; if (query) runSearch(query) }
   else if (act === 'knowledge-view-all') { state.knowledgeShowAll = true; renderKnowledgeBrowseInto() }
   else if (act === 'knowledge-back-home') { state.knowledgeShowAll = false; renderKnowledgeBrowseInto() }
   else if (act === 'mobile-more') {
@@ -3584,7 +4077,7 @@ document.addEventListener('click', (e) => {
       { label: t('taskDelete'), action: 'task-delete', id: tid, danger: true },
     ])
   }
-  else if (act === 'mobile-detail-back') { document.querySelectorAll('.mobile-detail').forEach(o => o.remove()) }
+  else if (act === 'mobile-detail-back') { document.querySelectorAll('.mobile-detail').forEach(closeMountedDialog) }
   else if (act === 'mobile-back-notes') { state.selectedNoteId = null; state.selectedFolder = null; destroyVditor(); render() }
   else if (act === 'mobile-editor-menu') {
     const nid = state.selectedNoteId
@@ -3659,6 +4152,32 @@ let activeTaskDetailSession = 0
 let taskDetailRefreshSubtasks = null
 let taskDetailRequestClose = null
 let taskDetailToggleSubtask = null
+function taskDraftText(patch){
+  const labels = { title: 'taskTitle', description: 'description', status: 'taskStatus', matrixId: 'matrices', quadrant: 'taskQuadrant', important: 'taskQuadrant', urgent: 'taskPriority', scheduledAt: 'taskScheduled', dueAt: 'taskDue', tags: 'tags', subtaskDraft: 'subtaskAdd' }
+  return Object.entries(patch).map(([key, value]) => t(labels[key] || key) + ': ' + (Array.isArray(value) ? value.join(', ') : String(value ?? ''))).join('\\n')
+}
+function showTaskPatchDraft(patch, reload, message = t('taskConflict')){
+  const overlay = document.createElement('div'); overlay.className = 'modal-overlay'
+  overlay.innerHTML = '<div class="modal"><h3>' + esc(t('closeGuardTitle')) + '</h3><p role="alert">' + esc(message) + '</p><label for="taskPatchDraft">' + esc(t('manualCopyDraft')) + '</label><textarea id="taskPatchDraft" readonly></textarea><div class="toolbar"><button class="btn" id="taskPatchClose">' + esc(t('taskClose')) + '</button><button class="btn" id="taskPatchReload">' + esc(t('taskReload')) + '</button></div></div>'
+  document.body.appendChild(overlay)
+  const draft = overlay.querySelector('#taskPatchDraft'); draft.value = taskDraftText(patch)
+  let reloading = false
+  const cancel = () => { if (!reloading && confirm(t('discardDraftConfirm'))) dialog.close() }
+  const dialog = mountDialog(overlay, { name: t('closeGuardTitle'), initialFocus: '#taskPatchDraft', onCancel: cancel, hasDraft: () => true })
+  draft.select()
+  overlay.querySelector('#taskPatchClose').addEventListener('click', cancel)
+  overlay.querySelector('#taskPatchReload').addEventListener('click', async () => {
+    if (reloading || !confirm(t('taskReloadConfirm'))) return
+    reloading = true
+    try {
+      if (reload) await reload()
+      else { state.tasksCache = await api('listTasks'); refreshTasks() }
+      dialog.close()
+    } catch (error) { toast(t('reloadFailed') + ': ' + error.message, 'err') }
+    finally { reloading = false }
+  })
+  overlay.addEventListener('click', event => { if (event.target === overlay) cancel() })
+}
 // Subtask data cache (parentTaskId → Task[]) + request dedup map. UI-only fast
 // projection; the Task Store remains canonical authority.
 const subtaskCache = new Map()
@@ -3671,92 +4190,125 @@ function fetchSubtasks(parentTaskId){
 }
 function inlineEditSubtask(span, taskId){
   const cur = span.textContent
+  const expectedContentHash = span.dataset.contentHash
   const input = document.createElement('input')
   input.value = cur
   input.className = 'subtask-edit-input'
+  input.setAttribute('aria-label', t('taskTitle'))
+  input.setAttribute('data-dialog-escape', 'local')
   span.replaceWith(input)
   input.focus()
-  let done = false
+  let done = false, saving = false, conflicted = false
   const commit = () => {
-    if (done) return
-    done = true
+    if (done || saving || conflicted) return
     const v = input.value.trim()
     if (v && v !== cur) {
-      api('updateTask', { taskId, patch: { title: v } }).then(() => { if (taskDetailRefreshSubtasks) taskDetailRefreshSubtasks() }).catch(e => { toast(t('genericError') + ': ' + e.message, 'err'); input.value = cur })
+      saving = true; input.readOnly = true
+      api('updateTask', { taskId, expectedContentHash, patch: { title: v } }).then(updated => {
+        done = true; span.textContent = v
+        if (updated && updated.contentHash) span.dataset.contentHash = updated.contentHash
+        input.replaceWith(span)
+        if (taskDetailRefreshSubtasks) taskDetailRefreshSubtasks()
+      }).catch(e => {
+        saving = false; input.readOnly = false
+        conflicted = e.code === 'PKW_TASK_CONFLICT'
+        input.setAttribute('aria-invalid', 'true')
+        toast(conflicted ? t('taskConflict') : t('genericError') + ': ' + e.message, 'err')
+        // Preserve the typed title; conflict recovery is an explicit new read.
+        if (conflicted) showTaskPatchDraft({ title: input.value }, async () => {
+          if (taskDetailRefreshSubtasks) {
+            const tasks = await api('listSubtasks', { parentTaskId: span.closest('#taskDetailModal')?.dataset.taskId || input.closest('#taskDetailModal')?.dataset.taskId })
+            const latest = tasks.find(item => item.taskId === taskId)
+            if (!latest) throw new Error(t('taskNoTasks'))
+            span.textContent = latest.title; span.dataset.contentHash = latest.contentHash
+            input.replaceWith(span); done = true
+            await taskDetailRefreshSubtasks()
+          }
+        })
+        else input.focus()
+      })
     } else {
+      done = true
       input.replaceWith(span)
     }
   }
-  const cancel = () => { if (done) return; done = true; input.replaceWith(span) }
-  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); commit() } else if (e.key === 'Escape') { cancel() } })
+  const cancel = () => { if (done || saving) return; if (conflicted && !confirm(t('discardDraftConfirm'))) return; done = true; input.replaceWith(span); if (conflicted && taskDetailRefreshSubtasks) taskDetailRefreshSubtasks() }
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); commit() } else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancel(); span.focus() } })
   input.addEventListener('blur', commit)
 }
 function taskDetailDialog(taskId){
   const task = (state.tasksCache || []).find(t => t.taskId === taskId)
   if (!task) return
+  // An existing task's close guard owns its draft; never replace it silently.
+  if (document.getElementById('taskDetailModal')) { if (taskDetailRequestClose) taskDetailRequestClose(); return }
   // Explicit session identity: every async detail callback must verify it still
   // owns the active session before touching DOM/state. Opening/closing bumps this.
   const sessionId = ++taskDetailSessionSeq
   activeTaskDetailSession = sessionId
-  // Single-modal invariant: remove any previous dialog (and invalidate it).
-  const prev = document.getElementById('taskDetailModal'); if (prev) prev.remove()
   const quad = quadrantOf(task)
   const srcNote = task.sourceRefs && task.sourceRefs[0] ? '<div class="form"><label>' + esc(t('noteLabel')) + '</label><span class="v mono" data-action="open-task-source" data-id="' + esc(task.sourceRefs[0].noteId) + '" data-exact="' + esc(task.sourceRefs[0].exact || '') + '" style="cursor:pointer">📄 ' + esc(task.sourceRefs[0].noteId) + '</span></div>' : ''
   // Subtask completion draft: Store baseline + local draft = Detail projection.
   let subtaskBaseline = {}
   let subtaskDraft = {}
   let subtaskList = []
+  let subtaskRendered = false
   const proj = (s) => (s.taskId in subtaskDraft ? subtaskDraft[s.taskId] : (s.status === 'completed'))
-  const renderSubRows = (list) => list.map(s => '<div class="subtask-row" data-id="' + esc(s.taskId) + '"><span class="ic" data-action="subtask-toggle" data-id="' + esc(s.taskId) + '">' + (proj(s) ? '☑' : '☐') + '</span><span class="nm subtask-title" data-action="subtask-edit" data-id="' + esc(s.taskId) + '" title="' + esc(t('renameMove')) + '">' + esc(s.title) + '</span><span class="subtask-del" data-action="task-delete" data-id="' + esc(s.taskId) + '" title="' + esc(t('taskDelete')) + '">×</span></div>').join('')
+  const renderSubRows = (list) => list.map(s => '<div class="subtask-row" data-id="' + esc(s.taskId) + '"><button type="button" class="ic row-action" data-action="subtask-toggle" data-id="' + esc(s.taskId) + '" aria-label="' + esc(s.title) + '" aria-pressed="' + proj(s) + '">' + (proj(s) ? '☑' : '☐') + '</button><button type="button" class="nm subtask-title row-action" data-action="subtask-edit" data-id="' + esc(s.taskId) + '" data-content-hash="' + esc(s.contentHash || '') + '" title="' + esc(t('renameMove')) + '">' + esc(s.title) + '</button><button type="button" class="subtask-del row-action" data-action="task-delete" data-id="' + esc(s.taskId) + '" aria-label="' + esc(t('taskDelete') + ': ' + s.title) + '">×</button></div>').join('')
   // Shell renders immediately from the already-cached task object; matrices and
   // subtasks load async and patch their own sections (never block the shell).
   const mOpts = task.matrixId ? '<option value="' + esc(task.matrixId) + '" selected>' + esc(task.matrixId) + '</option>' : '<option value="" selected>' + esc(t('taskInbox')) + '</option>'
-  const subSection = '<div class="form"><div class="subtask-head"><span>' + esc(t('subtasks')) + '</span><span class="muted" id="tdSubCount"></span></div><div id="tdSubtasks"><span class="muted">' + esc(t('loading')) + '</span></div><div class="toolbar" style="margin-top:4px"><input id="tdNewSub" placeholder="' + esc(t('subtaskAdd')) + '" style="flex:1" /><button class="btn small" id="tdAddSub">+</button></div></div>'
+  const subSection = '<div class="form"><div class="subtask-head"><span>' + esc(t('subtasks')) + '</span><span class="muted" id="tdSubCount"></span></div><div id="tdSubtasks"><span class="muted">' + esc(t('loading')) + '</span></div><div class="toolbar" style="margin-top:4px"><input id="tdNewSub" aria-label="' + esc(t('subtaskAdd')) + '" placeholder="' + esc(t('subtaskAdd')) + '" style="flex:1" /><button class="btn small" id="tdAddSub" aria-label="' + esc(t('subtaskAdd')) + '">+</button></div></div>'
   const wrapper = document.createElement('div')
     const meta = '<div class="muted mono" style="font-size:11px">' + esc(t('taskCreated')) + ': ' + esc((task.createdAt || '').slice(0, 16)) + '<br>' + esc(t('updated')) + ': ' + esc((task.updatedAt || '').slice(0, 16)) + (task.completedAt ? '<br>' + esc(t('taskCompleted')) + ': ' + esc(task.completedAt.slice(0, 16)) : '') + '</div>'
     wrapper.innerHTML =
       '<div class="modal-overlay" id="taskDetailModal"><div class="modal task-detail-modal">' +
         '<div class="task-detail-header">' +
-          '<div class="task-detail-title-row"><input id="tdTitle" class="td-title-input" value="' + esc(task.title) + '" placeholder="' + esc(t('taskTitle')) + '" /></div>' +
+          '<div class="task-detail-title-row"><input id="tdTitle" aria-label="' + esc(t('taskTitle')) + '" class="td-title-input" value="' + esc(task.title) + '" placeholder="' + esc(t('taskTitle')) + '" /></div>' +
           '<div class="task-detail-controls">' +
-            '<select id="tdStatus" class="td-status"><option value="open"' + (task.status === 'open' ? ' selected' : '') + '>' + esc(t('taskOpen')) + '</option><option value="completed"' + (task.status === 'completed' ? ' selected' : '') + '>' + esc(t('taskCompleted')) + '</option></select>' +
+            '<select id="tdStatus" aria-label="' + esc(t('taskStatus')) + '" class="td-status"><option value="open"' + (task.status === 'open' ? ' selected' : '') + '>' + esc(t('taskOpen')) + '</option><option value="completed"' + (task.status === 'completed' ? ' selected' : '') + '>' + esc(t('taskCompleted')) + '</option></select>' +
             '<span class="spacer"></span>' +
-            '<button class="btn small" id="tdCloseX" title="' + esc(t('taskClose')) + '">×</button>' +
+            '<button class="btn small" id="tdCloseX" aria-label="' + esc(t('taskClose')) + '" title="' + esc(t('taskClose')) + '">×</button>' +
           '</div>' +
         '</div>' +
         '<div class="task-detail-body">' +
           '<div class="task-detail-main">' +
-            '<div class="form"><label>' + esc(t('description')) + '</label><textarea id="tdDesc" rows="8" placeholder="' + esc(t('descriptionPlaceholder')) + '">' + esc(task.description || '') + '</textarea></div>' +
+            '<div id="tdConflict" hidden><p role="alert">' + esc(t('taskConflict')) + '</p><div class="toolbar"><button class="btn" id="tdCopyDraft">' + esc(t('copyDraft')) + '</button><button class="btn" id="tdReload">' + esc(t('taskReload')) + '</button></div><textarea id="tdDraft" aria-label="' + esc(t('manualCopyDraft')) + '" readonly hidden></textarea></div>' +
+            '<div class="form"><label for="tdDesc">' + esc(t('description')) + '</label><textarea id="tdDesc" rows="8" placeholder="' + esc(t('descriptionPlaceholder')) + '">' + esc(task.description || '') + '</textarea></div>' +
             subSection +
             srcNote +
           '</div>' +
           '<div class="task-detail-properties">' +
             '<div class="prop-group"><div class="prop-title">' + esc(t('organization')) + '</div>' +
-              '<label>' + esc(t('matrices')) + '</label><select id="tdMatrix">' + mOpts + '</select>' +
-              '<label>' + esc(t('taskQuadrant')) + '</label><select id="tdQuad">' +
+              '<label for="tdMatrix">' + esc(t('matrices')) + '</label><select id="tdMatrix">' + mOpts + '</select>' +
+              '<label for="tdQuad">' + esc(t('taskQuadrant')) + '</label><select id="tdQuad">' +
                 '<option value="1"' + (quad === 1 ? ' selected' : '') + '>Q1 · ' + esc(t('q1')) + '</option><option value="2"' + (quad === 2 ? ' selected' : '') + '>Q2 · ' + esc(t('q2')) + '</option><option value="3"' + (quad === 3 ? ' selected' : '') + '>Q3 · ' + esc(t('q3')) + '</option><option value="4"' + (quad === 4 ? ' selected' : '') + '>Q4 · ' + esc(t('q4')) + '</option></select>' +
             '</div>' +
             '<div class="prop-group"><div class="prop-title">' + esc(t('time')) + '</div>' +
-              '<label>' + esc(t('taskScheduled')) + '</label><input type="date" id="tdSched" value="' + esc((task.scheduledAt || '').slice(0, 10)) + '" />' +
-              '<label>' + esc(t('taskDue')) + '</label><input type="date" id="tdDue" value="' + esc((task.dueAt || '').slice(0, 10)) + '" />' +
+              '<label for="tdSched">' + esc(t('taskScheduled')) + '</label><input type="date" id="tdSched" value="' + esc((task.scheduledAt || '').slice(0, 10)) + '" />' +
+              '<label for="tdDue">' + esc(t('taskDue')) + '</label><input type="date" id="tdDue" value="' + esc((task.dueAt || '').slice(0, 10)) + '" />' +
             '</div>' +
-            '<div class="prop-group"><div class="prop-title">' + esc(t('tags')) + '</div><input id="tdTags" placeholder="' + esc(t('tagsPlaceholder')) + '" value="' + esc((task.tags || []).join(', ')) + '" /></div>' +
+            '<div class="prop-group"><label for="tdTags" class="prop-title">' + esc(t('tags')) + '</label><input id="tdTags" placeholder="' + esc(t('tagsPlaceholder')) + '" value="' + esc((task.tags || []).join(', ')) + '" /></div>' +
             '<div class="prop-group"><div class="prop-title">' + esc(t('info')) + '</div>' + meta + '</div>' +
           '</div>' +
         '</div>' +
         '<div class="task-detail-footer">' +
-          '<span id="tdState" class="saved">✓ ' + esc(t('saved')) + '</span>' +
+          '<span id="tdState" class="saved" role="status" aria-live="polite">✓ ' + esc(t('saved')) + '</span>' +
           '<span class="spacer"></span>' +
           '<button class="btn" id="tdCancel">' + esc(t('taskClose')) + '</button>' +
           '<button class="btn primary" id="tdSave" disabled>' + esc(t('taskSaveEdit')) + '</button>' +
         '</div>' +
       '</div></div>'
     const modal = wrapper.firstElementChild
+    modal.dataset.taskId = taskId
     document.body.appendChild(modal)
     const qs = (sel) => modal.querySelector(sel)
     const isActive = () => sessionId === activeTaskDetailSession
     let parentDirty = false
+    let editGeneration = 0
     let saving = false
+    let taskContentHash = task.contentHash
+    let taskConflict = false
+    let taskReloading = false
     let subtaskSubmitting = false
     const isDirty = () => parentDirty
     const updateState = () => {
@@ -3764,12 +4316,12 @@ function taskDetailDialog(taskId){
       const sv = qs('#tdSave')
       const d = isDirty()
       if (st) { st.className = saving ? 'saving' : (d ? 'dirty' : 'saved'); st.textContent = saving ? ('… ' + t('saving')) : (d ? ('● ' + t('unsaved')) : ('✓ ' + t('saved'))) }
-      if (sv) { sv.disabled = !d || saving; sv.textContent = saving ? t('saving') : t('taskSaveEdit') }
+      if (sv) { sv.disabled = !d || saving || taskConflict || taskReloading; sv.textContent = saving ? t('saving') : t('taskSaveEdit') }
     }
-    const markDirty = () => { if (!parentDirty) { parentDirty = true; updateState() } }
+    const markDirty = () => { editGeneration++; if (!parentDirty) { parentDirty = true; updateState() } }
     const renderSubtaskSection = () => {
       const box = qs('#tdSubtasks')
-      if (box) box.innerHTML = renderSubRows(subtaskList) || '<span class="muted">' + esc(t('taskNoTasks')) + '</span>'
+      if (box && !box.querySelector('.subtask-edit-input')) { box.innerHTML = renderSubRows(subtaskList) || '<span class="muted">' + esc(t('taskNoTasks')) + '</span>'; subtaskRendered = true }
       const cnt = qs('#tdSubCount')
       if (cnt) cnt.textContent = subtaskList.filter(proj).length + ' / ' + subtaskList.length
     }
@@ -3788,6 +4340,7 @@ function taskDetailDialog(taskId){
         const c = subtaskCache.get(taskId)
         if (c) { const i = c.findIndex(x => x.taskId === subId); if (i >= 0) c[i] = { ...c[i], status: target ? 'completed' : 'open' } }
         renderSubtaskSection()
+        refreshSubtasks().catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
       }).catch(e => {
         if (!isActive()) return
         delete subtaskDraft[subId] // rollback optimistic flip
@@ -3796,19 +4349,25 @@ function taskDetailDialog(taskId){
       })
     }
     taskDetailToggleSubtask = toggleSubtask
-    let guardEl = null
-    const dismissGuard = () => { if (guardEl) { guardEl.remove(); guardEl = null } }
-    const close = () => { dismissGuard(); if (isActive()) activeTaskDetailSession = 0; taskDetailRefreshSubtasks = null; taskDetailRequestClose = null; taskDetailToggleSubtask = null; modal.remove() }
+    let guardEl = null, guardDialog = null
+    const hasSubtaskDraft = () => !!qs('#tdNewSub').value.trim()
+    const hasSubtaskEdit = () => !!qs('.subtask-edit-input')
+    const dismissGuard = () => { if (guardDialog) { guardDialog.close(); guardDialog = null; guardEl = null } }
+    const close = () => { dismissGuard(); if (isActive()) activeTaskDetailSession = 0; taskDetailRefreshSubtasks = null; taskDetailRequestClose = null; taskDetailToggleSubtask = null; dialog.close() }
     const requestClose = () => {
-      if (saving) return
+      if (saving || subtaskSubmitting || taskReloading) return
       if (guardEl) { dismissGuard(); return } // Esc/backdrop on the guard → cancel, stay
+      if (hasSubtaskEdit()) { toast(t('subtaskEditPending'), 'warn'); qs('.subtask-edit-input').focus(); return }
+      if (hasSubtaskDraft()) { toast(t('subtaskDraftPending'), 'warn'); qs('#tdNewSub').focus(); return }
       if (!isDirty()) { close(); return }
       // Custom three-way close guard (session-scoped element ref, no global id).
       const w = document.createElement('div')
       w.innerHTML = '<div class="modal-overlay close-guard-overlay"><div class="modal close-guard"><h3>' + esc(t('closeGuardTitle')) + '</h3><p class="muted">' + esc(t('closeGuardBody')) + '</p><div class="toolbar"><button class="btn" id="cgCancel">' + esc(t('cancel')) + '</button><button class="btn danger" id="cgDiscard">' + esc(t('discard')) + '</button><button class="btn primary" id="cgSaveClose">' + esc(t('saveAndClose')) + '</button></div></div></div>'
       guardEl = w.firstElementChild
       document.body.appendChild(guardEl)
+      guardDialog = mountDialog(guardEl, { name: t('closeGuardTitle'), initialFocus: '#cgCancel', onCancel: dismissGuard })
       const gq = (s) => guardEl.querySelector(s)
+      gq('#cgSaveClose').disabled = taskConflict
       gq('#cgCancel').addEventListener('click', dismissGuard)
       gq('#cgDiscard').addEventListener('click', () => { dismissGuard(); close() })
       gq('#cgSaveClose').addEventListener('click', () => { dismissGuard(); doSave(true) })
@@ -3817,14 +4376,14 @@ function taskDetailDialog(taskId){
     taskDetailRequestClose = requestClose
     // Re-fetch + patch ONLY the #tdSubtasks section (never the whole modal).
     const applyList = (list) => {
-      const prevKey = subtaskList.map(s => s.taskId + ':' + s.status + ':' + s.title).join('|')
-      const nextKey = list.map(s => s.taskId + ':' + s.status + ':' + s.title).join('|')
+      const prevKey = subtaskList.map(s => s.taskId + ':' + s.status + ':' + s.title + ':' + s.contentHash).join('|')
+      const nextKey = list.map(s => s.taskId + ':' + s.status + ':' + s.title + ':' + s.contentHash).join('|')
       subtaskList = list
       subtaskBaseline = {}
       for (const s of list) subtaskBaseline[s.taskId] = (s.status === 'completed')
       // Prune pending entries for children that no longer exist (deleted).
       for (const k of Object.keys(subtaskDraft)) if (!(k in subtaskBaseline)) delete subtaskDraft[k]
-      if (prevKey !== nextKey) renderSubtaskSection()
+      if (!subtaskRendered || prevKey !== nextKey) renderSubtaskSection()
     }
     // Cache-first + first-open tasksCache seed + stale-while-revalidate + dedup.
     const refreshSubtasks = () => {
@@ -3850,32 +4409,36 @@ function taskDetailDialog(taskId){
     }
     taskDetailRefreshSubtasks = refreshSubtasks
     const doSave = (andClose) => {
-      if (!isActive() || saving) return
+      if (!isActive() || saving || taskConflict || taskReloading) return
       saving = true
+      const submittedGeneration = editGeneration
       updateState()
       const q = Number(qs('#tdQuad').value)
-      api('updateTask', { taskId, patch: {
+      api('updateTask', { taskId, expectedContentHash: taskContentHash, patch: {
         title: qs('#tdTitle').value.trim(),
         description: qs('#tdDesc').value,
         status: qs('#tdStatus').value,
         matrixId: qs('#tdMatrix').value || null,
         important: q === 1 || q === 2,
         urgent: q === 1 || q === 3,
-        ...(qs('#tdSched').value ? { scheduledAt: qs('#tdSched').value } : {}),
-        ...(qs('#tdDue').value ? { dueAt: qs('#tdDue').value } : {}),
+        scheduledAt: qs('#tdSched').value || '',
+        dueAt: qs('#tdDue').value || '',
         tags: (qs('#tdTags').value || '').split(',').map(s => s.trim()).filter(Boolean),
-      } }).then(() => {
+      } }).then(updated => {
         if (!isActive()) return
-        parentDirty = false
+        if (updated && updated.contentHash) taskContentHash = updated.contentHash
+        parentDirty = editGeneration !== submittedGeneration
         saving = false
         updateState()
         refreshTasks()
-        if (andClose) close()
+        if (parentDirty) toast(t('taskNewerEdits'), 'warn')
+        else if (andClose) requestClose()
       }).catch(e => {
         if (!isActive()) return
         saving = false
+        if (e.code === 'PKW_TASK_CONFLICT') { taskConflict = true; parentDirty = true; qs('#tdConflict').hidden = false }
         updateState()
-        toast(t('genericError') + ': ' + e.message, 'err')
+        toast(taskConflict ? t('taskConflict') : t('genericError') + ': ' + e.message, 'err')
       })
     }
     // Subtask create is an INDEPENDENT Task Store mutation: it must never
@@ -3901,12 +4464,42 @@ function taskDetailDialog(taskId){
         })
         .then(() => {
           if (!isActive()) return
-          input.value = ''
+          // A successful create only acknowledges the submitted child title.
+          if (input.value.trim() === title) input.value = ''
           input.focus()
         })
         .catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
         .finally(() => { subtaskSubmitting = false })
     }
+    const currentTaskDraft = () => ({ title: qs('#tdTitle').value, description: qs('#tdDesc').value, status: qs('#tdStatus').value, matrixId: qs('#tdMatrix').value, quadrant: qs('#tdQuad').value, scheduledAt: qs('#tdSched').value, dueAt: qs('#tdDue').value, tags: qs('#tdTags').value, subtaskDraft: qs('#tdNewSub').value })
+    qs('#tdCopyDraft').addEventListener('click', async () => {
+      const text = taskDraftText(currentTaskDraft())
+      try { await navigator.clipboard.writeText(text); toast(t('attCopied'), 'ok') }
+      catch (error) { const field = qs('#tdDraft'); field.value = text; field.hidden = false; field.focus(); field.select(); toast(t('copyDraftFailed'), 'warn') }
+    })
+    qs('#tdReload').addEventListener('click', async () => {
+      if (saving || taskReloading || !confirm(t('taskReloadConfirm'))) return
+      const snapshot = JSON.stringify(currentTaskDraft())
+      taskReloading = true; qs('#tdReload').disabled = true; updateState()
+      try {
+        const tasks = await api('listTasks')
+        if (!isActive()) return
+        if (JSON.stringify(currentTaskDraft()) !== snapshot) { toast(t('reloadDraftChanged'), 'warn'); return }
+        const latest = tasks.find(item => item.taskId === taskId)
+        if (!latest) throw new Error(t('taskNoTasks'))
+        const matrix = qs('#tdMatrix'), matrixId = latest.matrixId || ''
+        if (!Array.from(matrix.querySelectorAll('option')).some(option => option.value === matrixId)) {
+          const option = document.createElement('option'); option.value = matrixId; option.textContent = matrixId || t('taskInbox'); matrix.appendChild(option)
+        }
+        const values = { tdTitle: latest.title, tdDesc: latest.description || '', tdStatus: latest.status, tdMatrix: matrixId, tdQuad: String(quadrantOf(latest)), tdSched: (latest.scheduledAt || '').slice(0, 10), tdDue: (latest.dueAt || '').slice(0, 10), tdTags: (latest.tags || []).join(', ') }
+        for (const key in values) qs('#' + key).value = values[key]
+        taskContentHash = latest.contentHash; taskConflict = false; parentDirty = false; editGeneration++
+        qs('#tdConflict').hidden = true; qs('#tdDraft').hidden = true
+        state.tasksCache = tasks
+        qs('#tdTitle').focus()
+      } catch (error) { toast(t('reloadFailed') + ': ' + error.message, 'err') }
+      finally { taskReloading = false; qs('#tdReload').disabled = false; updateState() }
+    })
     // Parent-field edits mark dirty (async loads do NOT).
     for (const sel of ['#tdTitle', '#tdDesc', '#tdStatus', '#tdMatrix', '#tdQuad', '#tdSched', '#tdDue', '#tdTags']) { const f = qs(sel); if (f) f.addEventListener('input', markDirty); if (f) f.addEventListener('change', markDirty) }
     qs('#tdAddSub').addEventListener('click', submitSubtask)
@@ -3915,45 +4508,59 @@ function taskDetailDialog(taskId){
     qs('#tdCloseX').addEventListener('click', requestClose)
     qs('#tdSave').addEventListener('click', () => doSave(false))
     modal.addEventListener('click', (e) => { if (e.target === modal) requestClose() })
+    const dialog = mountDialog(modal, { name: t('taskDetail') + ': ' + task.title, initialFocus: '#tdTitle', onCancel: requestClose, onSave: () => doSave(false), hasDraft: () => parentDirty || saving || subtaskSubmitting || hasSubtaskDraft() || hasSubtaskEdit() })
     // Async (non-blocking) secondary data: patch their own sections when ready.
     api('listMatrices').then(matrices => {
       if (!isActive()) return
       const sel = qs('#tdMatrix')
-      if (sel) sel.innerHTML = '<option value="">' + esc(t('taskInbox')) + '</option>' + matrices.map(m => '<option value="' + esc(m.matrixId) + '"' + (m.matrixId === task.matrixId ? ' selected' : '') + '>' + esc(m.name) + '</option>').join('')
+      if (sel) { const selected = sel.value; sel.innerHTML = '<option value="">' + esc(t('taskInbox')) + '</option>' + matrices.map(m => '<option value="' + esc(m.matrixId) + '"' + (m.matrixId === selected ? ' selected' : '') + '>' + esc(m.name) + '</option>').join('') }
     }).catch(() => {})
     refreshSubtasks().catch(() => {})
 }
 function quickTaskDialog(matrixId, sourceRefs, prefill, defaultQuad){
+  if (document.getElementById('taskModal')) return
   const lastMatrix = localStorage.getItem('pkw-task-last-matrix') || ''
   const pre = prefill || {}
   const defQ = defaultQuad || 1
   api('listMatrices').then(matrices => {
+    if (document.getElementById('taskModal')) return
     const opts = '<option value="">' + esc(t('taskInbox')) + '</option>' + matrices.map(m => '<option value="' + esc(m.matrixId) + '"' + (m.matrixId === (matrixId || lastMatrix) ? ' selected' : '') + '>' + esc(m.name) + '</option>').join('')
     const srcNote = sourceRefs && sourceRefs[0] ? '<div class="form"><label>' + esc(t('noteLabel')) + '</label><span class="v mono">' + esc(sourceRefs[0].noteId) + '</span></div>' : ''
-    document.body.insertAdjacentHTML('beforeend',
+    const wrapper = document.createElement('div')
+    wrapper.innerHTML =
       '<div class="modal-overlay" id="taskModal"><div class="modal"><h3>' + esc(t('taskQuickAdd')) + '</h3>' +
-      '<div class="form"><label>' + esc(t('taskTitle')) + '</label><input id="tkTitle" value="' + esc(pre.title || '') + '" /></div>' +
-      '<div class="form"><label>' + esc(t('description')) + '</label><textarea id="tkDesc" rows="3">' + esc(pre.description || '') + '</textarea></div>' +
-      '<div class="form"><label>' + esc(t('matrices')) + '</label><select id="tkMatrix">' + opts + '</select></div>' +
-      '<div class="form"><label>' + esc(t('taskQuadrant')) + '</label><select id="tkQuad">' +
+      '<div class="form"><label for="tkTitle">' + esc(t('taskTitle')) + '</label><input id="tkTitle" value="' + esc(pre.title || '') + '" /></div>' +
+      '<div class="form"><label for="tkDesc">' + esc(t('description')) + '</label><textarea id="tkDesc" rows="3">' + esc(pre.description || '') + '</textarea></div>' +
+      '<div class="form"><label for="tkMatrix">' + esc(t('matrices')) + '</label><select id="tkMatrix">' + opts + '</select></div>' +
+      '<div class="form"><label for="tkQuad">' + esc(t('taskQuadrant')) + '</label><select id="tkQuad">' +
         '<option value="1">Q1 · ' + esc(t('q1')) + '</option><option value="2">Q2 · ' + esc(t('q2')) + '</option><option value="3">Q3 · ' + esc(t('q3')) + '</option><option value="4">Q4 · ' + esc(t('q4')) + '</option></select></div>' +
-      '<div class="form"><label>' + esc(t('taskDue')) + '</label><input type="date" id="tkDue" /></div>' +
-      '<div class="form"><label>' + esc(t('tags')) + '</label><input id="tkTags" placeholder="tag1, tag2" /></div>' +
+      '<div class="form"><label for="tkDue">' + esc(t('taskDue')) + '</label><input type="date" id="tkDue" /></div>' +
+      '<div class="form"><label for="tkTags">' + esc(t('tags')) + '</label><input id="tkTags" placeholder="tag1, tag2" /></div>' +
       srcNote +
       '<div class="toolbar"><button class="btn primary" id="tkSave">' + esc(t('taskSave')) + '</button><button class="btn" id="tkCancel">' + esc(t('taskCancel')) + '</button></div></div></div>'
-    )
-    const modal = $('#taskModal')
-    $('#tkQuad').value = String(defQ)
-    $('#tkCancel').addEventListener('click', () => modal.remove())
-    $('#tkSave').addEventListener('click', () => {
-      const title = $('#tkTitle').value.trim()
-      if (!title) { toast(t('taskTitle'), 'warn'); return }
-      const m = $('#tkMatrix').value
-      const quad = Number($('#tkQuad').value)
-      const due = $('#tkDue').value
-      const tags = ($('#tkTags').value || '').split(',').map(s => s.trim()).filter(Boolean)
-      const description = $('#tkDesc').value
+    const modal = wrapper.firstElementChild
+    document.body.appendChild(modal)
+    const q = (selector) => modal.querySelector(selector)
+    q('#tkQuad').value = String(defQ)
+    let saving = false
+    const fields = Array.from(modal.querySelectorAll('input, textarea, select'))
+    const initial = JSON.stringify(fields.map(field => field.value))
+    const hasDraft = () => saving || !!q('#tkTitle').value.trim() || !!q('#tkDesc').value.trim() || JSON.stringify(fields.map(field => field.value)) !== initial
+    const cancel = () => { if (!saving && (!hasDraft() || confirm(t('discardDraftConfirm')))) dialog.close() }
+    const save = () => {
+      if (saving) return
+      const title = q('#tkTitle').value.trim()
+      if (!title) { toast(t('taskTitle'), 'warn'); q('#tkTitle').focus(); return }
+      const m = q('#tkMatrix').value
+      const quad = Number(q('#tkQuad').value)
+      const due = q('#tkDue').value
+      const tags = (q('#tkTags').value || '').split(',').map(s => s.trim()).filter(Boolean)
+      const description = q('#tkDesc').value
       if (m) localStorage.setItem('pkw-task-last-matrix', m)
+      saving = true
+      fields.forEach(field => { field.disabled = true })
+      q('#tkSave').disabled = true; q('#tkCancel').disabled = true
+      q('#tkSave').textContent = t('saving')
       api('createTask', {
         title,
         ...(description ? { description } : {}),
@@ -3963,14 +4570,22 @@ function quickTaskDialog(matrixId, sourceRefs, prefill, defaultQuad){
         ...(due ? { dueAt: due } : {}),
         ...(tags.length ? { tags } : {}),
         ...(sourceRefs && sourceRefs.length ? { sourceRefs } : {}),
-      }).then(() => { modal.remove(); refreshTasks() }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
-    })
-    modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove() })
-    $('#tkTitle').focus()
+      }).then(() => { dialog.close(); refreshTasks() }).catch(e => {
+        saving = false
+        fields.forEach(field => { field.disabled = false })
+        q('#tkSave').disabled = false; q('#tkCancel').disabled = false; q('#tkSave').textContent = t('taskSave')
+        toast(t('genericError') + ': ' + e.message, 'err'); q('#tkTitle').focus()
+      })
+    }
+    q('#tkCancel').addEventListener('click', cancel)
+    q('#tkSave').addEventListener('click', save)
+    modal.addEventListener('click', (e) => { if (e.target === modal) cancel() })
+    const dialog = mountDialog(modal, { name: t('taskQuickAdd'), initialFocus: '#tkTitle', onCancel: cancel, onSave: save, hasDraft })
   }).catch(e => toast(t('genericError') + ': ' + e.message, 'err'))
 }
 // Header global search removed (Search is now the unified Knowledge entry).
 document.addEventListener('keydown', (e) => {
+  if (dialogStack.length) return // Dialog capture handlers own shortcuts and Escape.
   if (e.key === 'Escape') { if (taskDetailRequestClose) { taskDetailRequestClose(); return } dismissContextMenu(); dismissSelButton(); dismissWikiSuggest(); if (state.explorerSel.size) explorerClearSel(); return }
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') { e.preventDefault(); if (state.view === 'notes' && state.selectedNoteId !== null) saveNote() }
   else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'o') { e.preventDefault(); quickSwitch() }
@@ -3989,7 +4604,7 @@ $('#mobileMoreBtn').addEventListener('click', () => { mobileActionSheet(t('mobil
   { label: t('themeDark'), action: 'theme-dark' },
 ]) })
 $('#pageTitle').addEventListener('click', () => { if (isMobile() && state.view === 'notes' && state.selectedNoteId === null && state.mobileNotesFolder === null) mobileNotesScopeSheet() })
-window.addEventListener('beforeunload', (e) => { if (state.editor.dirty && state.selectedNoteId !== null) { e.preventDefault(); e.returnValue = '' } })
+window.addEventListener('beforeunload', (e) => { if (dialogHasDraft() || ((state.editor.dirty || state.editor.saving) && state.selectedNoteId !== null)) { e.preventDefault(); e.returnValue = '' } })
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { refreshHeader(); if (state.view === 'notes') { renderTree(); if (state.selectedNoteId) kickSyncPoll({ pending: true }) } } })
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (currentThemeMode() === 'system') applyTheme('system') })
 applyTheme()
@@ -4005,6 +4620,26 @@ function syncInspector(){
 function toggleInspector(){ state.inspectorCollapsed = !state.inspectorCollapsed; syncInspector() }
 if ($('#detail')) new MutationObserver(syncInspector).observe($('#detail'), { childList: true, subtree: true, characterData: true })
 syncInspector()
+if (PKW_BASE !== '/pkw') {
+  $('#spaceBack').addEventListener('click', async (event) => {
+    event.preventDefault()
+    if (dialogHasDraft()) { toast(t('spaceDraftPending'), 'warn'); return }
+    if (!await flushNoteEdits()) return
+    window.location.assign('/pkw')
+  })
+  $('#spaceRetry').addEventListener('click', async (event) => {
+    const button = event.currentTarget; button.disabled = true
+    workspaceSessionPromise = null
+    try { await ensureWorkspaceSession() } catch (error) { toast(error.message, 'err') }
+    finally { button.disabled = false }
+  })
+  document.addEventListener('click', event => {
+    const control = event.target.closest('[data-action]')
+    if (control && workspaceActionDenied(control)) { event.preventDefault(); event.stopImmediatePropagation(); toast(t('spaceDenied'), 'warn') }
+  }, true)
+  new MutationObserver(applyWorkspacePermissions).observe(document.body, { childList: true, subtree: true })
+  applyWorkspacePermissions()
+}
 
 render()
 </script>

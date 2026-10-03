@@ -1,7 +1,7 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
@@ -11,18 +11,20 @@ import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { SqliteStorageBackend } from '@deepseek-ai/dsh-storage-sqlite'
 import WorkspaceRegistry from '@deepseek-ai/dsh-workspace'
 import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
-import PkwWebService from '../src/index.ts'
+import PkwWebService, { type Config } from '../src/index.ts'
 
 const dirs: string[] = []
 const contexts: Context[] = []
 
 afterEach(async () => {
+  vi.restoreAllMocks()
   await Promise.all(contexts.splice(0).map(c => c.fiber.dispose().catch(() => {})))
   await Promise.all(dirs.splice(0).map(d => rm(d, { recursive: true, force: true })))
 })
 
-function startFakeWeKnora(): Promise<{ baseUrl: string; manuals: Map<string, { id: string; title: string; content: string }> }> {
+function startFakeWeKnora(): Promise<{ baseUrl: string; manuals: Map<string, { id: string; title: string; content: string }>; control: { rejectManual: boolean } }> {
   const manuals = new Map<string, { id: string; title: string; content: string }>()
+  const control = { rejectManual: false }
   let counter = 0
   const server = createServer((req, res) => {
     void (async () => {
@@ -31,6 +33,7 @@ function startFakeWeKnora(): Promise<{ baseUrl: string; manuals: Map<string, { i
       const readBody = async () => { const chunks: Buffer[] = []; for await (const c of req) chunks.push(c as Buffer); return Buffer.concat(chunks).toString('utf8') }
       if (req.method === 'POST' && /\/knowledge-bases\/[^/]+\/knowledge\/manual$/.test(url.pathname)) {
         const b = JSON.parse(await readBody())
+        if (control.rejectManual) { send(403, { error: 'manual creation denied' }); return }
         const id = `kn-${++counter}`
         manuals.set(id, { id, title: b.title, content: b.content })
         send(200, { data: { id, title: b.title, parse_status: 'pending' } }); return
@@ -59,10 +62,10 @@ function startFakeWeKnora(): Promise<{ baseUrl: string; manuals: Map<string, { i
       res.writeHead(404); res.end('{}')
     })().catch(() => { res.destroy() })
   })
-  return new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve({ baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/v1`, manuals })))
+  return new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve({ baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/v1`, manuals, control })))
 }
 
-async function boot() {
+async function boot(pollMs = 25, options: Partial<Pick<Config, 'kbId' | 'weknoraApiKey' | 'weknoraBaseUrl'>> = {}) {
   const fake = await startFakeWeKnora()
   const dir = await mkdtemp(join(tmpdir(), 'pkw-web-'))
   dirs.push(dir)
@@ -90,15 +93,171 @@ async function boot() {
     weknoraBaseUrl: fake.baseUrl,
     weknoraApiKeyRef: '',
     weknoraApiKey: 'test-key',
-    pollMs: 25,
+    pollMs,
     retryBaseMs: 5,
     retryMaxMs: 10,
     recoveryGraceAttempts: 2,
+    ...options,
   })
   return { ctx, dir, web: ctx.pkwWeb, sync: ctx.pkwWeKnoraSync, fake, routes }
 }
 
 describe('PKW Web Host Bridge (real Core integration)', () => {
+  it('offers explicitly labeled canonical keyword search when retrieval is unconfigured and excludes trash', async () => {
+    const { web } = await boot(3_600_000, { weknoraBaseUrl: '', kbId: '', weknoraApiKey: '' })
+    const a = await web.call('createNote', { relativePath: '项目交付.md', markdown: '# 项目交付\n\n保留旧数据并验证附件。' }) as { noteId: string }
+    const b = await web.call('createNote', { relativePath: 'archive.md', markdown: '# 保留旧数据\n\n此条已移入回收站。' }) as { noteId: string }
+    await web.call('deleteNote', { noteId: b.noteId })
+    const attachment = await web.call('uploadAttachment', { filename: '旧数据迁移.pdf', mimeType: 'application/pdf', contentBase64: Buffer.from('not parsed local bytes').toString('base64') }) as { attachmentId: string }
+    const result = await web.call('search', { query: '旧数据', limit: 10 }) as { mode: string; warning: string; results: Array<{ local: { entityId: string } }> }
+    expect(result.mode).toBe('local-keyword')
+    expect(result.warning).toContain('不包含附件内部全文')
+    expect(result.results.map(r => r.local.entityId)).toContain(a.noteId)
+    expect(result.results.map(r => r.local.entityId)).toContain(attachment.attachmentId)
+    expect(result.results.map(r => r.local.entityId)).not.toContain(b.noteId)
+    expect((await web.call('search', { query: 'not parsed local bytes' }) as { results: unknown[] }).results).toEqual([])
+    await expect(web.call('search', { query: 'a'.repeat(201) })).rejects.toThrow('200')
+  })
+  it.each(['saveNote', 'saveNoteBody'])('%s rejects a second editor stale snapshot and returns the new save fingerprint', async method => {
+    const { web } = await boot(3_600_000)
+    const { noteId } = await web.call('createNote', { relativePath: 'two-editors.md', markdown: '# Original\n' }) as { noteId: string }
+    const first = await web.call('getNote', { noteId }) as { note: { observedRevision: number; contentHash: string } }
+    const options = { noteId, expectedRevision: first.note.observedRevision, expectedContentHash: first.note.contentHash }
+    const saved = await web.call(method, { ...options, markdown: '# First editor\n', body: '# First editor\n' }) as { observedRevision: number; contentHash: string }
+    expect(saved.observedRevision).toBe(first.note.observedRevision + 1)
+    expect(saved.contentHash).not.toBe(first.note.contentHash)
+    await expect(web.call(method, { ...options, markdown: '# Stale second editor\n', body: '# Stale second editor\n' })).rejects.toMatchObject({ code: 'PKW_NOTE_CONFLICT' })
+    const current = await web.call('getNote', { noteId }) as { markdown: string; note: { contentHash: string } }
+    expect(current.markdown).toContain('First editor')
+    expect(current.markdown).not.toContain('Stale second editor')
+    expect(current.markdown).toContain(`id: ${noteId}`)
+    expect(current.note.contentHash).toBe(saved.contentHash)
+  })
+
+  it('a fresh getNote exposes the actual external-file fingerprint before reconciliation', async () => {
+    const { web, dir } = await boot(3_600_000)
+    const { noteId } = await web.call('createNote', { relativePath: 'external.md', markdown: '# Original\n' }) as { noteId: string }
+    const old = await web.call('getNote', { noteId }) as { note: { observedRevision: number; contentHash: string } }
+    await writeFile(join(dir, 'notes/external.md'), `---\nid: ${noteId}\n---\n# External edit\n`)
+    const fresh = await web.call('getNote', { noteId }) as { note: { observedRevision: number; contentHash: string } }
+    expect(fresh.note.contentHash).not.toBe(old.note.contentHash)
+    await expect(web.call('saveNoteBody', { noteId, body: '# Old view\n', expectedRevision: old.note.observedRevision, expectedContentHash: old.note.contentHash })).rejects.toMatchObject({ code: 'PKW_NOTE_CONFLICT' })
+    await web.call('saveNoteBody', { noteId, body: '# Explicit edit after reread\n', expectedRevision: fresh.note.observedRevision, expectedContentHash: fresh.note.contentHash })
+    expect((await web.call('getNote', { noteId }) as { markdown: string }).markdown).toContain('Explicit edit after reread')
+  })
+
+  it('shows terminal sync failures and clears historical errors after a successful retry', async () => {
+    const { web, sync, fake } = await boot(3_600_000)
+    fake.control.rejectManual = true
+    const created = await web.call('createNote', { relativePath: 'denied.md', markdown: '# keep local content\n' }) as { noteId: string }
+    await expect(sync.syncNote(created.noteId as never)).rejects.toThrow('did not converge')
+    const failed = await web.call('getNote', { noteId: created.noteId }) as { markdown: string; sync: { pending: boolean; error?: string } }
+    expect(failed.markdown).toContain('keep local content')
+    expect(failed.sync.error).toBeTruthy()
+    expect(failed.sync.pending).toBe(false)
+    const failedKnowledge = await web.call('listKnowledge', {}) as Array<{ pending: boolean; error?: string }>
+    expect(failedKnowledge[0]).toMatchObject({ pending: false, error: failed.sync.error })
+    expect((await web.call('summary', {}) as { syncErrors: number }).syncErrors).toBe(1)
+
+    fake.control.rejectManual = false
+    await sync.syncNote(created.noteId as never)
+    const recovered = await web.call('getNote', { noteId: created.noteId }) as { sync: { pending: boolean; error?: string; syncState: string } }
+    expect(recovered.sync.error).toBeUndefined()
+    expect(recovered.sync.pending).toBe(false)
+    expect(recovered.sync.syncState).toBe('synced')
+    const recoveredKnowledge = await web.call('listKnowledge', {}) as Array<{ pending: boolean; error?: string }>
+    expect(recoveredKnowledge[0]?.pending).toBe(false)
+    expect(recoveredKnowledge[0]?.error).toBeUndefined()
+    expect((await web.call('summary', {}) as { syncErrors: number }).syncErrors).toBe(0)
+  })
+
+  it.each([
+    { state: 'completed', pending: false, error: undefined },
+    { state: 'permanent', pending: false, error: 'current failure' },
+    { state: 'retryable', pending: true, error: 'current failure' },
+  ])('attachment list and detail agree on $state status without reviving historical failures', async ({ state, pending, error }) => {
+    const { web, sync } = await boot(3_600_000)
+    const { attachmentId } = await web.call('uploadAttachment', { filename: 'status.txt', mimeType: 'text/plain', contentBase64: Buffer.from('status sample').toString('base64') }) as { attachmentId: string }
+    const intent = {
+      operationId: 'old', workspaceId: 'fixture', entityType: 'attachment', entityId: attachmentId,
+      kbId: 'kb-1', operationKind: 'create', remoteFingerprint: 'fixture', attempt: 1, recoveryAttempts: 0,
+      state: 'permanent', lastError: 'historical failure', createdAt: '2026-10-01T00:00:00.000Z', updatedAt: '2026-10-01T00:00:00.000Z',
+    }
+    vi.spyOn(sync, 'listIntents').mockReturnValue([
+      { ...intent, operationId: 'current', state, lastError: 'current failure', createdAt: '2026-10-02T00:00:00.000Z', updatedAt: '2026-10-02T00:00:00.000Z' },
+      intent, // Deliberately reversed: storage enumeration order is not recency.
+    ])
+    vi.spyOn(sync, 'listDirty').mockReturnValue([])
+    const items = await web.call('listAttachments', {}) as Array<{ pending: boolean; error?: string }>
+    const detail = await web.call('getAttachment', { attachmentId }) as { pending: boolean; error?: string }
+    expect(items[0]).toMatchObject({ pending, intentState: state, configuration: 'configured' })
+    expect(items[0]?.error).toBe(error)
+    expect(detail).toMatchObject({ pending, intentState: state, configuration: 'configured' })
+    expect(detail.error).toBe(error)
+  })
+
+  it.each([
+    { options: { weknoraApiKey: '' }, configuration: 'missing_credential' },
+    { options: { weknoraBaseUrl: '' }, configuration: 'missing_base_url' },
+    { options: { kbId: '' }, configuration: 'missing_kb' },
+  ])('keeps local content and pending work visible while $configuration', async ({ options, configuration }) => {
+    const { web, sync } = await boot(3_600_000, options)
+    const { noteId } = await web.call('createNote', { relativePath: 'local-only.md', markdown: '# Saved locally\n' }) as { noteId: string }
+    const { attachmentId } = await web.call('uploadAttachment', { filename: 'local.txt', mimeType: 'text/plain', contentBase64: Buffer.from('local attachment').toString('base64') }) as { attachmentId: string }
+    await sync.markDirty('note', noteId)
+    await sync.markDirty('attachment', attachmentId)
+    const detail = await web.call('getNote', { noteId }) as { markdown: string; sync: Record<string, unknown> }
+    expect(detail.markdown).toContain('Saved locally')
+    expect(detail.sync).toMatchObject({ configuration, pending: true })
+    const notes = await web.call('listNotes', {}) as Array<{ sync: Record<string, unknown> }>
+    expect(notes[0]?.sync).toMatchObject({ configuration, pending: true })
+    const tree = await web.call('getTree', {}) as { root: Array<{ sync: Record<string, unknown> }> }
+    expect(tree.root[0]?.sync).toMatchObject({ configuration, pending: true })
+    const attachments = await web.call('listAttachments', {}) as Array<Record<string, unknown>>
+    expect(attachments[0]).toMatchObject({ configuration, pending: true })
+    expect(await web.call('getAttachment', { attachmentId })).toMatchObject({ configuration, pending: true })
+    const knowledge = await web.call('listKnowledge', {}) as Array<Record<string, unknown>>
+    expect(knowledge[0]).toMatchObject({ configuration, pending: true })
+    expect(await web.call('summary', {})).toMatchObject({ configuration, integration: 'unavailable', pendingSync: 2 })
+  })
+
+  it('credential provider failures do not block local reads, writes, or status and never expose their error', async () => {
+    const { web, ctx } = await boot(3_600_000)
+    const { noteId } = await web.call('createNote', { relativePath: 'provider-down.md', markdown: '# Original\n' }) as { noteId: string }
+    vi.spyOn(ctx.pkwWeKnora, 'credentialStatus').mockRejectedValue(new Error('private provider diagnostic'))
+    const first = await web.call('getNote', { noteId }) as { note: { observedRevision: number; contentHash: string }; sync: Record<string, unknown> }
+    expect(first.sync.configuration).toBe('unavailable')
+    await web.call('saveNoteBody', { noteId, body: '# Kept working\n', expectedRevision: first.note.observedRevision, expectedContentHash: first.note.contentHash })
+    const latest = await web.call('getNote', { noteId }) as { markdown: string }
+    expect(latest.markdown).toContain('Kept working')
+    const summary = await web.call('summary', {})
+    expect(summary).toMatchObject({ configuration: 'unavailable', integration: 'unavailable' })
+    expect(JSON.stringify([latest, summary])).not.toContain('private provider diagnostic')
+  })
+
+  it('a stuck credential provider cannot hold local reads indefinitely and later recovery is visible', async () => {
+    const { web, ctx } = await boot(3_600_000)
+    const { noteId } = await web.call('createNote', { relativePath: 'credential-timeout.md', markdown: '# Original\n' }) as { noteId: string }
+    const { attachmentId } = await web.call('uploadAttachment', { filename: 'timeout.txt', contentBase64: Buffer.from('offline bytes').toString('base64') }) as { attachmentId: string }
+    const credential = vi.spyOn(ctx.pkwWeKnora, 'credentialStatus').mockImplementation(() => new Promise(() => {}))
+    await web.call('saveNoteBody', { noteId, body: '# Still writable\n' })
+    const [note, notes, tree, attachments, attachment, knowledge, summary] = await Promise.all([
+      web.call('getNote', { noteId }), web.call('listNotes', {}), web.call('getTree', {}),
+      web.call('listAttachments', {}), web.call('getAttachment', { attachmentId }),
+      web.call('listKnowledge', {}), web.call('summary', {}),
+    ])
+    expect(note).toMatchObject({ body: '# Still writable\n', sync: { configuration: 'unavailable' } })
+    expect(notes).toEqual([expect.objectContaining({ sync: expect.objectContaining({ configuration: 'unavailable' }) })])
+    expect(tree).toMatchObject({ root: [expect.objectContaining({ sync: expect.objectContaining({ configuration: 'unavailable' }) })] })
+    expect(attachments).toEqual([expect.objectContaining({ configuration: 'unavailable' })])
+    expect(attachment).toMatchObject({ configuration: 'unavailable' })
+    expect(knowledge).toEqual([expect.objectContaining({ configuration: 'unavailable' })])
+    expect(summary).toMatchObject({ configuration: 'unavailable' })
+    credential.mockResolvedValue('configured')
+    expect(await web.call('getNote', { noteId })).toMatchObject({ sync: { configuration: 'configured' } })
+    expect(await web.call('summary', {})).toMatchObject({ configuration: 'configured' })
+  })
+
   it('summary reports workspace, KB, and integration facts', async () => {
     const { web } = await boot()
     const s = await web.call('summary', {}) as Record<string, unknown>
@@ -290,6 +449,37 @@ describe('PKW Web Host Bridge (real Core integration)', () => {
     expect(captured.body).toEqual(pdf)
   })
 
+  it.each([
+    { mime: 'text/html', name: 'page.html', body: '<script>window.opener</script>', inline: false },
+    { mime: 'image/svg+xml', name: 'drawing.svg', body: '<svg onload="alert(1)"/>', inline: false },
+    { mime: 'application/xhtml+xml', name: 'page.xhtml', body: '<html/>', inline: false },
+    { mime: 'text/plain', name: '笔记.txt', body: 'plain text', inline: true },
+  ])('preview $mime keeps active documents out of the app origin and preserves original bytes', async ({ mime, name, body, inline }) => {
+    const { web, routes } = await boot(3_600_000)
+    const up = await web.call('uploadAttachment', { filename: name, mimeType: mime, contentBase64: Buffer.from(body).toString('base64') }) as { attachmentId: string }
+    for (const suffix of ['', '/preview']) {
+      const captured = await new Promise<{ status: number; headers: Record<string, string>; body: Buffer }>(resolve => {
+        let status = 0
+        let headers: Record<string, string> = {}
+        routes.find(r => r.path === '/pkw/attachment')!.handler({ url: '/pkw/attachment/' + up.attachmentId + suffix, method: 'GET' }, {
+          writeHead: (s: number, h: Record<string, string>) => { status = s; headers = h },
+          end: (b: Buffer) => resolve({ status, headers, body: Buffer.from(b) }),
+        })
+      })
+      expect(captured.status).toBe(200)
+      expect(captured.body.toString()).toBe(body)
+      expect(captured.headers['X-Content-Type-Options']).toBe('nosniff')
+      expect(captured.headers['Cache-Control']).toBe('private, no-store')
+      if (inline && suffix === '/preview') expect(captured.headers['Content-Disposition']).toBe('inline')
+      else {
+        expect(captured.headers['Content-Disposition']).toContain('attachment;')
+        expect(captured.headers['Content-Disposition']).toContain("filename*=UTF-8''" + encodeURIComponent(name))
+        expect(captured.headers['Content-Disposition']).toMatch(/^[\x20-\x7e]+$/)
+        expect(captured.headers['Content-Security-Policy']).toBe("sandbox; default-src 'none'")
+      }
+    }
+  })
+
   it('registers prefix routes with NO trailing slash (WebServer matcher contract)', async () => {
     const { routes } = await boot()
     const prefixes = routes.filter(r => r.kind === 'prefix')
@@ -371,6 +561,30 @@ describe('PKW Web Host Bridge (real Core integration)', () => {
     expect(r.ok).toEqual(['folder:' + entry.trashEntryId])
     expect(r.failed.map(f => f.key)).toEqual(['bogus'])
     expect(r.failed[0]!.error).toContain('invalid trash key')
+  })
+
+  it('listTasks distinguishes Inbox (null), a named matrix, and all tasks (omitted)', async () => {
+    const { web } = await boot(3_600_000)
+    const matrix = await web.call('createMatrix', { name: 'Work' }) as { matrixId: string }
+    const inbox = await web.call('createTask', { title: 'Inbox task' }) as { taskId: string }
+    const work = await web.call('createTask', { title: 'Work task', matrixId: matrix.matrixId }) as { taskId: string }
+    const listIds = async (args: Record<string, unknown>) => (await web.call('listTasks', args) as Array<{ taskId: string }>).map(task => task.taskId)
+    expect(await listIds({ matrixId: null })).toEqual([inbox.taskId])
+    expect(await listIds({ matrixId: matrix.matrixId })).toEqual([work.taskId])
+    expect(await listIds({})).toEqual(expect.arrayContaining([inbox.taskId, work.taskId]))
+  })
+
+  it('lists only deleted tasks and restores them with stable identity into visible task lists', async () => {
+    const { web } = await boot()
+    const removed = await web.call('createTask', { title: 'Restore me' }) as { taskId: string }
+    await web.call('createTask', { title: 'Still active' })
+    await web.call('deleteTask', { taskId: removed.taskId })
+    const trash = await web.call('listTrashTasks', {}) as Array<{ taskId: string; contentHash: string }>
+    expect(trash.map(task => task.taskId)).toEqual([removed.taskId])
+    expect(trash[0]!.contentHash).toMatch(/^[a-f0-9]{64}$/)
+    await web.call('restoreTask', { taskId: removed.taskId })
+    expect(await web.call('listTrashTasks', {})).toEqual([])
+    expect((await web.call('listTasks', {}) as Array<{ taskId: string }>).map(task => task.taskId)).toContain(removed.taskId)
   })
 
   it('removeMatrix with reassignTo:null moves tasks to Inbox (not a not-empty throw)', async () => {

@@ -1,2 +1,6 @@
 packages:
   - packages/pkw/*
+
+# Harness peers are supplied by the configured checkout / installed profile.
+# Do not silently download a different host release from the public registry.
+autoInstallPeers: false
