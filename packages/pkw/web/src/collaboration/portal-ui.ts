@@ -117,6 +117,23 @@ input,select {
   color:var(--ink);
   background:var(--card);
 }
+.remember-login {
+  display:flex;
+  align-items:center;
+  min-height:44px;
+  gap:10px;
+  font-weight:400;
+  cursor:pointer;
+}
+.remember-login input {
+  width:20px;
+  min-height:20px;
+  height:20px;
+  flex:0 0 20px;
+  margin:0;
+  padding:0;
+  accent-color:var(--accent);
+}
 button,.button {
   cursor:pointer;
   border:1px solid var(--line);
@@ -258,11 +275,17 @@ a {
 <span class="badge">安全登录</span>
 <h1 style="margin-top:16px">欢迎回到你的知识空间</h1>
 <p class="muted">私人资料只对你开放。加入团队后，你可以访问对应的共享空间。</p>
+<p id="session-expired-message" class="muted" role="status" hidden>登录已过期，请重新登录后继续。已保存的资料不受影响。</p>
 <form id="login-form">
 <label for="username">账号</label>
 <input id="username" name="username" autocomplete="username" required minlength="3" maxlength="64" placeholder="例如 xiaoming">
 <label for="password">密码</label>
 <input id="password" name="password" type="password" autocomplete="current-password" required maxlength="1024">
+<label class="remember-login" for="remember-me">
+<input id="remember-me" name="rememberMe" type="checkbox" autocomplete="off" aria-describedby="remember-device-hint">
+<span>在此设备保持登录 30 天</span>
+</label>
+<small id="remember-device-hint">仅在你自己的设备上勾选；共享或公共设备请不要勾选。</small>
 <div class="actions">
 <button class="primary" type="submit">登录</button>
 </div>
@@ -421,8 +444,35 @@ a {
     var sharePreview = null;
     var shareSource = null;
     var shareCommit = null;
+    var entryParams = new URLSearchParams(location.search || '');
+    var returnTarget = readReturnTarget(entryParams);
     var roles = { owner: '所有者', admin: '管理员', editor: '编辑者', viewer: '只读成员' };
     function el(id) { return document.getElementById(id); }
+    function readReturnTarget(params) {
+        var values = params.getAll('next');
+        if (values.length !== 1)
+            return null;
+        var path = values[0];
+        var match = /^\/pkw\/spaces\/(sp_[a-f0-9]{32})\/?$/.exec(path);
+        // Full equality also rejects the trailing newline accepted by RegExp's $.
+        return match && match[0] === path ? { spaceId: match[1], path: '/pkw/spaces/' + match[1] } : null;
+    }
+    function returnToRequestedSpace(owner) {
+        if (!owner.current() || !session)
+            return;
+        el('session-expired-message').hidden = true;
+        if (!returnTarget)
+            return;
+        // Only a freshly verified session can authorize this navigation. Never
+        // copy an arbitrary query value into location or replay a previous write.
+        if (!session.spaces.some(function (space) { return space.id === returnTarget.spaceId; })) {
+            message('当前账号无法访问刚才的空间。请选择下方可访问的空间，或退出后使用原账号登录。', false, owner);
+            return;
+        }
+        var path = returnTarget.path;
+        returnTarget = null;
+        location.assign(path);
+    }
     // Every asynchronous operation owns the identity and UI domain it started in.
     // The operation may adopt a new generation only when it explicitly starts that transition.
     function context(kind) {
@@ -576,6 +626,7 @@ a {
         el('account-label').textContent = '';
         el('spaces').replaceChildren();
         ['password', 'old-password', 'new-password', 'register-password', 'team-name'].forEach(function (id) { el(id).value = ''; });
+        el('remember-me').checked = false;
     }
     function lockIdentity(locked) {
         authBusy = locked;
@@ -724,13 +775,14 @@ a {
             el('management-title').focus();
     }
     form('login-form', async function (owner) {
-        var input = { username: el('username').value, password: el('password').value };
+        var input = { username: el('username').value, password: el('password').value, rememberMe: el('remember-me').checked === true };
         beginIdentity(owner, true);
         try {
             await request('/pkw/login', input);
             if (!owner.current())
                 return;
-            await refresh(owner);
+            if (await refresh(owner))
+                returnToRequestedSpace(owner);
         }
         finally {
             lockIdentity(false);
@@ -986,8 +1038,14 @@ a {
         el('register-panel').open = true;
     }
     var initialOwner = context();
-    refresh(initialOwner).catch(function () { if (initialOwner.current() && session)
-        showAuth(); });
+    el('session-expired-message').hidden = entryParams.get('reason') !== 'session-expired';
+    refresh(initialOwner).then(function (ready) {
+        if (ready)
+            returnToRequestedSpace(initialOwner);
+    }).catch(function () {
+        if (initialOwner.current() && session)
+            showAuth();
+    });
 })();
 </script></body></html>`
 }

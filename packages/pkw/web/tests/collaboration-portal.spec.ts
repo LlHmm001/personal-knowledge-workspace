@@ -26,6 +26,7 @@ class PortalElement {
   inert = false
   open = false
   selected = false
+  checked = false
   className = ''
   type = ''
   href = ''
@@ -43,6 +44,7 @@ class PortalElement {
     if (name === 'hidden') this.hidden = true
     if (name === 'disabled') this.disabled = true
     if (name === 'value') this.value = value
+    if (name === 'checked') this.checked = true
   }
   append(...children: PortalElement[]) {
     for (const child of children) { child.parent = this; this.children.push(child) }
@@ -121,7 +123,7 @@ function response(value: unknown, status = 200, error?: string) {
 }
 async function settle() { for (let i = 0; i < 16; i++) await Promise.resolve() }
 
-function harness(initial?: (request: Request) => unknown) {
+function harness(initial?: (request: Request) => unknown, navigation: { search?: string; hash?: string } = {}) {
   const document = new PortalDocument(page)
   const requests: Request[] = []
   let session = alice
@@ -146,10 +148,11 @@ function harness(initial?: (request: Request) => unknown) {
     return await (handler?.(request) ?? fallback(request))
   })
   const clipboard = vi.fn(async (_text: string) => {})
+  const location = { origin: 'http://localhost', pathname: '/pkw', hash: navigation.hash || '', search: navigation.search || '', assign: vi.fn() }
+  const history = { replaceState: vi.fn() }
   runInNewContext(script, {
     document, fetch, navigator: { clipboard: { writeText: clipboard } }, confirm: () => true,
-    location: { origin: 'http://localhost', pathname: '/pkw', hash: '' },
-    history: { replaceState: vi.fn() }, URLSearchParams,
+    location, history, URLSearchParams,
   })
   const el = (id: string) => document.getElementById(id)
   const click = (id: string) => el(id).emit('click')
@@ -161,7 +164,7 @@ function harness(initial?: (request: Request) => unknown) {
   }
   const rowButton = (name: string) => el('members').querySelectorAll('button').find(button => button.textContent === name)!
   const preview = async () => { await click('load-share-notes'); await submit('share-form') }
-  return { document, el, click, submit, open, rowButton, preview, requests, clipboard, fallback, setHandler: (next?: typeof handler) => { handler = next } }
+  return { document, el, click, submit, open, rowButton, preview, requests, clipboard, location, history, fallback, setHandler: (next?: typeof handler) => { handler = next } }
 }
 
 describe('collaboration portal artifact', () => {
@@ -397,5 +400,161 @@ describe('collaboration portal artifact', () => {
     expect(h.el('old-password').value).toBe('')
     expect(h.el('new-password').value).toBe('')
     expect(h.el('status').textContent).toBe('密码已修改，请重新登录')
+  })
+})
+
+const returnSpaceId = 'sp_' + 'a1'.repeat(16)
+const returnPath = '/pkw/spaces/' + returnSpaceId
+const returnSession: Session = { ...alice, spaces: [...spaces, { id: returnSpaceId, name: '原来的空间', kind: 'team', role: 'viewer' }] }
+const expiredQuery = (next = returnPath) => '?' + new URLSearchParams({ next, reason: 'session-expired' }).toString()
+
+describe('portal remembered login and safe session-expiry return', () => {
+  it.each([false, true])('requires an explicit checkbox choice and sends rememberMe=%s as a boolean', async (remember) => {
+    const h = harness(req => req.path === '/pkw/session' ? response(null, 401, 'login required') : undefined)
+    await settle()
+    const checkbox = h.el('remember-me')
+    expect(checkbox.attributes.type).toBe('checkbox')
+    expect(checkbox.checked).toBe(false)
+    expect(checkbox.attributes.checked).toBeUndefined()
+    expect(checkbox.attributes['aria-describedby']).toBe('remember-device-hint')
+    expect(h.el('remember-device-hint').textContent).toContain('共享或公共设备请不要勾选')
+    expect(h.el('login-form').querySelectorAll('label').some(label => label.attributes.for === 'remember-me' && label.textContent.includes('30 天'))).toBe(true)
+    h.el('username').value = 'alice'; h.el('password').value = 'entered-password'; checkbox.checked = remember
+    await h.submit('login-form')
+    expect(h.requests.find(req => req.path === '/pkw/login')?.input).toEqual({ username: 'alice', password: 'entered-password', rememberMe: remember })
+    expect(h.location.assign).not.toHaveBeenCalled()
+  })
+
+  it('shows a fixed expiry explanation without rendering a query value as markup', async () => {
+    const h = harness(req => req.path === '/pkw/session' ? response(null, 401, 'login required') : undefined, { search: expiredQuery() })
+    await settle()
+    expect(h.el('auth').hidden).toBe(false)
+    expect(h.el('session-expired-message').hidden).toBe(false)
+    expect(h.el('session-expired-message').textContent).toContain('登录已过期，请重新登录')
+    expect(h.el('session-expired-message').textContent).toContain('已保存的资料不受影响')
+    const unknown = harness(undefined, { search: '?reason=' + encodeURIComponent('<img src=x>') })
+    expect(unknown.el('session-expired-message').hidden).toBe(true)
+    expect(unknown.el('session-expired-message').querySelectorAll('img')).toHaveLength(0)
+    await settle()
+  })
+
+  it.each(['', '/'])('returns an existing freshly verified member session to the exact space entrance%s', async (suffix) => {
+    const h = harness(req => req.path === '/pkw/session' ? response(returnSession) : undefined, { search: expiredQuery(returnPath + suffix) })
+    await settle()
+    expect(h.location.assign).toHaveBeenCalledExactlyOnceWith(returnPath)
+    expect(h.requests.map(req => req.path)).toEqual(['/pkw/session'])
+  })
+
+  it('waits for post-login session membership before returning and never replays a write', async () => {
+    const fresh = deferred<unknown>()
+    let reads = 0
+    const h = harness(req => req.path === '/pkw/session' ? ++reads === 1 ? response(null, 401, 'expired') : fresh.promise : undefined, { search: expiredQuery() })
+    await settle()
+    h.el('username').value = 'alice'; h.el('password').value = 'entered-password'; h.el('remember-me').checked = true
+    const loggingIn = h.submit('login-form'); await settle()
+    expect(h.location.assign).not.toHaveBeenCalled()
+    fresh.resolve(response(returnSession)); await loggingIn
+    expect(h.location.assign).toHaveBeenCalledExactlyOnceWith(returnPath)
+    expect(h.requests.map(req => req.path)).toEqual(['/pkw/session', '/pkw/login', '/pkw/session'])
+    expect(h.requests.find(req => req.path === '/pkw/login')?.input.rememberMe).toBe(true)
+    expect(h.el('session-expired-message').hidden).toBe(true)
+  })
+
+  it('keeps a different account without membership on its own space list with a clear explanation', async () => {
+    let reads = 0
+    const h = harness(req => req.path === '/pkw/session' ? ++reads === 1 ? response(null, 401, 'expired') : response(bob) : undefined, { search: expiredQuery() })
+    await settle()
+    h.el('username').value = 'bob'; h.el('password').value = 'entered-password'
+    await h.submit('login-form')
+    expect(h.location.assign).not.toHaveBeenCalled()
+    expect(h.el('home').hidden).toBe(false)
+    expect(h.el('spaces').textContent).toContain('Bob 私人')
+    expect(h.el('status').textContent).toContain('当前账号无法访问刚才的空间')
+    expect(h.el('status').textContent).toContain('使用原账号登录')
+  })
+
+  it.each([
+    'https://example.com/' + returnPath,
+    '//example.com' + returnPath,
+    '\\example.com\\pkw\\spaces\\' + returnSpaceId,
+    '/pkw\\spaces\\' + returnSpaceId,
+    '/pkw/spaces/' + returnSpaceId + '/api',
+    '/pkw/spaces/' + returnSpaceId + '/attachment/file',
+    returnPath + '?method=deleteNote',
+    returnPath + '#invite=secret',
+    returnPath + '\n',
+    ' ' + returnPath,
+    '/pkw/spaces/sp_' + 'a'.repeat(31),
+    '/pkw/spaces/sp_' + 'a'.repeat(33),
+    '/pkw/spaces/sp_' + 'A'.repeat(32),
+    '/pkw/spaces/team-a',
+    encodeURIComponent(returnPath),
+    '/pkw/spaces/%2f' + returnSpaceId,
+    '/pkw/spaces/../' + returnSpaceId,
+    'javascript:alert(1)',
+  ])('rejects a non-entrance return target: %s', async (target) => {
+    const h = harness(req => req.path === '/pkw/session' ? response(returnSession) : undefined, { search: expiredQuery(target) })
+    await settle()
+    expect(h.location.assign).not.toHaveBeenCalled()
+    expect(h.el('home').hidden).toBe(false)
+    expect(h.requests.map(req => req.path)).toEqual(['/pkw/session'])
+  })
+
+  it('rejects multiple next parameters instead of selecting an ambiguous return target', async () => {
+    const h = harness(req => req.path === '/pkw/session' ? response(returnSession) : undefined, { search: expiredQuery() + '&next=' + encodeURIComponent(returnPath) })
+    await settle()
+    expect(h.location.assign).not.toHaveBeenCalled()
+  })
+
+  it('does not navigate when either login or the new session verification fails', async () => {
+    for (const failure of ['login', 'session']) {
+      let reads = 0
+      const h = harness(req => {
+        if (req.path === '/pkw/session') return ++reads === 1 ? response(null, 401, 'expired') : response(null, 503, 'session unavailable')
+        if (req.path === '/pkw/login' && failure === 'login') return response(null, 401, 'wrong password')
+        return undefined
+      }, { search: expiredQuery() })
+      await settle()
+      h.el('username').value = 'alice'; h.el('password').value = 'entered-password'
+      await h.submit('login-form')
+      expect(h.location.assign).not.toHaveBeenCalled()
+      expect(h.el('auth').hidden).toBe(false)
+      expect(h.el('status').dataset.error).toBe('true')
+    }
+  })
+
+  it('ignores an old authorized session result after a newer account has logged in', async () => {
+    const old = deferred<unknown>()
+    let reads = 0
+    const h = harness(req => req.path === '/pkw/session' ? ++reads === 1 ? old.promise : response(bob) : undefined, { search: expiredQuery() })
+    h.el('username').value = 'bob'; h.el('password').value = 'entered-password'
+    await h.submit('login-form')
+    old.resolve(response(returnSession)); await settle()
+    expect(h.el('account-label').textContent).toBe('bob')
+    expect(h.location.assign).not.toHaveBeenCalled()
+    expect(h.el('status').textContent).toContain('当前账号无法访问刚才的空间')
+  })
+
+  it('preserves invitation registration and makes no return attempt before successful login', async () => {
+    const h = harness(req => req.path === '/pkw/session' ? response(null, 401, 'expired') : undefined, { search: expiredQuery(), hash: '#invite=single-use-token' })
+    await settle()
+    expect(h.el('register-token').value).toBe('single-use-token')
+    expect(h.el('accept-token').value).toBe('single-use-token')
+    expect(h.el('register-panel').open).toBe(true)
+    expect(h.history.replaceState).toHaveBeenCalledExactlyOnceWith(null, '', '/pkw')
+    h.el('register-name').value = 'new-user'; h.el('register-password').value = 'long-new-password'
+    await h.submit('register-form')
+    expect(h.requests.find(req => req.path === '/pkw/register')?.input).toEqual({ token: 'single-use-token', username: 'new-user', password: 'long-new-password' })
+    expect(h.location.assign).not.toHaveBeenCalled()
+    expect(h.el('username').value).toBe('new-user')
+    expect(h.el('remember-me').checked).toBe(false)
+  })
+
+  it('does not retain the remembered-login choice when explicitly signing out', async () => {
+    const h = harness(); await settle()
+    h.el('remember-me').checked = true
+    await h.click('logout')
+    expect(h.el('remember-me').checked).toBe(false)
+    expect(h.el('auth').hidden).toBe(false)
   })
 })

@@ -1,6 +1,6 @@
 # PKW 三团队升级交付记录
 
-更新：2026-10-02。分支 `chore/pkw-delivery`；入口为 [PR #1](https://github.com/LlHmm001/personal-knowledge-workspace/pull/1)。第三轮之后，服务器 DSH 报告了真实同步竞态，本页新增该缺陷的修复验收，历史第三轮结果保留如下。本文只登记可核对的结果；源码、本机、CI、生产分别判定。
+更新：2026-10-03。分支 `chore/pkw-delivery`；入口为 [PR #1](https://github.com/LlHmm001/personal-knowledge-workspace/pull/1)。最新登录修复和当前升级约束见 [登录保持与过期页面修复](SESSION_LOGIN_FIX.md)。下文的第三轮与首次同步竞态记录为历史证据，不能据此断言服务器目前仍未部署。用户已反馈协作入口登录失效，实际服务器版本本轮未读取。已运行协作版时只做兼容升级，保留当前身份、权限、空间和新内容，不重新初始化或导入迁移前快照。本文只登记可核对的结果；源码、本机、CI、生产分别判定。
 
 用户确认的产品边界：约 15 人；每人私人空间，另建团队共享空间；旧服务器全部资料先归本人私人空间，由本人选择分享。生产入口为 `https://ddmind.duckdns.org/pkw`，由用户自己部署。身份、权限和空间隔离已经实现，原设计阶段状态已更新。
 
@@ -13,7 +13,7 @@
 - **数据保全与迁移**：清点、停写备份、原字节/SQLite逻辑校验、源漂移检测、新目录恢复、显式绑定本人私人空间。整套协作备份包含身份、所有空间、回执；恢复撤销会话/邀请，核对成员后才解除启动门禁。
 - **运维**：独立 loopback 入口、离线账号找回、实际 tarball 集成验证，部署与备份操作指南。已有单人入口仍为兼容模式，协作上线必须替换整个 `/pkw` 代理路径并关闭旧入口。
 
-## 三团队交付与生产门禁
+## 首次协作交付的三团队历史门禁
 
 | Task | Status | Next step | Completion standard | Verification evidence | Risk | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -79,6 +79,7 @@
 ## 运维资料入口
 
 - [个人与团队部署交接](COLLABORATION_DEPLOYMENT.md)：初始化、独立入口、反向代理、旧数据归属、成员和恢复步骤；所有路径是占位示例。
+- [登录保持与过期页面修复](SESSION_LOGIN_FIX.md)：普通/30天会话、页面返回、已部署协作版的兼容升级及本轮验收。
 - [数据迁移与整套恢复](DATA_MIGRATION.md)：备份清单哈希、源漂移、私有导入、恢复门禁与退出码。
 - [检索评测](RETRIEVAL_ACCEPTANCE.md)：授权语料、模式/partial覆盖、相关性与延迟比较。
 - [产品计划](PRODUCT_PLAN.md)、[协作设计](COLLABORATION_DESIGN.md)、[验收矩阵](ACCEPTANCE_MATRIX.md)、[交互复核](DESIGN_REVIEW.md)。

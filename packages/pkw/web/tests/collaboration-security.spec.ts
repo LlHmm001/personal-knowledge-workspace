@@ -63,6 +63,7 @@ async function boot(factory?: RuntimeFactory) {
   }
   async function request(path: string, input?: unknown, actor = owner, headers: Record<string, string> = {}) {
     const response = await fetch(origin + path, {
+      redirect: 'manual',
       method: input === undefined ? 'GET' : 'POST',
       headers: { Cookie: actor.cookie, 'X-PKW-CSRF': actor.csrf, ...(input === undefined ? {} : { 'Content-Type': 'application/json', Origin: origin }), ...headers },
       ...(input === undefined ? {} : { body: JSON.stringify(input) }),
@@ -88,6 +89,49 @@ async function boot(factory?: RuntimeFactory) {
 }
 
 describe('gateway independent security race regression', () => {
+  it('redirects an expired space page to login while APIs keep a non-redirecting 401', async () => {
+    const f = await boot(), page = '/pkw/spaces/' + f.team.id
+    f.gateway.identity.logout(f.owner.session)
+    for (const path of [page, page + '/']) {
+      const response = await f.request(path)
+      expect(response.status).toBe(303)
+      expect(response.headers.get('location')).toBe('/pkw?next=' + encodeURIComponent(page) + '&reason=session-expired')
+      expect(response.headers.get('cache-control')).toContain('no-store')
+      expect(response.headers.get('set-cookie')).toBeNull() // a late 401 cannot erase a newer login cookie
+    }
+    const api = await f.request(page + '/api', { method: 'saveNoteBody', args: { body: 'unsaved draft' } })
+    expect(api.status).toBe(401)
+    expect(JSON.parse(api.text).code).toBe('PKW_AUTH_REQUIRED')
+    expect(api.headers.get('location')).toBeNull()
+    for (const path of ['/pkw/session', page + '/attachment/unknown']) {
+      const response = await f.request(path)
+      expect(response.status).toBe(401)
+      expect(response.headers.get('location')).toBeNull()
+    }
+    expect((await f.request('/pkw?reason=session-expired')).status).toBe(200)
+    expect(f.calls).toEqual([])
+    expect(f.creations).toEqual([])
+  }, 40_000)
+
+  it('matches login cookie lifetime to the selected server session and requires an explicit boolean', async () => {
+    const f = await boot()
+    for (const [rememberMe, lifetime] of [[undefined, 43200], [false, 43200], [true, 2592000]] as const) {
+      const response = await f.request('/pkw/login', { username: 'owner', password: PASSWORD, rememberMe })
+      expect(response.status).toBe(200)
+      const cookie = response.headers.get('set-cookie')!
+      expect(cookie).toContain('Path=/pkw; HttpOnly; SameSite=Strict;')
+      const seconds = Number(/Max-Age=(\d+)/.exec(cookie)![1])
+      expect(seconds).toBeGreaterThanOrEqual(lifetime - 2)
+      expect(seconds).toBeLessThanOrEqual(lifetime)
+      const token = /^pkw_session=([^;]+)/.exec(cookie)![1]!
+      const session = f.gateway.identity.session(token)!
+      expect(session.expiresAt - Date.now()).toBeGreaterThanOrEqual((lifetime - 2) * 1000)
+    }
+    const invalid = await f.request('/pkw/login', { username: 'owner', password: PASSWORD, rememberMe: 'true' })
+    expect(invalid.status).toBe(400)
+    expect(invalid.headers.get('set-cookie')).toBeNull()
+  }, 40_000)
+
   it('denies unknown capabilities, malformed arguments and unsafe request envelopes before opening a runtime', async () => {
     const { request, team, member, calls, creations } = await boot()
     const viewer = await member('reader', 'viewer'), endpoint = '/pkw/spaces/' + team.id + '/api'
@@ -140,7 +184,9 @@ describe('gateway independent security race regression', () => {
     await entered.promise
     expect((await f.request('/pkw/manage', { action: 'logout' })).status).toBe(200)
     release.resolve()
-    expect((await pending).status).toBe(401)
+    const response = await pending
+    expect(response.status).toBe(kind === 'page' ? 303 : 401)
+    if (kind === 'page') expect(response.headers.get('location')).toBe('/pkw?next=' + encodeURIComponent(path) + '&reason=session-expired')
     expect(calls).toEqual([])
   }, 40_000)
 

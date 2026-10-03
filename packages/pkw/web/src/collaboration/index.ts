@@ -120,8 +120,9 @@ export class CollaborationGateway {
     this.verifyOrigin(req)
     if (req.headers['x-pkw-csrf'] !== session.csrf) throw new AccessError(403, '会话校验已失效，请重新登录；请先保留草稿')
   }
-  private cookie(res: ServerResponse, token: string, clear = false): void {
-    res.setHeader('Set-Cookie', `${cookieName}=${token}; Path=/pkw; HttpOnly; SameSite=Strict; Max-Age=${clear ? 0 : 43200}${this.origin.protocol === 'https:' ? '; Secure' : ''}`)
+  private cookie(res: ServerResponse, token: string, expiresAt = 0): void {
+    const maxAge = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000))
+    res.setHeader('Set-Cookie', `${cookieName}=${token}; Path=/pkw; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${this.origin.protocol === 'https:' ? '; Secure' : ''}`)
   }
   async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     res.setHeader('Cache-Control', 'private, no-store')
@@ -129,9 +130,13 @@ export class CollaborationGateway {
     res.setHeader('Referrer-Policy', 'no-referrer')
     res.setHeader('X-Frame-Options', 'SAMEORIGIN')
     res.setHeader('Content-Security-Policy', "frame-ancestors 'self'; base-uri 'self'")
+    let spacePage: string | undefined
     try {
       if (req.headers.host !== this.origin.host) throw new AccessError(403, '访问域名与服务器配置不匹配')
       const path = new URL(req.url ?? '/', this.config.publicOrigin).pathname
+      // Only the HTML workspace entry navigates to login. JSON APIs and binary
+      // downloads must retain their 401 response; writes are never replayed.
+      if (req.method === 'GET' && /^\/pkw\/spaces\/sp_[a-f0-9]{32}\/?$/.test(path)) spacePage = path.replace(/\/$/, '')
       if (req.method === 'GET' && (path === '/pkw' || path === '/pkw/')) {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); res.end(renderPortal()); return
       }
@@ -146,8 +151,8 @@ export class CollaborationGateway {
           await this.identity.register(input.token, input.username, input.password)
           json(res, 200, { ok: true, value: { registered: true } }); return
         }
-        const { token } = await this.identity.login(input.username, input.password)
-        this.cookie(res, token); json(res, 200, { ok: true, value: { loggedIn: true } }); return
+        const { token, session } = await this.identity.login(input.username, input.password, input.rememberMe)
+        this.cookie(res, token, session.expiresAt); json(res, 200, { ok: true, value: { loggedIn: true } }); return
       }
       const session = this.session(req)
       if (req.method === 'POST' && path === '/pkw/share') {
@@ -168,8 +173,8 @@ export class CollaborationGateway {
         this.csrf(req, this.session(req))
         let value: unknown = {}
         switch (input.action) {
-          case 'logout': this.identity.logout(session); this.cookie(res, '', true); break
-          case 'password': await this.identity.changePassword(session, input.previous, input.password); this.cookie(res, '', true); break
+          case 'logout': this.identity.logout(session); this.cookie(res, ''); break
+          case 'password': await this.identity.changePassword(session, input.previous, input.password); this.cookie(res, ''); break
           case 'createTeam': value = this.identity.createTeam(session.id, input.name); break
           case 'members': value = this.identity.members(session.id, spaceId); break
           case 'invite': value = this.identity.invite(session.id, spaceId, input.role); break
@@ -217,6 +222,12 @@ export class CollaborationGateway {
         json(res, 409, { ok: false, code, error: error instanceof Error ? error.message : '资料已更新，请保留草稿后重新读取' }); return
       }
       const status = error instanceof AccessError ? error.status : 400
+      if (status === 401 && spacePage !== undefined) {
+        // Do not expire the cookie here: a late response for an old session must
+        // not overwrite a newer successful login in another tab.
+        res.writeHead(303, { Location: '/pkw?next=' + encodeURIComponent(spacePage) + '&reason=session-expired' })
+        res.end(); return
+      }
       json(res, status, { ok: false, code: status === 401 ? 'PKW_AUTH_REQUIRED' : status === 403 ? 'PKW_FORBIDDEN' : 'PKW_REQUEST_FAILED', error: error instanceof AccessError ? error.message : '操作未完成，请保留草稿并检查当前资料状态，或联系服务器管理员' })
     }
   }

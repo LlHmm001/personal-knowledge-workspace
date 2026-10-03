@@ -85,14 +85,21 @@ export async function runCollaborationSmoke({ profile, preview = false }) {
       const result = (response.headers.get('content-type') ?? '').includes('json') ? await response.json() : await response.text()
       return { response, result }
     }
-    async function login(username) {
-      const { response, result } = await request('/pkw/login', { username, password })
+    async function login(username, rememberMe = false) {
+      const { response, result } = await request('/pkw/login', { username, password, rememberMe })
       assert.equal(response.status, 200, JSON.stringify(result))
-      const cookie = response.headers.get('set-cookie').split(';')[0]
+      const setCookie = response.headers.get('set-cookie')
+      const maxAge = Number(/Max-Age=(\d+)/.exec(setCookie)[1]), lifetime = rememberMe ? 2592000 : 43200
+      assert.ok(maxAge >= lifetime - 2 && maxAge <= lifetime, 'cookie must match the selected login duration')
+      const cookie = setCookie.split(';')[0]
       const session = await request('/pkw/session', undefined, { cookie })
       return { cookie, ...session.result.value }
     }
-    const owner = await login('owner'), personal = owner.spaces.find(s => s.kind === 'private')
+    const owner = await login('owner', true), personal = owner.spaces.find(s => s.kind === 'private')
+    const anonymousPage = await fetch(origin + '/pkw/spaces/' + personal.id, { redirect: 'manual' })
+    assert.equal(anonymousPage.status, 303)
+    assert.equal(anonymousPage.headers.get('location'), '/pkw?next=' + encodeURIComponent('/pkw/spaces/' + personal.id) + '&reason=session-expired')
+    await anonymousPage.arrayBuffer()
     const team = (await request('/pkw/manage', { action: 'createTeam', name: '示例研发团队' }, owner)).result.value
     const invitation = (await request('/pkw/manage', { action: 'invite', spaceId: team.id, role: 'viewer' }, owner)).result.value
     assert.equal((await request('/pkw/register', { username: 'viewer', password, token: invitation.token })).response.status, 200)
@@ -122,7 +129,7 @@ export async function runCollaborationSmoke({ profile, preview = false }) {
     assert.deepEqual((await request('/pkw/share', shareInput, owner)).result.value, shared.result.value)
     assert.equal((await rpc(team.id, 'getNote', { noteId: shared.result.value.noteId }, viewer)).response.status, 200)
     assert.equal((await rpc(personal.id, 'getNote', { noteId: note.result.value.noteId }, viewer)).response.status, 404)
-    console.log('PASS: installed collaboration entry, real HTTP login/CSRF, independent spaces, viewer denial, legacy-route denial, stale-save protection, and idempotent private-to-team sharing')
+    console.log('PASS: installed collaboration entry, real HTTP login/CSRF, selected session lifetime, expired-page login redirect, independent spaces, viewer denial, legacy-route denial, stale-save protection, and idempotent private-to-team sharing')
     await operationalSmoke(resolve(profile), dataPath)
     if (preview) {
       console.log(`COLLABORATION_PREVIEW_URL=${origin}/pkw`)

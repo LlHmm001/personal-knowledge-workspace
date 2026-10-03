@@ -7,7 +7,9 @@ import { existsSync } from 'node:fs'
 export type Role = 'owner' | 'admin' | 'editor' | 'viewer'
 export interface Space { id: string; name: string; kind: 'private' | 'team'; ownerId: string }
 export interface Account { id: string; username: string }
-export interface Session extends Account { csrf: string; tokenHash: string }
+export interface Session extends Account { csrf: string; tokenHash: string; expiresAt: number }
+export const SESSION_LIFETIME_MS = 12 * 60 * 60_000
+export const REMEMBERED_SESSION_LIFETIME_MS = 30 * 24 * 60 * 60_000
 export class AccessError extends Error {
   constructor(readonly status: number, message: string) { super(message) }
 }
@@ -120,7 +122,8 @@ export class IdentityStore {
     const hash = await this.expensive(() => hashPassword(password))
     this.transaction(() => { if (!this.isInitialized()) this.insertAccount(normalized, hash) })
   }
-  async login(username: unknown, password: unknown): Promise<{ token: string; session: Session }> {
+  async login(username: unknown, password: unknown, rememberMe: unknown = false): Promise<{ token: string; session: Session }> {
+    if (typeof rememberMe !== 'boolean') throw new AccessError(400, '保持登录选项必须为是或否')
     const normalized = normalizeUsername(username)
     const now = this.now()
     // Bound unauthenticated state. Each bucket expires even when the account doesn't exist.
@@ -134,24 +137,29 @@ export class IdentityStore {
     const valid = await this.expensive(() => verifyPassword(password, row?.password ?? dummy))
     if (!row || !valid) throw new AccessError(401, '账号或密码不正确')
     this.attempts.delete(normalized)
-    return this.newSession(row)
+    return this.newSession(row, rememberMe)
   }
-  private newSession(account: Account): { token: string; session: Session } {
+  private newSession(account: Account, rememberMe: boolean): { token: string; session: Session } {
     const token = secret(), csrf = secret(), now = this.now(), tokenHash = digest(token)
+    const expiresAt = now + (rememberMe ? REMEMBERED_SESSION_LIFETIME_MS : SESSION_LIFETIME_MS)
     this.transaction(() => {
-      this.db.prepare('DELETE FROM sessions WHERE expires<=? OR seen<=?').run(now, now - 30 * 60_000)
+      // A reading pause is not a logout. Persist the chosen absolute deadline;
+      // opening another device must not purge a still-valid inactive session.
+      this.db.prepare('DELETE FROM sessions WHERE expires<=?').run(now)
       // Bound session storage per user; logging in never reuses a caller-supplied token.
       this.db.prepare('DELETE FROM sessions WHERE hash IN (SELECT hash FROM sessions WHERE userId=? ORDER BY seen DESC LIMIT -1 OFFSET 9)').run(account.id)
-      this.db.prepare('INSERT INTO sessions VALUES(?,?,?,?,?)').run(tokenHash, account.id, csrf, now + 12 * 60 * 60_000, now)
+      this.db.prepare('INSERT INTO sessions VALUES(?,?,?,?,?)').run(tokenHash, account.id, csrf, expiresAt, now)
       this.audit(account.id, 'session.created', account.id)
     })
-    return { token, session: { id: account.id, username: account.username, csrf, tokenHash } }
+    return { token, session: { id: account.id, username: account.username, csrf, tokenHash, expiresAt } }
   }
   session(token: string | undefined): Session | undefined {
     if (!token || !/^[A-Za-z0-9_-]{43}$/.test(token)) return
     const now = this.now(), hash = digest(token)
-    const row = this.db.prepare('SELECT accounts.id,accounts.username,sessions.csrf,sessions.hash AS tokenHash FROM sessions JOIN accounts ON accounts.id=sessions.userId WHERE sessions.hash=? AND expires>? AND seen>?').get(hash, now, now - 30 * 60_000) as unknown as Session | undefined
-    if (row) this.db.prepare('UPDATE sessions SET seen=? WHERE hash=?').run(now, hash)
+    const row = this.db.prepare('SELECT accounts.id,accounts.username,sessions.csrf,sessions.hash AS tokenHash,sessions.expires AS expiresAt FROM sessions JOIN accounts ON accounts.id=sessions.userId WHERE sessions.hash=? AND expires>?').get(hash, now) as unknown as Session | undefined
+    // Seen is only for the device limit, not an idle-expiry timer. Avoid a FULL
+    // synchronous SQLite write for every background poll / authorization check.
+    if (row) this.db.prepare('UPDATE sessions SET seen=? WHERE hash=? AND seen<=?').run(now, hash, now - 5 * 60_000)
     return row
   }
   logout(session: Session): void {
@@ -163,7 +171,7 @@ export class IdentityStore {
       if (!await verifyPassword(previous, String(row.password))) throw new AccessError(401, '当前密码不正确')
       const hash = await hashPassword(passwordValue(next))
       this.transaction(() => {
-        if (!this.db.prepare('SELECT 1 FROM sessions WHERE hash=? AND userId=? AND expires>? AND seen>?').get(session.tokenHash, session.id, this.now(), this.now() - 30 * 60_000)) throw new AccessError(401, '当前会话已失效，请重新登录')
+        if (!this.db.prepare('SELECT 1 FROM sessions WHERE hash=? AND userId=? AND expires>?').get(session.tokenHash, session.id, this.now())) throw new AccessError(401, '当前会话已失效，请重新登录')
         this.db.prepare('UPDATE accounts SET password=? WHERE id=?').run(hash, session.id)
         this.db.prepare('DELETE FROM sessions WHERE userId=?').run(session.id)
         this.audit(session.id, 'password.changed', session.id)

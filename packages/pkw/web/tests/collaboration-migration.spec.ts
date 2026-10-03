@@ -147,7 +147,7 @@ describe('whole collaboration cold recovery with real identity and Harness runti
       team = identity.createTeam(login.session.id, '原团队空间')
       const invite = identity.invite(login.session.id, team.id, 'editor')
       await identity.register(invite.token, 'member', 'temporary-member-cold-recovery-passphrase')
-      const member = await identity.login('member', 'temporary-member-cold-recovery-passphrase')
+      const member = await identity.login('member', 'temporary-member-cold-recovery-passphrase', true)
       unopened = identity.spaces(member.session.id).find(space => space.kind === 'private')!
       identity.invite(login.session.id, team.id, 'viewer') // Must not become a live invitation after recovery.
     } finally { identity.close() }

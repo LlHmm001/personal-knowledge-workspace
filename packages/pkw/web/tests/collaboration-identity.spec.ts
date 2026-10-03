@@ -48,6 +48,35 @@ function status(operation: () => unknown, code: number) {
 const sha = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex')
 
 describe('collaboration identity — real SQLite and scrypt security', () => {
+  it('keeps a reading-pause session valid and does not purge it when another device logs in', async () => {
+    const { store, owner, clock } = await fixture()
+    clock.now += 31 * 60_000
+    expect(store.session(owner.token)?.id).toBe(owner.session.id)
+    clock.now += 60 * 60_000
+    const second = await store.login('owner', PASSWORD)
+    expect(store.session(owner.token)?.id).toBe(owner.session.id)
+    expect(store.session(second.token)?.id).toBe(owner.session.id)
+  }, 40_000)
+
+  it('retains an explicitly remembered session through inactivity and restart, but never past 30 days', async () => {
+    const { store, owner, clock, path } = await fixture()
+    const started = clock.now
+    const remembered = await store.login('owner', PASSWORD, true)
+    clock.now += 24 * 60 * 60_000
+    expect(store.session(remembered.token)?.id).toBe(owner.session.id)
+    stores.delete(store); store.close()
+    const reopened = await open(path, () => clock.now)
+    const spaces = reopened.spaces(owner.session.id)
+    expect(reopened.session(remembered.token)?.id).toBe(owner.session.id)
+    clock.now = started + 30 * 24 * 60 * 60_000 - 1
+    expect(reopened.session(remembered.token)?.id).toBe(owner.session.id)
+    clock.now++
+    expect(reopened.session(remembered.token)).toBeUndefined()
+    expect(reopened.spaces(owner.session.id)).toEqual(spaces)
+    const db = new DatabaseSync(path, { readOnly: true })
+    try { expect(db.prepare('PRAGMA user_version').get()!.user_version).toBe(1) } finally { db.close() }
+  }, 40_000)
+
   it('isolates personal spaces even from team owners/admins and enforces viewer reads', async () => {
     const { store, owner, team, member } = await fixture()
     const viewer = await member('reader', 'viewer'), admin = await member('manager', 'admin')
@@ -146,13 +175,13 @@ describe('collaboration identity — real SQLite and scrypt security', () => {
     await store.register(replacement.token, 'racing_demotion', PASSWORD)
   }, 40_000)
 
-  it('expires idle and absolute sessions, rotates login tokens, and supports explicit logout', async () => {
+  it('enforces the normal absolute deadline despite activity, rotates login tokens, and supports explicit logout', async () => {
     const { store, owner, clock } = await fixture()
     expect(store.session(undefined)).toBeUndefined()
     expect(store.session('not-a-session')).toBeUndefined()
     expect(store.session('a'.repeat(43))).toBeUndefined()
     clock.now += 30 * 60_000
-    expect(store.session(owner.token)).toBeUndefined()
+    expect(store.session(owner.token)?.id).toBe(owner.session.id)
     const current = await store.login('owner', PASSWORD), started = clock.now
     expect(current.token).not.toBe(owner.token)
     expect(current.session.csrf).not.toBe(owner.session.csrf)
@@ -169,10 +198,11 @@ describe('collaboration identity — real SQLite and scrypt security', () => {
 
   it('requires the old password and invalidates all sessions when changing it, including after reopen', async () => {
     const { store, owner, path, clock } = await fixture()
-    const second = await store.login('owner', PASSWORD)
+    const second = await store.login('owner', PASSWORD, true)
     await expect(store.changePassword(owner.session, 'wrong previous passphrase', NEW_PASSWORD)).rejects.toMatchObject({ status: 401 })
     expect(store.session(owner.token)?.id).toBe(owner.session.id)
     expect(store.session(second.token)?.id).toBe(owner.session.id)
+    clock.now += 31 * 60_000
     await store.changePassword(owner.session, PASSWORD, NEW_PASSWORD)
     expect(store.session(owner.token)).toBeUndefined(); expect(store.session(second.token)).toBeUndefined()
     await expect(store.login('owner', PASSWORD)).rejects.toMatchObject({ status: 401 })
@@ -184,6 +214,18 @@ describe('collaboration identity — real SQLite and scrypt security', () => {
     expect(reopened.session(replaced.token)?.id).toBe(owner.session.id)
     expect(reopened.spaces(owner.session.id)).toEqual(spaces)
     expect(reopened.session(owner.token)).toBeUndefined()
+  }, 40_000)
+
+  it('rejects ambiguous remember choices and does not renew expiration during reads', async () => {
+    const { store, owner, clock } = await fixture()
+    for (const value of ['true', 'false', 1, null, {}]) {
+      await expect(store.login('owner', PASSWORD, value)).rejects.toMatchObject({ status: 400 })
+    }
+    const expires = owner.session.expiresAt
+    clock.now += 6 * 60 * 60_000
+    expect(store.session(owner.token)?.expiresAt).toBe(expires)
+    clock.now = expires
+    expect(store.session(owner.token)).toBeUndefined()
   }, 40_000)
 
   it('bounds password attempts and concurrent expensive operations without replacing valid credentials', async () => {
