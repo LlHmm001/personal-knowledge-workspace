@@ -125,14 +125,16 @@ export async function verifyHttp(baseUrl, attempts = 15, expectedVersion) {
   for (let i = 0; i < attempts; i++) {
     try {
       const page = await fetch(new URL('/pkw', base), { redirect: 'error', signal: AbortSignal.timeout(5000) })
-      if (!page.ok || !(await page.text()).includes('<title>PKW — Personal Knowledge Workspace</title>')) throw new Error('/pkw did not return the PKW page')
+      if (!page.ok) throw new Error(`/pkw returned HTTP ${page.status}`)
+      if (!(await page.text()).includes('<title>PKW — Personal Knowledge Workspace</title>')) throw new Error('/pkw did not return the PKW page')
       if (expectedVersion && page.headers.get('x-pkw-version') !== expectedVersion) throw new Error('/pkw is not serving the installed release; restart may not have completed')
       const response = await fetch(new URL('/pkw/api', base), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ method: 'summary', args: {} }), redirect: 'error', signal: AbortSignal.timeout(5000),
       })
+      if (!response.ok) throw new Error(`/pkw/api summary returned HTTP ${response.status}`)
       const rpc = await response.json()
-      if (!response.ok || rpc.ok !== true || typeof rpc.value?.workspaceId !== 'string' || !rpc.value.workspaceId || !Number.isInteger(rpc.value.notes) || !Number.isInteger(rpc.value.attachments)) {
+      if (rpc.ok !== true || typeof rpc.value?.workspaceId !== 'string' || !rpc.value.workspaceId || !Number.isInteger(rpc.value.notes) || !Number.isInteger(rpc.value.attachments)) {
         throw new Error('/pkw/api summary failed its business contract')
       }
       return { page: 'passed', summaryRpc: 'passed', servingVersion: page.headers.get('x-pkw-version'), verifiedAt: new Date().toISOString() }
@@ -148,8 +150,33 @@ export async function validateHook(path, name) {
   return resolve(path)
 }
 
-/** Rollback installation on failure, and do not report success if recovery fails. */
-export async function activate({ profile, backup, artifacts, registry, stop, start, url, beforeHost }, execute = run) {
+/** Bounded cause tree for private receipts; never serialize commands, bodies or stacks. */
+export function deploymentErrorDetails(error, seen = new Set(), depth = 0) {
+  if (depth > 5 || seen.has(error)) return { name: 'TruncatedError' }
+  seen.add(error)
+  const message = String(error?.message ?? error)
+    .replace(/\b(Bearer|Basic)\s+[^\s,;]+/gi, '$1 [redacted]')
+    .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi, '$1[redacted]@')
+    .replace(/((?:["']?)(?:password|token|api[_-]?key|secret|cookie|authorization)(?:["']?)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;&]+)/gi, '$1[redacted]')
+    .slice(0, 2000)
+  const result = { name: error?.name ?? 'Error', message }
+  if (/^[A-Z][A-Z0-9_]{0,80}$/.test(error?.code ?? '')) result.code = error.code
+  if (error?.recovery) result.recovery = {
+    phase: ['stop', 'restore', 'start', 'verify', 'complete'].includes(error.recovery.phase) ? error.recovery.phase : 'unknown',
+    profileRestored: error.recovery.profileRestored === true,
+    serviceRestarted: error.recovery.serviceRestarted === true,
+    verified: error.recovery.verified === true,
+  }
+  if (error?.cause !== undefined) result.cause = deploymentErrorDetails(error.cause, seen, depth + 1)
+  if (error instanceof AggregateError) result.errors = [...error.errors].slice(0, 8).map(e => deploymentErrorDetails(e, seen, depth + 1))
+  return result
+}
+
+/** Rollback installation on failure, and do not report success if recovery fails.
+ * A custom verifier must enforce the deployment's real page/business contract
+ * for BOTH activation and rollback; the default remains the strict HTTP probe.
+ */
+export async function activate({ profile, backup, artifacts, registry, stop, start, url, beforeHost }, execute = run, verify = verifyHttp) {
   let snapshotted = false
   try {
     await execute(stop, [], profile)
@@ -160,18 +187,32 @@ export async function activate({ profile, backup, artifacts, registry, stop, sta
     if (JSON.stringify(beforeHost) !== JSON.stringify(afterHost)) throw new Error('Harness peer entries changed during profile install')
     await execute(process.execPath, [join(repoRoot, 'scripts/check-runtime-imports.mjs'), '--profile', profile, '--version', artifacts[0].version], profile)
     await execute(start, [], profile)
-    return await verifyHttp(url, 15, artifacts[0].version)
+    return await verify(url, 15, artifacts[0].version)
   } catch (error) {
+    const recovery = { phase: 'stop', profileRestored: false, serviceRestarted: false, verified: false }
     try {
       if (snapshotted) {
         await execute(stop, [], profile)
+        recovery.phase = 'restore'
         await restoreProfile(profile, backup)
+        recovery.profileRestored = true
       }
+      recovery.phase = 'start'
       await execute(start, [], profile)
-      await verifyHttp(url)
+      recovery.serviceRestarted = true
+      recovery.phase = 'verify'
+      await verify(url)
+      recovery.verified = true
+      recovery.phase = 'complete'
     } catch (rollbackError) {
-      throw new AggregateError([error, rollbackError], `Deployment and rollback verification failed; backup: ${backup}`)
+      const failure = new AggregateError([error, rollbackError], `Deployment failed; rollback ${recovery.phase} failed; backup: ${backup}`)
+      failure.code = 'PKW_ROLLBACK_FAILED'
+      failure.recovery = recovery
+      throw failure
     }
-    throw new Error(`Deployment failed; prior profile restored and verified. Backup: ${backup}`, { cause: error })
+    const failure = new Error(`Deployment failed; ${snapshotted ? 'prior profile restored and verified' : 'prior service restarted and verified (snapshot not completed)'}. Backup: ${backup}`, { cause: error })
+    failure.code = 'PKW_DEPLOYMENT_ROLLED_BACK'
+    failure.recovery = recovery
+    throw failure
   }
 }

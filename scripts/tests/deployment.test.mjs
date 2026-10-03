@@ -4,7 +4,7 @@ import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, test } from 'node:test'
-import { activate, checkUiReview, restoreProfile, snapshotProfile, validateRegistry, validateVersion, verifyHttp } from '../deployment.mjs'
+import { activate, checkUiReview, deploymentErrorDetails, restoreProfile, snapshotProfile, validateRegistry, validateVersion, verifyHttp } from '../deployment.mjs'
 import { harnessConfig } from '../harness-config.mjs'
 
 const dirs = []
@@ -74,7 +74,16 @@ test('a partial install failure restores the old profile and verifies it after r
     }
   }
   try {
-    await assert.rejects(activate({ profile, backup: join(dir, 'backup'), artifacts: [{ name: '@deepseek-ai/dsh-pkw-web', version: '0.1.1' }], registry: 'http://localhost:4873', stop: '/hooks/stop', start: '/hooks/start', url: `http://127.0.0.1:${server.address().port}`, beforeHost: {} }, execute), /prior profile restored and verified/)
+    await assert.rejects(activate({ profile, backup: join(dir, 'backup'), artifacts: [{ name: '@deepseek-ai/dsh-pkw-web', version: '0.1.1' }], registry: 'http://localhost:4873', stop: '/hooks/stop', start: '/hooks/start', url: `http://127.0.0.1:${server.address().port}`, beforeHost: {} }, execute), error => {
+      // Keep the strict success contract, but include both cause trees if a
+      // target host fails this test rather than reporting only the outer regex.
+      const diagnostic = JSON.stringify(deploymentErrorDetails(error), null, 2)
+      assert.match(error.message, /prior profile restored and verified/, diagnostic)
+      assert.equal(error.code, 'PKW_DEPLOYMENT_ROLLED_BACK', diagnostic)
+      assert.deepEqual(error.recovery, { phase: 'complete', profileRestored: true, serviceRestarted: true, verified: true }, diagnostic)
+      assert.equal(error.cause.message, 'simulated interrupted install')
+      return true
+    })
     assert.deepEqual(calls, ['/hooks/stop', 'pnpm', '/hooks/stop', '/hooks/start'])
     assert.equal(await readFile(join(profile, 'package.json'), 'utf8'), '{"version":"old"}')
     assert.equal(await readFile(join(profile, 'node_modules/original'), 'utf8'), 'original bytes')
@@ -110,4 +119,82 @@ test('post-restart probe checks the page AND successful business RPC, not just H
     assert.equal((await verifyHttp(url, 1, '0.1.1-test')).servingVersion, '0.1.1-test')
     assert.deepEqual(rpcRequest, { method: 'summary', args: {} })
   } finally { await new Promise(resolve => server.close(resolve)) }
+})
+
+for (const failedPhase of ['stop', 'restore', 'start', 'verify']) {
+  test(`rollback ${failedPhase} failure is distinct from a verified recovery`, async () => {
+    const dir = await temporary()
+    const profile = join(dir, 'profile')
+    const backup = join(dir, 'backup')
+    await mkdir(join(profile, 'node_modules'), { recursive: true })
+    await writeFile(join(profile, 'package.json'), '{"version":"old"}')
+    const installError = new Error('interrupted install')
+    const recoveryError = new Error('recovery failed', { cause: new Error('underlying verification evidence') })
+    let stops = 0
+    let verifyCalls = 0
+    const execute = async command => {
+      if (command === '/hooks/stop' && ++stops === 2) {
+        if (failedPhase === 'stop') throw recoveryError
+        if (failedPhase === 'restore') {
+          await rm(join(profile, 'node_modules'), { recursive: true })
+          await rm(join(profile, 'package.json'))
+          await rm(profile, { recursive: true })
+          await writeFile(profile, 'not a directory') // make a real restore IO failure
+        }
+      }
+      if (command === 'pnpm') {
+        await writeFile(join(profile, 'package.json'), '{"version":"partial"}')
+        throw installError
+      }
+      if (command === '/hooks/start' && failedPhase === 'start') throw recoveryError
+    }
+    const verify = async () => { verifyCalls++; throw recoveryError }
+    await assert.rejects(activate({ profile, backup, artifacts: [{ name: '@deepseek-ai/dsh-pkw-web', version: '0.1.1' }], registry: 'http://localhost:4873', stop: '/hooks/stop', start: '/hooks/start', url: 'http://127.0.0.1', beforeHost: {} }, execute, verify), error => {
+      assert.ok(error instanceof AggregateError)
+      assert.equal(error.errors[0], installError)
+      assert.equal(error.code, 'PKW_ROLLBACK_FAILED')
+      assert.equal(error.recovery.phase, failedPhase)
+      assert.equal(error.recovery.verified, false)
+      assert.equal(error.recovery.profileRestored, ['start', 'verify'].includes(failedPhase))
+      assert.equal(error.recovery.serviceRestarted, failedPhase === 'verify')
+      assert.doesNotMatch(error.message, /prior profile restored and verified/)
+      const details = deploymentErrorDetails(error)
+      assert.equal(details.errors[0].message, installError.message)
+      assert.equal(details.recovery.phase, failedPhase)
+      if (failedPhase !== 'restore') assert.equal(details.errors[1].cause.message, 'underlying verification evidence')
+      return true
+    })
+    assert.equal(verifyCalls, failedPhase === 'verify' ? 1 : 0)
+    if (['start', 'verify'].includes(failedPhase)) assert.equal(await readFile(join(profile, 'package.json'), 'utf8'), '{"version":"old"}')
+  })
+}
+
+test('rollback probe reports 401 without treating restored files as service verification', async () => {
+  const dir = await temporary()
+  const profile = join(dir, 'profile')
+  await mkdir(profile)
+  await writeFile(join(profile, 'package.json'), '{"version":"old"}')
+  const server = createServer((req, res) => { res.writeHead(401); res.end('login required') })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  try {
+    const execute = async command => { if (command === 'pnpm') throw new Error('install failed') }
+    // Same strict production HTTP contract, one attempt so this negative test
+    // exercises the failure without spending fourteen seconds in retry delays.
+    const verify = url => verifyHttp(url, 1)
+    await assert.rejects(activate({ profile, backup: join(dir, 'backup'), artifacts: [{ name: '@deepseek-ai/dsh-pkw-web', version: '0.1.1' }], registry: 'http://localhost:4873', stop: '/stop', start: '/start', url: `http://127.0.0.1:${server.address().port}`, beforeHost: {} }, execute, verify), error => {
+      const details = deploymentErrorDetails(error)
+      assert.deepEqual(details.recovery, { phase: 'verify', profileRestored: true, serviceRestarted: true, verified: false })
+      assert.equal(details.errors[1].cause.message, '/pkw returned HTTP 401')
+      return true
+    })
+  } finally { await new Promise(resolve => server.close(resolve)) }
+})
+
+test('error receipts bound recursive causes and redact common credential forms', () => {
+  const secret = new Error('https://name:private@localhost/path?token=secret Bearer private Basic private password="secret value" api_key=secret')
+  const error = new AggregateError([secret], 'outer')
+  error.cause = error
+  const serialized = JSON.stringify(deploymentErrorDetails(error))
+  assert.doesNotMatch(serialized, /private|secret value|=secret/)
+  assert.match(serialized, /TruncatedError/)
 })

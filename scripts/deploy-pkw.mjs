@@ -1,7 +1,7 @@
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
-import { activate, checkUiReview, exists, hostFingerprint, jsonFile, run, stagePackages, validateHook, validateRegistry, validateVersion, verifyHttp } from './deployment.mjs'
+import { activate, checkUiReview, deploymentErrorDetails, exists, hostFingerprint, jsonFile, run, stagePackages, validateHook, validateRegistry, validateVersion, verifyHttp } from './deployment.mjs'
 
 const { values } = parseArgs({ options: {
   profile: { type: 'string' }, version: { type: 'string' }, url: { type: 'string' },
@@ -56,7 +56,8 @@ try {
       console.log(`Deployment verified. Receipt: ${join(releaseRoot, 'receipt.json')}`)
     } catch (error) {
       receipt.status = 'failed'
-      receipt.error = error.message
+      receipt.errorDetails = deploymentErrorDetails(error)
+      receipt.error = receipt.errorDetails.message
       await save()
       throw error
     }
