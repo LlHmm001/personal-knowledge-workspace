@@ -1525,16 +1525,20 @@ export class WeKnoraSyncService extends Service {
     }
 
     // Durable replacement marker BEFORE switching, so a crash here resumes.
-    await this.reqMappings().put(key, {
+    const replacement: MappingRecord = {
       ...mapping,
       replacementKnowledgeId: uploaded.id,
       replacementFingerprint: fingerprint,
       replacementState: 'parsing',
       updatedAt: this.now(),
-    })
-    await this.recordIntent(intent, { ...intent, state: S_RUNNING, replacementKnowledgeId: uploaded.id })
+    }
+    await this.reqMappings().put(key, replacement)
+    const replacementIntent: IntentRecord = { ...intent, state: S_RUNNING, replacementKnowledgeId: uploaded.id }
+    await this.recordIntent(intent, replacementIntent)
 
-    const switched = await this.finishReplacement(key, mapping, uploaded.id, fingerprint, fileHash, intent)
+    // Every follow-up write must retain the durable B marker. Passing the old A
+    // snapshot here would erase it as soon as the first parse poll is pending.
+    const switched = await this.finishReplacement(key, replacement, uploaded.id, fingerprint, fileHash, replacementIntent)
     return switched
   }
 
@@ -1542,11 +1546,15 @@ export class WeKnoraSyncService extends Service {
     const repId = mapping.replacementKnowledgeId!
     const intentId = this.reqDirty().get(key)?.pendingOperationId
     const intent = intentId === undefined ? undefined : this.reqIntents().get(intentId)
-    return this.finishReplacement(key, mapping, repId, fingerprint, fileHash, intent)
+    // Canonical bytes may already be C while the durable replacement is still
+    // B. A parse result for B can acknowledge only B, never the latest bytes.
+    const replacementFingerprint = mapping.replacementFingerprint ?? intent?.remoteFingerprint
+    if (replacementFingerprint === undefined) throw new Error('replacement fingerprint missing; cannot acknowledge remote content')
+    return this.finishReplacement(key, mapping, repId, replacementFingerprint, replacementFingerprint === fingerprint ? fileHash : undefined, intent)
   }
 
   /** Poll replacement B parse status; switch active mapping only on `completed`. */
-  private async finishReplacement(key: string, mapping: MappingRecord, replacementId: string, fingerprint: string, fileHash: string, intent?: IntentRecord): Promise<string | undefined> {
+  private async finishReplacement(key: string, mapping: MappingRecord, replacementId: string, fingerprint: string, fileHash: string | undefined, intent?: IntentRecord): Promise<string | undefined> {
     let knowledge
     try {
       knowledge = await this.ctx.pkwWeKnora.getKnowledge(replacementId)
@@ -1563,7 +1571,7 @@ export class WeKnoraSyncService extends Service {
         ...mapping,
         knowledgeId: replacementId,
         remoteFingerprint: fingerprint,
-        remoteFileHash: fileHash,
+        remoteFileHash: knowledge.file_hash ?? fileHash,
         replacementKnowledgeId: undefined,
         replacementFingerprint: undefined,
         replacementState: 'completed',
@@ -1581,7 +1589,7 @@ export class WeKnoraSyncService extends Service {
       // B failed: keep A active.
       await this.reqMappings().put(key, { ...mapping, replacementState: status, updatedAt: this.now() })
       if (intent !== undefined) await this.recordIntent(intent, { state: S_PERMANENT, errorCategory: 'permanent', errorCertainty: 'known', lastError: `parse ${status}` })
-      await this.clearDirty(key)
+      await this.settleDirty(key, ENTITY_ATTACHMENT, mapping.entityId, fingerprint)
       return undefined
     }
     // pending / processing / finalizing → keep polling (worker re-arms via dirty).

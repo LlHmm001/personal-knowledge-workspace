@@ -45,7 +45,7 @@ function md5Hex(b: Uint8Array): string {
 // ── stateful fake WeKnora ─────────────────────────────────────────────────────
 
 interface ManualRec { id: string; title: string; content: string; parseStatus: string }
-interface FileRec { id: string; title: string; filename: string; fileHash: string; parseStatus: string; content: Buffer; summary?: string; summaryStatus?: string }
+interface FileRec { id: string; title: string; filename: string; fileHash: string; parseStatus: string; content: Buffer; summary?: string; summaryStatus?: string; omitFileHash?: boolean }
 
 interface FakeWeKnora {
   baseUrl: string
@@ -241,7 +241,7 @@ function startFakeServer(): Promise<FakeWeKnora> {
         const m = fake.manuals.get(get[1]!)
         if (m !== undefined) { send(200, { data: { id: m.id, title: m.title, parse_status: m.parseStatus, channel: 'pkw' } }); return }
         const f = fake.files.get(get[1]!)
-        if (f !== undefined) { send(200, { data: { id: f.id, title: f.title, file_name: f.filename, file_hash: f.fileHash, parse_status: f.parseStatus, description: f.summary, summary_status: f.summaryStatus } }); return }
+        if (f !== undefined) { send(200, { data: { id: f.id, title: f.title, file_name: f.filename, file_hash: f.omitFileHash ? undefined : f.fileHash, parse_status: f.parseStatus, description: f.summary, summary_status: f.summaryStatus } }); return }
         res.writeHead(404); res.end('{}'); return
       }
 
@@ -1265,6 +1265,94 @@ describe('attachment restore + replacement crash recovery', () => {
       expect(sync.getAttachmentMapping(rec.id)?.knowledgeId).toBe(bId)
     }, { timeout: 15000 })
     expect(sync.getAttachmentMapping(rec.id)!.supersededKnowledgeIds).toContain(oldId)
+  })
+
+  it('retains replacement B after a complete pending pass and service restart without re-uploading', async () => {
+    const { ctx, workspaceId, attachments, sync, syncFork, fake, dir, adapter } = await boot({ manualWorker: true })
+    const rec = await attachments.importFile({ content: Buffer.from('durable A'), filename: 'durable.txt', mimeType: 'text/plain' })
+    const oldId = await sync.syncAttachment(rec.id)
+    const upload = vi.spyOn(adapter, 'uploadFile') // observe real HTTP, including duplicate requests
+    const bytes = Buffer.from('durable B')
+    const fs = await import('node:fs/promises')
+    await fs.writeFile(join(dir, 'attachments', String(rec.id), rec.filename), bytes)
+    const reconciled = await attachments.reconcile()
+    expect(reconciled.decisions).toHaveLength(1)
+    expect(attachments.get(rec.id)?.sha256).toBe(sha256Hex('durable B'))
+
+    // Await the whole pass, including the first GET reporting B=pending. A
+    // transient marker between upload and GET is not durable recovery evidence.
+    await sync.drain()
+    const b = [...fake.files.values()].find(file => file.fileHash === md5Hex(bytes))!
+    expect(b).toBeDefined()
+    const pending = sync.getAttachmentMapping(rec.id)!
+    expect(pending).toMatchObject({ knowledgeId: oldId, replacementKnowledgeId: b.id, replacementFingerprint: sha256Hex('durable B'), replacementState: 'parsing' })
+    const replacement = sync.listIntents().filter(intent => intent.entityId === rec.id && intent.operationKind === 'replacement')
+    expect(replacement).toHaveLength(1)
+    expect(replacement[0]).toMatchObject({ state: 'running', replacementKnowledgeId: b.id })
+
+    await sync.drain()
+    expect(sync.getAttachmentMapping(rec.id)?.replacementKnowledgeId).toBe(b.id)
+    expect(upload).toHaveBeenCalledTimes(1)
+    expect(sync.listIntents().filter(intent => intent.entityId === rec.id && intent.operationKind === 'replacement')).toHaveLength(1)
+
+    // Reopen the actual service/domain against the same SQLite state. No event,
+    // reconcile, mock outcome, or additional upload may be needed to resume B.
+    await syncFork.dispose()
+    await ctx.plugin(WeKnoraSyncService, { kbId: 'kb-1', workspaceId, pollMs: 25, retryBaseMs: 5, retryMaxMs: 10, recoveryGraceAttempts: 2 })
+    const restarted = ctx.pkwWeKnoraSync
+    await restarted.drain()
+    expect(restarted.getAttachmentMapping(rec.id)).toMatchObject({ knowledgeId: oldId, replacementKnowledgeId: b.id })
+    expect(upload).toHaveBeenCalledTimes(1)
+
+    b.parseStatus = 'completed'
+    await restarted.drain()
+    expect(restarted.getAttachmentMapping(rec.id)).toMatchObject({ knowledgeId: b.id, remoteFingerprint: sha256Hex('durable B'), replacementState: 'completed', supersededKnowledgeIds: [oldId] })
+    expect(restarted.getAttachmentMapping(rec.id)?.replacementKnowledgeId).toBeUndefined()
+    expect(restarted.listIntents().filter(intent => intent.entityId === rec.id && intent.operationKind === 'replacement')).toEqual([expect.objectContaining({ operationId: replacement[0]!.operationId, state: 'completed', knowledgeId: b.id })])
+    expect(restarted.listDirty().find(record => record.entityId === rec.id)?.dirty).toBe(false)
+    expect(upload).toHaveBeenCalledTimes(1)
+    expect(fake.files.size).toBe(2)
+    expect(fake.files.has(oldId)).toBe(true)
+  })
+
+  it.each([['completed', true], ['completed', false], ['failed', true], ['cancelled', true]] as const)('does not acknowledge newer local C when B finishes with %s and remote hash present=%s', async (status, hasRemoteHash) => {
+    const { attachments, sync, fake, dir, adapter } = await boot({ manualWorker: true })
+    const rec = await attachments.importFile({ content: Buffer.from('A'), filename: 'changed-again.txt', mimeType: 'text/plain' })
+    const oldId = await sync.syncAttachment(rec.id)
+    const upload = vi.spyOn(adapter, 'uploadFile')
+    const fs = await import('node:fs/promises')
+    const path = join(dir, 'attachments', String(rec.id), rec.filename)
+    await fs.writeFile(path, Buffer.from('B'))
+    await attachments.reconcile()
+    await sync.drain()
+    const b = [...fake.files.values()].find(file => file.fileHash === md5Hex(Buffer.from('B')))!
+    expect(sync.getAttachmentMapping(rec.id)?.replacementKnowledgeId).toBe(b.id)
+
+    // B is still processing when the local canonical bytes become C. Finishing
+    // B must publish B's identity/fingerprint, leaving C queued for a later pass.
+    await fs.writeFile(path, Buffer.from('C'))
+    await attachments.reconcile()
+    b.parseStatus = status
+    b.omitFileHash = !hasRemoteHash
+    await sync.drain()
+    const activeId = status === 'completed' ? b.id : oldId
+    const activeContent = status === 'completed' ? 'B' : 'A'
+    expect(sync.getAttachmentMapping(rec.id)).toMatchObject({ knowledgeId: activeId, remoteFingerprint: sha256Hex(activeContent) })
+    // An absent remote B hash must stay absent; C's local MD5 is not evidence
+    // about the bytes stored remotely. The failed path still retains A's hash.
+    expect(sync.getAttachmentMapping(rec.id)?.remoteFileHash).toBe(status === 'completed' && !hasRemoteHash ? undefined : md5Hex(Buffer.from(activeContent)))
+    expect(sync.listDirty().find(record => record.entityId === rec.id)?.dirty).toBe(true)
+    expect(upload).toHaveBeenCalledTimes(1)
+
+    await sync.drain()
+    const c = [...fake.files.values()].find(file => file.fileHash === md5Hex(Buffer.from('C')))!
+    expect(sync.getAttachmentMapping(rec.id)).toMatchObject({ knowledgeId: activeId, replacementKnowledgeId: c.id, replacementFingerprint: sha256Hex('C') })
+    c.parseStatus = 'completed'
+    await sync.drain()
+    expect(sync.getAttachmentMapping(rec.id)).toMatchObject({ knowledgeId: c.id, remoteFingerprint: sha256Hex('C'), supersededKnowledgeIds: status === 'completed' ? [oldId, b.id] : [oldId] })
+    expect(sync.listDirty().find(record => record.entityId === rec.id)?.dirty).toBe(false)
+    expect(upload).toHaveBeenCalledTimes(2)
+    expect(fake.files.size).toBe(3)
   })
 })
 
