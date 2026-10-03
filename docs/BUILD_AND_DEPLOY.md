@@ -49,11 +49,19 @@ loopback registry, installs an isolated profile, and verifies:
 
 - package contents exclude sources, tests, node_modules and npmrc;
 - all internal dependency versions resolve through the registry;
+- the installed PKW base YAML composes with the actual Harness base/Web bundle
+  YAML through Harness's own parser and include algorithm, without warnings or
+  duplicate IDs; shared host services remain unique, DSH/workspace keep JSON,
+  and exactly five PKW domains route to the unchanged SQLite path;
 - installed artifacts match the built files; plain Node imports all ten entries;
 - installed type declarations work for a TypeScript consumer;
 - Vditor/Lute loads its installed asset and renders Markdown;
 - installed PKW handlers serve `/pkw` and summary RPC, and create/read canonical
   notes with WeKnora unavailable, using real Cordis, SQLite and filesystem seams.
+
+The bundle check reads the installed artifact, rejects a PKW source symlink,
+and does not activate plugins, evaluate `!!js`, or read user profile/home
+overlays. It therefore does not certify a target server's custom composition.
 
 This is a local installation/integration check. Its HTTP route host is a test
 adapter, not the production DSH process or browser acceptance.

@@ -1,0 +1,105 @@
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { mkdtempSync, writeFileSync, readFileSync, statSync, existsSync, rmSync, chmodSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { recoveryManifest, recoveryOverrides, verifyRecovery, jsonStorageConfig, restoreConfigSnapshots, parseServiceEnvironment, recoveryEnvironment } from '../recover-dsh-without-pkw.mjs'
+
+const host = () => [
+  { id: 'storage', name: '@deepseek-ai/dsh-storage' },
+  { id: 'storage-json', name: '@deepseek-ai/dsh-storage-json', config: { root: { __jsExpr: "dshHomePath('storages')" } } },
+  { id: 'storage-domain', name: '@deepseek-ai/dsh-storage-domain', config: { backend: 'json' } },
+  { id: 'workspace', name: '@deepseek-ai/dsh-workspace' },
+  { id: 'memory-projects', name: '@dsh-memory/memory-projects', config: { keep: 'original' } },
+]
+
+test('recovery detaches only PKW bundles and keeps installed packages and other configuration', () => {
+  const manifest = { name: 'server-web', dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', '@deepseek-ai/dsh-extension-pkw', 'dsh-graphstudio', '@deepseek-ai/dsh-pkw-base'], patchReload: 'live' } }, dependencies: { '@deepseek-ai/dsh-pkw-base': '0.1.1-pkw.1', 'private-customization': 'keep' }, privateSettings: { sentinel: 'preserve' } }
+  const before = structuredClone(manifest)
+  const result = recoveryManifest(manifest)
+  assert.deepEqual(result.dsh.profile.bundles, ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', 'dsh-graphstudio'])
+  assert.deepEqual(manifest, before)
+  result.dsh.profile.bundles = before.dsh.profile.bundles
+  assert.deepEqual(result, before)
+  assert.throws(() => recoveryManifest({ dsh: { profile: { bundles: ['@deepseek-ai/dsh-base'] } } }), /not in this profile/)
+})
+
+test('recovery pauses remaining PKW services and their known adapter without evaluating expressions', () => {
+  const rows = [...host(), { id: 'pkw-notes', name: '@deepseek-ai/dsh-pkw-notes' }, { id: 'pkw-ui', name: '@deepseek-ai/dsh-extension-pkw' }, { id: 'storage-sqlite', name: '@deepseek-ai/dsh-storage-sqlite', config: { path: { __jsExpr: "dshHomePath('pkw', 'pkw.sqlite')" } } }]
+  const before = structuredClone(rows)
+  const patches = recoveryOverrides(rows)
+  assert.deepEqual(patches.map(row => row.id), ['pkw-notes', 'pkw-ui', 'storage-sqlite'])
+  assert.deepEqual(rows, before)
+  const effective = rows.map(row => ({ ...row, ...patches.find(patch => patch.id === row.id) }))
+  assert.equal(verifyRecovery(effective).pkwPaused, true)
+  assert.deepEqual(effective.filter(row => row.id === 'memory-projects'), before.filter(row => row.id === 'memory-projects'))
+})
+
+test('recovery rejects disabled duplicates and a later patch that reactivates PKW', () => {
+  assert.throws(() => verifyRecovery([...host(), { id: 'storage', name: '@deepseek-ai/dsh-storage', disabled: true }]), /Duplicate loader/)
+  assert.throws(() => verifyRecovery([...host(), { id: 'renamed-storage', name: '@deepseek-ai/dsh-storage' }]), /unique and enabled/)
+  assert.throws(() => verifyRecovery([...host(), { id: 'pkw-notes', name: '@deepseek-ai/dsh-pkw-notes' }]), /still enabled/)
+})
+
+test('recovery never changes a non-PKW storage route or guesses another SQLite database', () => {
+  for (const domain of [{ backend: 'sqlite' }, { backend: 'json', routes: { workspace: 'sqlite' } }, { backend: 'json', routes: { session_projcache: 'sqlite' } }]) {
+    const rows = host().map(row => row.id === 'storage-domain' ? { ...row, config: domain } : row)
+    assert.throws(() => recoveryOverrides(rows), /manual verification/)
+  }
+  assert.throws(() => recoveryOverrides([...host(), { id: 'storage-sqlite', name: '@deepseek-ai/dsh-storage-sqlite', config: { path: '/root/another-database.sqlite' } }]), /Unrecognized SQLite/)
+})
+
+test('recovery checks nested group IDs and preserves original host services', () => {
+  const rows = [...host(), { id: 'custom-group', name: 'cordis:group', group: true, config: [{ id: 'pkw-helper', name: '/root/custom-pkw.mjs', disabled: true }] }]
+  assert.equal(verifyRecovery(rows).hostWorkspacePreserved, true)
+  rows.at(-1).config.push({ id: 'pkw-helper', name: '/root/second.mjs', disabled: true })
+  assert.throws(() => verifyRecovery(rows), /Duplicate loader/)
+  assert.throws(() => verifyRecovery(host().map(row => row.id === 'workspace' ? { ...row, disabled: true } : row)), /must remain unique/)
+})
+
+test('recovery rejects a missing or disabled JSON adapter and any change to its original root', () => {
+  const original = jsonStorageConfig([...host(), { id: 'storage', name: '@deepseek-ai/dsh-storage' }])
+  assert.equal(verifyRecovery(host(), original).originalJsonConfigPreserved, true)
+  assert.throws(() => verifyRecovery(host().filter(row => row.id !== 'storage-json')), /unique and enabled/)
+  assert.throws(() => verifyRecovery(host().map(row => row.id === 'storage-json' ? { ...row, disabled: true } : row)), /unique and enabled/)
+  assert.throws(() => verifyRecovery(host().map(row => row.id === 'storage-json' ? { ...row, config: { root: '/root/new-empty-storages' } } : row), original), /configuration changed/)
+  assert.throws(() => jsonStorageConfig(host().map(row => row.id === 'storage-json' ? { ...row, config: { root: { __jsExpr: 'process.env.OTHER_HOME' } } } : row)), /manual verification/)
+})
+
+test('failure rollback restores generated config bytes and modes, including before-dump side effects', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'pkw-config-rollback-'))
+  try {
+    const generated = join(directory, 'cordis.yml'), addedPatch = join(directory, 'cordis.patch.yml')
+    writeFileSync(generated, '# original generated file\n[]\n', { mode: 0o640 })
+    const snapshot = { path: generated, bytes: readFileSync(generated), stat: statSync(generated) }
+    writeFileSync(generated, '[]\n')
+    chmodSync(generated, 0o600)
+    writeFileSync(addedPatch, '- id: paused\n')
+    const result = restoreConfigSnapshots([snapshot, { path: addedPatch, bytes: undefined }])
+    assert.equal(result.configsRestored, true)
+    assert.deepEqual(readFileSync(generated), snapshot.bytes)
+    assert.equal(statSync(generated).mode & 0o777, 0o640)
+    assert.equal(existsSync(addedPatch), false)
+    const partial = restoreConfigSnapshots([{ path: join(directory, 'absent', 'package.json'), bytes: Buffer.from('{}\n') }, snapshot])
+    assert.equal(partial.configsRestored, false)
+    assert.equal(partial.failedPaths.length, 1)
+    assert.deepEqual(readFileSync(generated), snapshot.bytes)
+  } finally { rmSync(directory, { recursive: true, force: true }) }
+})
+
+test('recovery uses verified service environment rather than the interactive shell', () => {
+  const properties = { User: 'root', WorkingDirectory: '/opt/deepseek-harness', DynamicUser: 'no' }
+  const environment = recoveryEnvironment('LANG=C.UTF-8\nDSH_HOME=/root/.dsh', '"PLAIN_SETTING=a b" HOME=/root', properties)
+  assert.equal(environment.PLAIN_SETTING, 'a b')
+  assert.equal(environment.LANG, 'C.UTF-8')
+  assert.equal(environment.DSH_HOME, '/root/.dsh')
+  for (const change of [{ User: 'someone' }, { WorkingDirectory: '/another' }, { EnvironmentFiles: '/root/private-env' }, { PassEnvironment: 'DSH_HOME' }, { DynamicUser: 'yes' }, { RootDirectory: '/other-root' }]) {
+    assert.throws(() => recoveryEnvironment('', '', { ...properties, ...change }), /manual verification/)
+  }
+  for (const text of ['HOME=/another', 'DSH_HOME=/other', 'PWD=/somewhere', 'NODE_OPTIONS=--require=other', 'LD_PRELOAD=/other.so']) {
+    assert.throws(() => recoveryEnvironment(text, '', properties), /manual verification/)
+  }
+  assert.deepEqual(parseServiceEnvironment('A="two words" B=literal$(no-execution)'), { A: 'two words', B: 'literal$(no-execution)' })
+  assert.throws(() => parseServiceEnvironment('PRIVATE_VALUE="unterminated'), error => !error.message.includes('PRIVATE_VALUE') && /manual verification/.test(error.message))
+  assert.throws(() => parseServiceEnvironment('PRIVATE_VALUE=escaped\\value'), error => !error.message.includes('PRIVATE_VALUE') && /manual verification/.test(error.message))
+})

@@ -59,7 +59,7 @@ try {
   // Model the host's existing installation, without modifying that checkout.
   // PKW itself MUST come from the tarballs above, never a source symlink.
   const peers = new Set((await packageList()).flatMap(p => Object.keys(p.manifest.peerDependencies ?? {})))
-  for (const name of ['@deepseek-ai/dsh-storage', '@deepseek-ai/dsh-storage-sqlite', '@deepseek-ai/dsh-fs-local']) peers.add(name)
+  for (const name of ['@deepseek-ai/dsh-storage', '@deepseek-ai/dsh-storage-sqlite', '@deepseek-ai/dsh-fs-local', '@deepseek-ai/dsh-app-boot', '@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app']) peers.add(name)
   const roots = [join(harness, 'vendor')]
   for (const entry of await readdir(join(harness, 'packages'), { withFileTypes: true })) {
     if (entry.isDirectory()) roots.push(join(harness, 'packages', entry.name))
@@ -78,6 +78,9 @@ try {
     }
   }
   assert.deepEqual([...peers], [], 'Harness checkout is missing declared peers')
+  // Check the YAML shipped in the installed base tarball against the actual
+  // host bundle layers before any manual-context HTTP smoke can hide conflicts.
+  await run(process.execPath, [join(repoRoot, 'scripts/check-packed-host-composition.mjs'), '--profile', profile], profile)
   const inventory = await inspectProfile(profile, harness)
   assert.equal(inventory.pkw.length, 10)
   assert.ok(inventory.pkw.every(pkg => pkg.version === '0.1.1-pack-check'))
@@ -88,7 +91,7 @@ try {
   await runCollaborationSmoke({ profile })
   await writeFile(join(profile, 'consumer.ts'), `import { NoteId, quadrantOf } from '@deepseek-ai/dsh-pkw-domain'\nconst id: string = NoteId('note_example')\nconst q: number = quadrantOf({ important: true, urgent: false })\n// @ts-expect-error branded id is not a number\nconst invalid: number = NoteId('note_example')\nvoid [id, q, invalid]\n`)
   await run(process.execPath, [join(repoRoot, 'node_modules/typescript/bin/tsc'), '--noEmit', '--strict', '--skipLibCheck', '--module', 'NodeNext', '--target', 'es2024', 'consumer.ts'], profile)
-  console.log('PASS: all 10 tarballs installed without PKW sources; plain Node imports, Vditor renderer, artifact hashes, and consumer types verified')
+  console.log('PASS: all 10 tarballs installed without PKW sources; real host bundle composition, plain Node imports, Vditor renderer, artifact hashes, and consumer types verified')
   if (values['collaboration-preview']) await runCollaborationSmoke({ profile, preview: true })
   if (values.preview) {
     await runWebSmoke({ profile, version: '0.1.1-pack-check', preview: true })
