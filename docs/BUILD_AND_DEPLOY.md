@@ -143,7 +143,9 @@ plus recovery `phase`, `profileRestored`, `serviceRestarted` and `verified`.
 success by matching a different error string. Inspect the nested causes first.
 
 `activate(options, execute, verify)` also supports a reviewed environment-specific
-verifier. It is used for both activation and rollback and must validate actual
+verifier. Existing adapters may instead pass `options.verify`; conflicting or
+non-function verifiers are rejected before service changes. It is used for both
+activation and rollback and must validate actual
 business behavior (and the requested version on activation); never pass a no-op.
 The CLI continues to use the strict default probe. An authenticated collaboration
 gateway needs its own authenticated, space-scoped acceptance; do not remove its

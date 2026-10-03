@@ -4,7 +4,7 @@ import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, test } from 'node:test'
-import { activate, checkUiReview, deploymentErrorDetails, restoreProfile, snapshotProfile, validateRegistry, validateVersion, verifyHttp } from '../deployment.mjs'
+import { activate, checkUiReview, deploymentErrorDetails, hostFingerprint, packageList, restoreProfile, snapshotProfile, validateRegistry, validateVersion, verifyHttp } from '../deployment.mjs'
 import { harnessConfig } from '../harness-config.mjs'
 
 const dirs = []
@@ -197,4 +197,74 @@ test('error receipts bound recursive causes and redact common credential forms',
   const serialized = JSON.stringify(deploymentErrorDetails(error))
   assert.doesNotMatch(serialized, /private|secret value|=secret/)
   assert.match(serialized, /TruncatedError/)
+})
+
+test('existing options.verify is used for rollback instead of the default HTTP probe', async () => {
+  const dir = await temporary()
+  const profile = join(dir, 'profile')
+  await mkdir(profile)
+  await writeFile(join(profile, 'package.json'), '{"version":"old"}')
+  const calls = []
+  const verify = async (...args) => {
+    calls.push(args)
+    assert.equal(await readFile(join(profile, 'package.json'), 'utf8'), '{"version":"old"}')
+    throw new Error('authenticated rollback probe rejected')
+  }
+  const execute = async command => { if (command === 'pnpm') throw new Error('install failed') }
+  await assert.rejects(activate({ profile, backup: join(dir, 'backup'), artifacts: [], registry: 'http://localhost:4873', stop: '/stop', start: '/start', url: 'custom-probe-only', beforeHost: {}, verify }, execute), error => {
+    assert.equal(error.code, 'PKW_ROLLBACK_FAILED')
+    assert.equal(error.recovery.verified, false)
+    assert.equal(error.errors[1].message, 'authenticated rollback probe rejected')
+    assert.doesNotMatch(error.message, /prior profile restored and verified/)
+    return true
+  })
+  assert.deepEqual(calls, [['custom-probe-only']])
+})
+
+test('conflicting or invalid verifiers fail before any stop/install operation', async () => {
+  const execute = async () => assert.fail('must validate before service or profile changes')
+  const first = async () => {}
+  const second = async () => {}
+  await assert.rejects(activate({ verify: first }, execute, second), /Conflicting deployment verifiers/)
+  for (const invalid of [null, false, 'verify']) {
+    await assert.rejects(activate({ verify: invalid }, execute), /verifier must be a function/)
+    await assert.rejects(activate({}, execute, invalid), /verifier must be a function/)
+  }
+})
+
+test('options.verify receives the candidate version and also verifies the restored installation', async () => {
+  const dir = await temporary()
+  const profile = join(dir, 'profile')
+  const peers = new Set((await packageList()).flatMap(p => Object.keys(p.manifest.peerDependencies ?? {})))
+  for (const name of peers) {
+    const path = join(profile, 'node_modules', name)
+    await mkdir(path, { recursive: true })
+    await writeFile(join(path, 'package.json'), JSON.stringify({ name, main: 'index.cjs' }))
+    await writeFile(join(path, 'index.cjs'), 'module.exports = {}')
+  }
+  await writeFile(join(profile, 'package.json'), '{"version":"old"}')
+  const beforeHost = await hostFingerprint(profile)
+  const candidateError = new Error('candidate business probe rejected')
+  const calls = []
+  const verify = async (...args) => {
+    calls.push(args)
+    if (calls.length === 1) {
+      assert.equal(await readFile(join(profile, 'package.json'), 'utf8'), '{"version":"candidate"}')
+      throw candidateError
+    }
+    assert.equal(await readFile(join(profile, 'package.json'), 'utf8'), '{"version":"old"}')
+    return { verified: true }
+  }
+  // This is the activation orchestration contract; package/import checks are
+  // separately exercised by verify:packed, not simulated as production proof.
+  const execute = async command => {
+    if (command === 'pnpm') await writeFile(join(profile, 'package.json'), '{"version":"candidate"}')
+  }
+  await assert.rejects(activate({ profile, backup: join(dir, 'backup'), artifacts: [{ name: '@deepseek-ai/dsh-pkw-web', version: '0.1.3-test' }], registry: 'http://localhost:4873', stop: '/stop', start: '/start', url: 'custom-probe-only', beforeHost, verify }, execute), error => {
+    assert.equal(error.code, 'PKW_DEPLOYMENT_ROLLED_BACK')
+    assert.equal(error.cause, candidateError)
+    assert.equal(error.recovery.verified, true)
+    return true
+  })
+  assert.deepEqual(calls, [['custom-probe-only', 15, '0.1.3-test'], ['custom-probe-only']])
 })

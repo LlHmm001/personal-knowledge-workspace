@@ -176,7 +176,11 @@ export function deploymentErrorDetails(error, seen = new Set(), depth = 0) {
  * A custom verifier must enforce the deployment's real page/business contract
  * for BOTH activation and rollback; the default remains the strict HTTP probe.
  */
-export async function activate({ profile, backup, artifacts, registry, stop, start, url, beforeHost }, execute = run, verify = verifyHttp) {
+export async function activate({ profile, backup, artifacts, registry, stop, start, url, beforeHost, verify: configuredVerify }, execute = run, verify = configuredVerify === undefined ? verifyHttp : configuredVerify) {
+  // Existing deployment adapters supply options.verify. Never silently ignore
+  // their authenticated probe or choose between two different verifiers.
+  if (configuredVerify !== undefined && verify !== configuredVerify) throw new TypeError('Conflicting deployment verifiers: use options.verify or the third argument')
+  if (typeof verify !== 'function') throw new TypeError('Deployment verifier must be a function')
   let snapshotted = false
   try {
     await execute(stop, [], profile)

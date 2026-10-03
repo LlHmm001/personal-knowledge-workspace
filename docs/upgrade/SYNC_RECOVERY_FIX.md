@@ -39,13 +39,39 @@ unknown 不算远端同步成功。真实 WeKnora 行为仍需目标环境验收
 输出脱敏底层 cause。新增停止、恢复文件、启动、业务探测失败及真实 HTTP 401
 负面测试；任何一项失败都不能宣称已验证回滚。
 
-`activate(options, execute, verify)` 支持注入验收器，默认仍是严格 verifyHttp。
+`activate(options, execute, verify)` 支持注入验收器，也兼容服务器 `options.verify`
+写法；两种入口冲突或值不是函数时在停服前拒绝。默认仍是严格 verifyHttp。
 自定义验收器必须覆盖激活和回滚；协作入口必须用真实鉴权和空间业务检查，
 不得以空函数代替，或为了通过单 profile 探测而关闭鉴权。
 
 服务器先在隔离源码跑完整门禁。若 B 仍失败，提供测试生成的脱敏诊断和服务器
 `deployment.mjs`、对应测试相对 be0a474 的 diff。保留失败证据，不重跑求绿、
 不改预期文本或跳过回滚验证。
+
+2026-10-04 服务器补证：15:16 UTC 的失败原日志被下一轮同名日志覆盖，
+仅保留外层错误；干净及加本地改动的 checkout、80 轮循环及 40 轮负载测试
+均未复现（以上为服务器回报，本机未独立执行）。14.1 秒耗时与 HTTP 重试
+等待吻合，但不能由此确定子错误。B 继续标记“发生过、根因未证实”。
+
+不得在 `catch (rollbackError)` 的消息里加上 `prior profile restored and verified`。
+那会把失败伪装成成功，并让旧测试的正则误通过；使用该改法的长循环不能以
+“零失败”证明恢复正常。保留 AggregateError 的两个子错误，通过本交付的
+`deploymentErrorDetails` 输出，原成功断言保持不变。
+
+每次门禁使用独立日志，成功和失败都保留退出码，首次失败即保全现场。例如：
+
+```sh
+(
+mkdir -p reports
+gate_log=$(mktemp "$PWD/reports/gate-XXXXXX.log")
+gate_exit=0
+pnpm test >"$gate_log" 2>&1 || gate_exit=$?
+printf '%s\n' "$gate_exit" >"$gate_log.exit"
+printf 'gate exit=%s; log=%s\n' "$gate_exit" "$gate_log"
+exit "$gate_exit"
+)
+# 门禁非 0 时停止本次部署，不因后续重跑通过而删除首次失败证据。
+```
 
 ## C、D 与部署顺序
 
@@ -67,7 +93,9 @@ unknown 不算远端同步成功。真实 WeKnora 行为仍需目标环境验收
 
 ## 本机验证与边界
 
-- 534 项业务测试、85 项工具测试通过；5 项真实 WeKnora 测试缺环境跳过。
+- CREATE 修复交付时，534 项业务测试、85 项工具测试通过；5 项真实 WeKnora
+  测试缺环境跳过。本次仅补验收器兼容与交接，完整工具测试增至 88 项且通过；
+  业务源码未再修改，未重复运行业务、构建及安装包检查。
 - 类型检查、10 包 70 输出重复构建、陈旧输出清除通过。
 - 十个 tarball 在无 PKW 源码 profile 安装，导入/声明、HTTP、登录期限、
   过期页、权限隔离及运维恢复检查通过；本轮未重做浏览器手动验收。
