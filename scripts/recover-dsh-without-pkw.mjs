@@ -6,12 +6,15 @@ import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 import { execFileSync } from 'node:child_process'
 import { isDeepStrictEqual } from 'node:util'
+import { createHash } from 'node:crypto'
 
 const bundleNames = new Set(['@deepseek-ai/dsh-pkw-base', '@deepseek-ai/dsh-extension-pkw'])
 const pkwDomains = new Set(['pkw', 'pkw_notes', 'pkw_attachments', 'pkw_tasks', 'pkw_weknora_sync'])
 const sqliteName = '@deepseek-ai/dsh-storage-sqlite'
 const isPkw = row => (typeof row.name === 'string' && (row.name.startsWith('@deepseek-ai/dsh-pkw-') || row.name === '@deepseek-ai/dsh-extension-pkw')) || /^pkw(?:-|$)/.test(row.id ?? '')
 const disabled = row => row.disabled === true
+const confirmedEnvironmentPath = '/LlHmm9527/memory-hub/state/keys/agent-journal.env'
+const injectionKey = name => /^(?:LD_|DYLD_)/.test(name) || ['NODE_OPTIONS', 'NODE_PATH', 'NODE_EXTRA_CA_CERTS'].includes(name)
 
 export function entriesIn(rows) {
   if (!Array.isArray(rows)) throw new Error('Config must be an entry list')
@@ -133,16 +136,91 @@ export function parseServiceEnvironment(text) {
 
 export function recoveryEnvironment(managerText, unitText, properties) {
   if (!['', 'root'].includes(properties.User) || properties.WorkingDirectory !== '/opt/deepseek-harness') throw new Error('Service user or working directory changed; manual verification required')
-  for (const name of ['EnvironmentFiles', 'PassEnvironment', 'UnsetEnvironment', 'PAMName', 'RootDirectory', 'RootImage', 'BindPaths', 'BindReadOnlyPaths', 'TemporaryFileSystem']) {
+  if (properties.Group && properties.Group !== 'root') throw new Error('Service group requires manual verification')
+  confirmedEnvironmentFile(properties.EnvironmentFiles ?? '')
+  for (const name of ['PassEnvironment', 'UnsetEnvironment', 'PAMName', 'RootDirectory', 'RootImage', 'BindPaths', 'BindReadOnlyPaths', 'TemporaryFileSystem']) {
     if (properties[name]) throw new Error(`Service ${name} requires manual verification`)
   }
   if (!['', 'no'].includes(properties.DynamicUser)) throw new Error('Dynamic service user requires manual verification')
   const environment = { ...parseServiceEnvironment(managerText), ...parseServiceEnvironment(unitText) }
+  return validateEffectiveEnvironment(environment)
+}
+
+export function validateEffectiveEnvironment(environment) {
+  if (!environment || typeof environment !== 'object' || Array.isArray(environment) || Object.entries(environment).some(([name, value]) => !/^[A-Za-z_][A-Za-z_0-9]*$/.test(name) || typeof value !== 'string' || value.includes('\0'))) throw new Error('Effective environment format requires manual verification')
   for (const [name, expected] of [['HOME', '/root'], ['DSH_HOME', '/root/.dsh'], ['PWD', '/opt/deepseek-harness']]) {
     if (environment[name] !== undefined && environment[name] !== expected) throw new Error(`Service ${name} requires manual verification`)
   }
-  if (Object.entries(environment).some(([name, value]) => value && (/^LD_/.test(name) || ['NODE_OPTIONS', 'NODE_PATH', 'NODE_EXTRA_CA_CERTS'].includes(name)))) throw new Error('Service runtime injection requires manual verification')
+  if (Object.entries(environment).some(([name, value]) => value && injectionKey(name))) throw new Error('Service runtime injection requires manual verification')
   return { PATH: '/usr/local/bin:/usr/bin:/bin', ...environment, HOME: '/root', DSH_HOME: '/root/.dsh' }
+}
+
+export function confirmedEnvironmentFile(property) {
+  if (!property) return undefined
+  if (property !== confirmedEnvironmentPath + ' (ignore_errors=no)') throw new Error('Service EnvironmentFiles differ from the confirmed mandatory file; manual verification required')
+  return confirmedEnvironmentPath
+}
+
+export function inspectEnvironmentFile(bytes) {
+  // Only validate a narrow syntax subset; systemd itself will interpret the values.
+  // This also prevents invalid assignments (which systemd may journal) and startup
+  // injection from taking effect before the Node collector's first instruction.
+  if (!Buffer.isBuffer(bytes) || bytes.length > 262144) throw new Error('Environment file size requires manual verification')
+  if (bytes.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf]))) throw new Error('Environment file encoding requires manual verification')
+  let content
+  try { content = new TextDecoder('utf-8', { fatal: true }).decode(bytes) }
+  catch { throw new Error('Environment file encoding requires manual verification') }
+  if (content.includes('\0') || content.includes('\uFEFF')) throw new Error('Environment file encoding requires manual verification')
+  const names = []
+  for (const [index, line] of content.split(/\r?\n/).entries()) {
+    if (!line.trim() || /^[ \t]*[#;]/.test(line)) continue
+    const match = /^[ \t]*([A-Za-z_][A-Za-z_0-9]*)[ \t]*=(.*)$/.exec(line)
+    if (!match || /[\\\r\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(line)) throw new Error(`Environment file syntax requires manual verification at line ${index + 1}`)
+    const [, name, raw] = match
+    if (injectionKey(name)) throw new Error(`Environment file runtime injection requires manual verification at line ${index + 1}`)
+    const value = raw.trim()
+    if (value.startsWith('"') || value.startsWith("'")) {
+      if (value.length < 2 || value.at(-1) !== value[0] || value.slice(1, -1).includes(value[0])) throw new Error(`Environment file quotes require manual verification at line ${index + 1}`)
+    } else if (/["']/.test(value)) throw new Error(`Environment file quotes require manual verification at line ${index + 1}`)
+    names.push(name)
+  }
+  return { sha256: createHash('sha256').update(bytes).digest('hex'), variables: names.length }
+}
+
+export function environmentFileIdentity(info) {
+  if (!info.isFile() || info.uid !== 0 || info.mode & 0o022 || info.size > 262144) throw new Error('Environment file ownership or permissions require manual verification')
+  return Object.fromEntries(['dev', 'ino', 'mode', 'uid', 'gid', 'size', 'mtimeMs', 'ctimeMs'].map(name => [name, info[name]]))
+}
+
+export function serializeProbeBaseEnvironment(environment) {
+  const rows = []
+  for (const [name, value] of Object.entries(environment)) {
+    if (typeof value !== 'string' || /[\r\n\0\\]/.test(value) || value.includes('"') && value.includes("'")) throw new Error('Base environment quoting requires manual verification')
+    const quote = value.includes('"') ? "'" : '"'
+    rows.push(`${name}=${quote}${value}${quote}`)
+  }
+  const bytes = Buffer.from(rows.join('\n') + '\n')
+  inspectEnvironmentFile(bytes)
+  return bytes
+}
+
+export function collectEffectiveEnvironment({ baseFile, sourceSnapshot, unitName }, execute = execFileSync) {
+  if (![baseFile, sourceSnapshot].every(path => typeof path === 'string' && path.startsWith('/') && !/[\s%\\]/.test(path)) || !/^pkw-dsh-env-[a-z0-9-]+$/.test(unitName)) throw new Error('Environment probe paths require manual verification')
+  const args = ['--system', '--pipe', '--wait', '--collect', '--quiet', '--service-type=exec', `--unit=${unitName}`, '--description=PKW recovery environment check', '--property=User=root', '--property=Group=root', '--property=WorkingDirectory=/opt/deepseek-harness', '--property=RuntimeMaxSec=20s', '--property=TimeoutStopSec=5s', `--property=EnvironmentFile=${baseFile}`, `--property=EnvironmentFile=${sourceSnapshot}`, '/usr/local/bin/node', '--input-type=module', '-e', 'process.stdout.write(JSON.stringify(process.env))']
+  let raw
+  try {
+    raw = execute('systemd-run', args, { encoding: 'utf8', timeout: 35000, maxBuffer: 524288, stdio: ['ignore', 'pipe', 'pipe'], env: { PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', HOME: '/root' } })
+  } catch {
+    // Never serialize a child-process exception: it may contain secret stdout/stderr.
+    throw new Error('Systemd environment probe failed; no configuration was changed')
+  } finally {
+    // Stop only this tool's own transient probe, including after client timeout.
+    try { execute('systemctl', ['stop', unitName + '.service'], { timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'] }) } catch {}
+  }
+  let environment
+  try { environment = JSON.parse(raw) }
+  catch { throw new Error('Systemd environment probe returned an invalid result') }
+  return validateEffectiveEnvironment(environment)
 }
 
 async function main() {
@@ -155,12 +233,21 @@ async function main() {
   const expected = 'argv[]=/usr/local/bin/node --import tsx/esm /opt/deepseek-harness/apps/cli/src/bin.ts web --host 127.0.0.1 --port 3080 --trusted-host ddmind.duckdns.org ;'
   if (!command.includes(expected)) throw new Error('Service command changed; verify its real profile and overlays first')
   const serviceProperty = name => execFileSync('systemctl', ['show', unit, '-p', name, '--value'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
-  const propertyNames = ['User', 'WorkingDirectory', 'EnvironmentFiles', 'PassEnvironment', 'UnsetEnvironment', 'PAMName', 'RootDirectory', 'RootImage', 'DynamicUser', 'BindPaths', 'BindReadOnlyPaths', 'TemporaryFileSystem']
+  const propertyNames = ['User', 'Group', 'WorkingDirectory', 'EnvironmentFiles', 'PassEnvironment', 'UnsetEnvironment', 'PAMName', 'RootDirectory', 'RootImage', 'DynamicUser', 'BindPaths', 'BindReadOnlyPaths', 'TemporaryFileSystem']
   const properties = Object.fromEntries(propertyNames.map(name => [name, serviceProperty(name)]))
   if (execFileSync('ss', ['-ltnH', 'sport = :3080'], { encoding: 'utf8' }).trim()) throw new Error('Port 3080 is occupied; identify the running writer first')
   const serviceEnvironment = execFileSync('systemctl', ['show', unit, '-p', 'Environment', '--value'], { encoding: 'utf8' })
   const managerEnvironment = execFileSync('systemctl', ['show-environment'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
-  const environment = recoveryEnvironment(managerEnvironment, serviceEnvironment, properties)
+  let environment = recoveryEnvironment(managerEnvironment, serviceEnvironment, properties)
+  const environmentPath = confirmedEnvironmentFile(properties.EnvironmentFiles)
+  let environmentBytes, environmentEvidence, environmentIdentity
+  if (environmentPath) {
+    const info = lstatSync(environmentPath)
+    environmentIdentity = environmentFileIdentity(info)
+    environmentBytes = readFileSync(environmentPath)
+    if (!isDeepStrictEqual(environmentFileIdentity(lstatSync(environmentPath)), environmentIdentity)) throw new Error('Environment file changed while reading')
+    environmentEvidence = { path: environmentPath, ...inspectEnvironmentFile(environmentBytes) }
+  }
   const yaml = createRequire(join(harness, 'vendor/include/package.json'))('js-yaml')
   const expression = new yaml.Type('tag:yaml.org,2002:js', { kind: 'scalar', resolve: value => typeof value === 'string', construct: value => ({ __jsExpr: value }), predicate: value => typeof value?.__jsExpr === 'string', represent: value => value.__jsExpr })
   const schema = yaml.JSON_SCHEMA.extend(expression) // Parse and preserve expressions; never evaluate them.
@@ -188,6 +275,19 @@ async function main() {
   const patches = parsePrivate('profile-patch', () => yaml.load(patchBytes.toString(), { schema })) ?? []
   if (!Array.isArray(patches)) throw new Error('Profile patch must be an array')
   const records = { profile, state, backup, removedBundles: [...bundleNames].filter(name => manifest.dsh.profile.bundles.includes(name)) }
+  const assertOriginalInputs = () => {
+    if (!['inactive', 'failed'].includes(serviceProperty('ActiveState')) || serviceProperty('ExecStart') !== command.trim() || propertyNames.some(name => serviceProperty(name) !== properties[name]) || serviceProperty('Environment') !== serviceEnvironment.trim() || execFileSync('systemctl', ['show-environment'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }) !== managerEnvironment) throw new Error('Service configuration changed during recovery')
+    if (environmentPath && (!isDeepStrictEqual(environmentFileIdentity(lstatSync(environmentPath)), environmentIdentity) || !readFileSync(environmentPath).equals(environmentBytes) || !isDeepStrictEqual(environmentFileIdentity(lstatSync(environmentPath)), environmentIdentity))) throw new Error('Original environment file changed during recovery')
+  }
+  if (environmentPath) {
+    const sourceSnapshot = join(backup, 'agent-journal.env'), baseFile = join(backup, 'probe-base.env')
+    writeFileSync(sourceSnapshot, environmentBytes, { mode: 0o600, flag: 'wx' })
+    writeFileSync(baseFile, serializeProbeBaseEnvironment(environment), { mode: 0o600, flag: 'wx' })
+    environment = collectEffectiveEnvironment({ baseFile, sourceSnapshot, unitName: `pkw-dsh-env-${process.pid}-${Date.now()}` })
+    assertOriginalInputs()
+    records.environmentFile = environmentEvidence
+    records.environmentProbe = 'systemd-fixed-snapshot-verified'
+  }
   // Match CLI startup's environment preflight without calling boot or opening any data store.
   const environmentProbe = `import { loadLayeredEnv } from '@deepseek-ai/dsh-app-boot';
     import { resolveDshHome } from '@deepseek-ai/dsh-home-paths';
@@ -215,12 +315,14 @@ async function main() {
   }
   let changed = false
   try {
+    assertOriginalInputs()
     changed = true // CLI dump may rewrite generated cordis.yml, even when it subsequently fails.
     const originalJsonConfig = jsonStorageConfig(dump('before'))
     atomicWrite(manifestFile, JSON.stringify(nextManifest, null, 2) + '\n', manifestStat)
     const overrides = recoveryOverrides(dump('without-pkw-bundles'))
     if (overrides.length) atomicWrite(patchFile, yaml.dump([...patches, ...overrides], { schema, noRefs: true }), patchStat)
     const checks = verifyRecovery(dump('effective'), originalJsonConfig)
+    assertOriginalInputs()
     writeFileSync(join(backup, 'receipt.json'), JSON.stringify({ ...records, disabledIds: overrides.map(row => row.id), checks, status: 'configuration-verified-service-not-started' }, null, 2) + '\n', { mode: 0o600 })
     console.log(JSON.stringify({ ...records, disabledIds: overrides.map(row => row.id), checks, status: 'configuration-verified-service-not-started' }, null, 2))
   } catch (error) {

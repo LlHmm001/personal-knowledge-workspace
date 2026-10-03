@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, writeFileSync, readFileSync, statSync, existsSync, rmSync, chmodSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { recoveryManifest, recoveryOverrides, verifyRecovery, jsonStorageConfig, restoreConfigSnapshots, parseServiceEnvironment, recoveryEnvironment } from '../recover-dsh-without-pkw.mjs'
+import { recoveryManifest, recoveryOverrides, verifyRecovery, jsonStorageConfig, restoreConfigSnapshots, parseServiceEnvironment, recoveryEnvironment, confirmedEnvironmentFile, inspectEnvironmentFile, serializeProbeBaseEnvironment, collectEffectiveEnvironment, environmentFileIdentity } from '../recover-dsh-without-pkw.mjs'
 
 const host = () => [
   { id: 'storage', name: '@deepseek-ai/dsh-storage' },
@@ -102,4 +102,84 @@ test('recovery uses verified service environment rather than the interactive she
   assert.deepEqual(parseServiceEnvironment('A="two words" B=literal$(no-execution)'), { A: 'two words', B: 'literal$(no-execution)' })
   assert.throws(() => parseServiceEnvironment('PRIVATE_VALUE="unterminated'), error => !error.message.includes('PRIVATE_VALUE') && /manual verification/.test(error.message))
   assert.throws(() => parseServiceEnvironment('PRIVATE_VALUE=escaped\\value'), error => !error.message.includes('PRIVATE_VALUE') && /manual verification/.test(error.message))
+})
+
+const confirmedFile = '/LlHmm9527/memory-hub/state/keys/agent-journal.env'
+
+test('environment file support is limited to the confirmed mandatory path and root service', () => {
+  assert.equal(confirmedEnvironmentFile(''), undefined)
+  assert.equal(confirmedEnvironmentFile(confirmedFile + ' (ignore_errors=no)'), confirmedFile)
+  for (const value of [confirmedFile + ' (ignore_errors=yes)', confirmedFile + ' (ignore_errors=no) /root/extra.env (ignore_errors=no)', '/root/other.env (ignore_errors=no)']) {
+    assert.throws(() => confirmedEnvironmentFile(value), /manual verification/)
+  }
+  const properties = { User: 'root', Group: 'root', WorkingDirectory: '/opt/deepseek-harness', DynamicUser: 'no', EnvironmentFiles: confirmedFile + ' (ignore_errors=no)' }
+  assert.equal(recoveryEnvironment('', '', properties).DSH_HOME, '/root/.dsh')
+  assert.throws(() => recoveryEnvironment('', '', { ...properties, Group: 'another' }), /manual verification/)
+})
+
+test('environment file validation rejects injection and malformed records before starting any collector', () => {
+  const sentinel = 'fixture-private-value'
+  const bytes = Buffer.from('# keep private\nAGENT_JOURNAL_KEY="' + sentinel + '"\nLITERAL=$(no-execution)\nLABEL=\'some words\'\nEMPTY=\n')
+  assert.equal(inspectEnvironmentFile(bytes).variables, 4)
+  for (const content of ['NODE_OPTIONS=--require=fixture\n', 'LD_PRELOAD=/tmp/fixture.so\n', 'NODE_PATH=/other\n', 'INVALID NAME=' + sentinel + '\n', 'KEY="' + sentinel + '\n', 'KEY=some\\\nthing\n', 'KEY=two"quotes\n', 'KEY=\0' + sentinel]) {
+    assert.throws(() => inspectEnvironmentFile(Buffer.from(content)), error => /manual verification/.test(error.message) && !error.message.includes(sentinel) && !error.message.includes('--require'))
+  }
+  assert.throws(() => inspectEnvironmentFile(Buffer.from([0xff])), /encoding/)
+  assert.throws(() => inspectEnvironmentFile(Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('KEY=fixture\n')])), /encoding/)
+  assert.throws(() => inspectEnvironmentFile(Buffer.alloc(262145)), /size/)
+})
+
+test('private base layer preserves simple values and refuses ambiguous serialization without revealing values', () => {
+  const environment = { HOME: '/root', LABEL: 'two words', SHELL_LOOKING: '$(must-stay-literal)', QUOTE: 'some"text', EMPTY: '' }
+  const bytes = serializeProbeBaseEnvironment(environment)
+  assert.equal(inspectEnvironmentFile(bytes).variables, 5)
+  assert.ok(bytes.toString().includes("QUOTE='some\"text'"))
+  for (const secret of ['fixture-secret\nsecond-line', 'fixture-secret\\escape', 'fixture-secret\'and"both']) {
+    assert.throws(() => serializeProbeBaseEnvironment({ PRIVATE_KEY: secret }), error => !error.message.includes('fixture-secret'))
+  }
+})
+
+test('systemd capture uses private ordered files and inherited pipes while keeping secret values out of argv', () => {
+  const sentinel = 'fixture-private-file-value'
+  const calls = []
+  const result = collectEffectiveEnvironment({ baseFile: '/root/private/base.env', sourceSnapshot: '/root/private/source.env', unitName: 'pkw-dsh-env-fixture' }, (command, args, options) => {
+    calls.push({ command, args, options })
+    if (command === 'systemctl') return ''
+    assert.equal(command, 'systemd-run')
+    assert.deepEqual(options.stdio, ['ignore', 'pipe', 'pipe'])
+    assert.ok(args.includes('--pipe') && args.includes('--wait') && args.includes('--collect'))
+    assert.ok(args.indexOf('--property=EnvironmentFile=/root/private/base.env') < args.indexOf('--property=EnvironmentFile=/root/private/source.env'))
+    assert.ok(!JSON.stringify({ args, options }).includes(sentinel))
+    // The native collector result is authoritative: its file value must not be
+    // overwritten later by a lower-priority value from the original unit.
+    return JSON.stringify({ HOME: '/root', DSH_HOME: '/root/.dsh', PRIVATE_KEY: sentinel })
+  })
+  assert.equal(result.PRIVATE_KEY, sentinel)
+  assert.deepEqual(calls.at(-1).args, ['stop', 'pkw-dsh-env-fixture.service'])
+  assert.ok(!JSON.stringify(calls).includes(sentinel))
+})
+
+test('collector failure or malformed output never exposes secret stdout or stderr and cleans its own unit', () => {
+  for (const outcome of ['exception', 'malformed', 'wrong-home', 'injection']) {
+    const calls = [], sentinel = 'fixture-private-result'
+    assert.throws(() => collectEffectiveEnvironment({ baseFile: '/root/private/base.env', sourceSnapshot: '/root/private/source.env', unitName: 'pkw-dsh-env-failure' }, (command, args) => {
+      calls.push({ command, args })
+      if (command === 'systemctl') return ''
+      if (outcome === 'exception') throw Object.assign(new Error(sentinel), { stdout: sentinel, stderr: sentinel })
+      if (outcome === 'malformed') return sentinel
+      if (outcome === 'wrong-home') return JSON.stringify({ HOME: '/wrong', PRIVATE_KEY: sentinel })
+      return JSON.stringify({ HOME: '/root', NODE_OPTIONS: sentinel })
+    }), error => !error.message.includes(sentinel))
+    assert.deepEqual(calls.at(-1), { command: 'systemctl', args: ['stop', 'pkw-dsh-env-failure.service'] })
+  }
+})
+
+test('environment identity rejects symlinks, unsafe ownership and permissions and detects identical-byte replacement', () => {
+  const info = { isFile: () => true, uid: 0, gid: 0, mode: 0o100600, size: 20, dev: 1, ino: 10, mtimeMs: 1, ctimeMs: 1 }
+  const before = environmentFileIdentity(info)
+  assert.notDeepEqual(environmentFileIdentity({ ...info, ino: 11 }), before)
+  assert.notDeepEqual(environmentFileIdentity({ ...info, mode: 0o100640 }), before)
+  for (const change of [{ isFile: () => false }, { uid: 1000 }, { mode: 0o100622 }, { size: 262145 }]) {
+    assert.throws(() => environmentFileIdentity({ ...info, ...change }), /manual verification/)
+  }
 })
