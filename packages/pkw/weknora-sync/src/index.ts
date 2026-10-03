@@ -54,7 +54,7 @@ export interface Config {
   retryBaseMs: number
   /** Backoff ceiling (ms). */
   retryMaxMs: number
-  /** Unknown-outcome CREATE lookups before falling back to a safe re-create. */
+  /** CREATE lookups before retrying a known rejection; never proves an unknown commit absent. */
   recoveryGraceAttempts: number
 }
 
@@ -944,7 +944,7 @@ export class WeKnoraSyncService extends Service {
     // state, so scanning the unbounded, operationId-keyed intents table here is
     // redundant. Restart resume still works: a crash mid-mutation leaves the
     // durable dirty flag set, and resumeCreate/resumeUpdate no-op until
-    // nextRetryAt for retryable intents.
+    // nextRetryAt for both retryable and unknown CREATE intents.
     const keys = new Set<string>()
     for (const [key, rec] of this.reqDirty().entries()) {
       if (rec.dirty) keys.add(key)
@@ -1230,21 +1230,27 @@ export class WeKnoraSyncService extends Service {
 
   private async resumeCreate(noteId: NoteIdT, markdown: string, fingerprint: string, intent: IntentRecord): Promise<string | undefined> {
     const key = this.entityKey(ENTITY_NOTE, String(noteId))
-    // If a known retryable intent is not yet due, do nothing.
-    if (intent.state === S_RETRYABLE && intent.nextRetryAt !== undefined && intent.nextRetryAt > this.now()) return undefined
+    // Recovery has a durable deadline too. Worker cadence must not consume the
+    // visibility grace window, including after a restart or an explicit sync.
+    if (intent.nextRetryAt !== undefined && intent.nextRetryAt > this.now()) return undefined
     if (intent.state === S_PERMANENT) return undefined
 
-    const candidates = await this.enumerateManualCandidates(fingerprint)
+    // Recover the content sent by THIS operation. A local edit while its
+    // response was lost must not hide its committed object from recovery.
+    const candidates = await this.enumerateManualCandidates(intent.remoteFingerprint)
     if (candidates.length === 0) {
       const grace = this.config.recoveryGraceAttempts
-      if (intent.recoveryAttempts < grace) {
+      const knownRejected = intent.state === S_RETRYABLE && intent.errorCertainty === 'known'
+      if (!knownRejected || intent.recoveryAttempts < grace) {
         await this.recordIntent(intent, {
           recoveryAttempts: intent.recoveryAttempts + 1,
           nextRetryAt: new Date(Date.now() + backoffMs(intent.recoveryAttempts + 1, this.config.retryBaseMs, this.config.retryMaxMs)).toISOString(),
         })
         return undefined
       }
-      // Grace exhausted with zero visible candidates → safe re-create (at-least-once).
+      // An empty eventually-consistent list is NEVER evidence of a failed
+      // mutation. Only a known rejection (e.g. 429) permits a new CREATE.
+      // Unknown/running legacy intents stay durable and continue read recovery.
       await this.recordIntent(intent, { state: S_SUPERSEDED })
       await this.clearDirty(key)
       return this.createManual(noteId, markdown, fingerprint, (await this.ctx.pkwNotes.getDocument(noteId)).note.title)
@@ -1253,13 +1259,13 @@ export class WeKnoraSyncService extends Service {
     const canonical = this.selectCanonical(candidates)
     await this.putMapping(key, {
       workspaceId: this.config.workspaceId, entityType: ENTITY_NOTE, entityId: String(noteId),
-      knowledgeId: canonical.knowledgeId, remoteFingerprint: fingerprint, localObservedRevision: 0,
+      knowledgeId: canonical.knowledgeId, remoteFingerprint: intent.remoteFingerprint, localObservedRevision: 0,
       syncState: M_SYNCED, remoteParseStatus: canonical.parseStatus,
       supersededKnowledgeIds: candidates.filter(c => c.knowledgeId !== canonical.knowledgeId).map(c => c.knowledgeId),
       updatedAt: this.now(),
     })
     await this.recordCompletion(intent, canonical.knowledgeId)
-    await this.settleDirty(key, ENTITY_NOTE, String(noteId), fingerprint)
+    await this.settleDirty(key, ENTITY_NOTE, String(noteId), intent.remoteFingerprint)
     return canonical.knowledgeId
   }
 
@@ -1372,6 +1378,10 @@ export class WeKnoraSyncService extends Service {
       if (record === undefined || record.deletedAt !== undefined) return undefined
       const { markdown: remoteMarkdown, fingerprint } = await this.noteRemoteProjection(noteId)
       const mapping = this.reqMappings().get(key)
+      const pending = this.activeIntent(this.reqDirty().get(key))
+      if (mapping === undefined && pending !== undefined) {
+        return this.resumeCreate(noteId, remoteMarkdown, fingerprint, pending)
+      }
       if (mapping !== undefined) {
         try {
           const remote = await this.ctx.pkwWeKnora.readManualContent(mapping.knowledgeId)

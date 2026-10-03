@@ -55,6 +55,7 @@ interface FakeWeKnora {
   hidden: Set<string>
   manualUpdateApplications: number
   manualContentReads: number
+  manualListReads: number
   /** One-shot request barrier, before the PUT is applied or its response lost. */
   manualUpdateGate?: { entered: () => void; release: Promise<void> }
   /** One-shot failure behaviors, cleared after the matching request. */
@@ -62,6 +63,7 @@ interface FakeWeKnora {
     commitThenDrop?: 'create-manual' | 'update-manual' | 'upload'
     dropBeforeRead?: 'create-manual' | 'upload'
     respond?: { status: number; body: unknown }
+    rejectManualBeforeCommit?: boolean
   }
 }
 
@@ -107,6 +109,7 @@ function startFakeServer(): Promise<FakeWeKnora> {
     hidden: new Set(),
     manualUpdateApplications: 0,
     manualContentReads: 0,
+    manualListReads: 0,
     next: {},
   }
   let counter = 0
@@ -138,6 +141,11 @@ function startFakeServer(): Promise<FakeWeKnora> {
       // Manual create.
       if (req.method === 'POST' && /\/knowledge-bases\/[^/]+\/knowledge\/manual$/.test(url.pathname)) {
         const body = JSON.parse((await readBody()).toString('utf8')) as { title: string; content: string }
+        if (fake.next.rejectManualBeforeCommit) {
+          fake.next.rejectManualBeforeCommit = false
+          send(429, { code: 'rate_limited' })
+          return
+        }
         const id = `kn-${++counter}`
         fake.manuals.set(id, { id, title: body.title, content: body.content, parseStatus: 'pending' })
         if (fake.next.respond !== undefined) {
@@ -219,6 +227,7 @@ function startFakeServer(): Promise<FakeWeKnora> {
 
       // List (paginated).
       if (req.method === 'GET' && /\/knowledge-bases\/[^/]+\/knowledge$/.test(url.pathname)) {
+        fake.manualListReads++
         const page = Number(url.searchParams.get('page') ?? '1')
         const all = [
           ...[...fake.manuals.values()].filter(m => !fake.hidden.has(m.id)).map(m => ({ id: m.id, title: m.title, parse_status: m.parseStatus })),
@@ -293,12 +302,14 @@ interface BootOptions {
   pollMs?: number
   /** Hold periodic ticks; tests drive the real durable worker through drain(). */
   manualWorker?: boolean
+  /** Control retry deadlines without faking HTTP/filesystem timeout callbacks. */
+  controlledClock?: boolean
 }
 
 async function boot(opts: BootOptions = {}) {
-  // Only interval scheduling is controlled. HTTP, SQLite, filesystem, Date and
-  // timeout behavior remain real, and no sync outcome or storage method is mocked.
-  if (opts.manualWorker) vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+  // Control periodic scheduling and optionally Date (retry deadlines). HTTP,
+  // SQLite, filesystem and timeout callbacks stay real; sync/storage are not mocked.
+  if (opts.manualWorker) vi.useFakeTimers({ toFake: opts.controlledClock ? ['Date', 'setInterval', 'clearInterval'] : ['setInterval', 'clearInterval'] })
   const fake = await startFakeServer()
   const dir = await mkdtemp(join(tmpdir(), 'pkw-'))
   dirs.push(dir)
@@ -525,22 +536,26 @@ describe('manual create distributed failures', () => {
     expect(fake.manuals.size).toBe(1)
   })
 
-  it('request never reached server → 0-candidate grace → safe re-create', async () => {
-    const { notes, sync, fake } = await boot()
+  it('a disconnect before server commit remains ambiguous to the client after grace', async () => {
+    const { notes, sync, fake } = await boot({ manualWorker: true, controlledClock: true })
     const note = await notes.create({ relativePath: 'a.md', markdown: '# v1\n\nunreached\n' })
     fake.next.dropBeforeRead = 'create-manual'
     await expect(sync.syncNote(note.noteId)).rejects.toThrow()
     expect(fake.manuals.size).toBe(0)
 
-    // Grace elapses (recoveryGraceAttempts=2) and the worker re-creates.
-    await vi.waitFor(() => {
-      expect(fake.manuals.size).toBe(1)
-    }, { timeout: 2000 })
-    expect(sync.getMapping(note.noteId)?.knowledgeId).toBeDefined()
+    // The client cannot distinguish this socket loss from commit-then-drop.
+    for (let i = 0; i < 5; i++) {
+      vi.setSystemTime(Date.now() + 1000)
+      await sync.drain()
+    }
+    expect(fake.manuals.size).toBe(0)
+    expect(sync.getMapping(note.noteId)).toBeUndefined()
+    expect(sync.listIntents()).toHaveLength(1)
+    expect(sync.listIntents()[0]?.state).toBe('unknown')
   })
 
-  it('delayed visibility: grace re-polls until the committed object appears', async () => {
-    const { notes, sync, fake } = await boot()
+  it('delayed visibility beyond grace never permits a duplicate create', async () => {
+    const { notes, sync, fake } = await boot({ manualWorker: true, controlledClock: true })
     const note = await notes.create({ relativePath: 'a.md', markdown: '# v1\n\ndelayed\n' })
     fake.next.commitThenDrop = 'create-manual'
     await expect(sync.syncNote(note.noteId)).rejects.toThrow()
@@ -548,16 +563,104 @@ describe('manual create distributed failures', () => {
     const committed = [...fake.manuals.keys()][0]!
     fake.hidden.add(committed)
 
-    // Let at least one grace attempt observe 0 candidates.
+    // Deliberately keep visibility closed BEYOND the configured grace of two.
+    // No scheduler race or sleep determines when the remote object appears.
+    for (let i = 0; i < 5; i++) {
+      vi.setSystemTime(Date.now() + 1000)
+      await sync.drain()
+    }
+    expect(fake.manuals.size).toBe(1)
+    expect(sync.getMapping(note.noteId)).toBeUndefined()
+    expect(sync.listIntents()).toHaveLength(1)
+    expect(sync.listIntents()[0]?.recoveryAttempts).toBe(5)
+
+    // Become visible → recovery should claim the original, not re-create.
+    fake.hidden.delete(committed)
+    vi.setSystemTime(Date.now() + 1000)
+    await sync.drain()
+    expect(sync.getMapping(note.noteId)?.knowledgeId).toBe(committed)
+    expect(fake.manuals.size).toBe(1)
+  })
+
+  it('delayed visibility: grace re-polls until the committed object appears', async () => {
+    const { notes, sync, fake } = await boot()
+    const note = await notes.create({ relativePath: 'a.md', markdown: '# v1\n\ndelayed\n' })
+    fake.next.commitThenDrop = 'create-manual'
+    await expect(sync.syncNote(note.noteId)).rejects.toThrow()
+    const committed = [...fake.manuals.keys()][0]!
+    fake.hidden.add(committed)
     await vi.waitFor(() => {
       expect(sync.listIntents().some(i => i.recoveryAttempts >= 1)).toBe(true)
     }, { timeout: 2000 })
-
-    // Become visible → recovery should claim the original, not re-create.
     fake.hidden.delete(committed)
     await vi.waitFor(() => {
       expect(sync.getMapping(note.noteId)?.knowledgeId).toBe(committed)
     }, { timeout: 2000 })
+    expect(fake.manuals.size).toBe(1)
+  })
+
+  it('unknown create obeys its retry deadline instead of consuming grace on every tick', async () => {
+    const { notes, sync, fake } = await boot({ manualWorker: true, controlledClock: true })
+    const note = await notes.create({ relativePath: 'a.md', markdown: '# backoff\n' })
+    fake.next.commitThenDrop = 'create-manual'
+    await expect(sync.syncNote(note.noteId)).rejects.toThrow()
+    fake.hidden.add([...fake.manuals.keys()][0]!)
+    const reads = fake.manualListReads
+    const intent = sync.listIntents()[0]!
+    vi.setSystemTime(new Date(intent.nextRetryAt!).getTime() - 1)
+    await sync.drain()
+    await sync.drain()
+    expect(fake.manualListReads).toBe(reads)
+    expect(sync.listIntents()[0]?.recoveryAttempts).toBe(0)
+    vi.setSystemTime(new Date(intent.nextRetryAt!))
+    await sync.drain()
+    expect(fake.manualListReads).toBe(reads + 1)
+    expect(sync.listIntents()[0]?.recoveryAttempts).toBe(1)
+  })
+
+  it('an explicit rejection before commit can still create after backoff and grace', async () => {
+    const { notes, sync, fake } = await boot({ manualWorker: true, controlledClock: true })
+    const note = await notes.create({ relativePath: 'a.md', markdown: '# rejected\n' })
+    fake.next.rejectManualBeforeCommit = true
+    await expect(sync.syncNote(note.noteId)).rejects.toThrow()
+    expect(fake.manuals.size).toBe(0)
+    expect(sync.listIntents()[0]?.errorCertainty).toBe('known')
+    for (let i = 0; i < 3; i++) {
+      vi.setSystemTime(Date.now() + 1000)
+      await sync.drain()
+    }
+    expect(fake.manuals.size).toBe(1)
+    expect(sync.getMapping(note.noteId)?.knowledgeId).toBe('kn-1')
+  })
+
+  it('restart and local edits preserve the original ambiguous create identity', async () => {
+    const { ctx, workspaceId, notes, sync, syncFork, fake } = await boot({ manualWorker: true, controlledClock: true })
+    const note = await notes.create({ relativePath: 'a.md', markdown: '# original\n' })
+    fake.next.commitThenDrop = 'create-manual'
+    await expect(sync.syncNote(note.noteId)).rejects.toThrow()
+    const committed = [...fake.manuals.keys()][0]!
+    const operationId = sync.listIntents()[0]!.operationId
+    fake.hidden.add(committed)
+    for (let i = 0; i < 4; i++) {
+      vi.setSystemTime(Date.now() + 1000)
+      await sync.drain()
+    }
+    await notes.update(note.noteId, `---\nid: ${note.noteId}\n---\n\n# edited while invisible\n`)
+    await syncFork.dispose()
+    await ctx.plugin(WeKnoraSyncService, { kbId: 'kb-1', workspaceId, pollMs: 25, retryBaseMs: 5, retryMaxMs: 10, recoveryGraceAttempts: 2 })
+    const restarted = ctx.pkwWeKnoraSync
+    vi.setSystemTime(Date.now() + 1000)
+    await restarted.drain()
+    expect(restarted.listIntents()).toHaveLength(1)
+    expect(restarted.listIntents()[0]?.operationId).toBe(operationId)
+    expect(fake.manuals.size).toBe(1)
+    fake.hidden.delete(committed)
+    vi.setSystemTime(Date.now() + 1000)
+    // Direct recovery and the background worker share the same durable intent.
+    expect(await restarted.recoverNote(note.noteId)).toBe(committed)
+    await restarted.drain()
+    expect(restarted.getMapping(note.noteId)?.knowledgeId).toBe(committed)
+    expect(fake.manuals.get(committed)?.content).toContain('# edited while invisible')
     expect(fake.manuals.size).toBe(1)
   })
 

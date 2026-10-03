@@ -124,6 +124,41 @@ review itself. A missing/stale review stops before publishing or stopping DSH.
 
 ## One-command deployment
 
+### Registry availability is a deployment prerequisite
+
+The configured loopback registry must be running, retain its configuration and
+storage, and authorize the deployment account to **publish and install** all
+`@deepseek-ai/dsh-pkw-*` packages. A successful ping, anonymous read, or `npm whoami`
+alone does not prove publishing permission. `--dry-run` does not publish and is
+not evidence that this prerequisite passed. The real command publishes every
+artifact before stopping the installed service; a 401/403 or partial publication
+must stop the attempt with the old installation intact.
+
+Keep registry configuration, user database and credentials in controlled backups.
+If authentication cannot be restored, do not enable anonymous publishing or
+disable authentication to pass the gate. A site-specific temporary loopback
+registry must be reviewed and kept alive through publication **and installation**;
+`PKW_LOCAL_REGISTRY=1` is not a supported switch of this repository's deployment
+CLI. Preserve and compare any such server-side script changes before updating.
+
+### Failed deployment versus failed recovery
+
+The default `verifyHttp` contract requires actual PKW HTML and business RPC; it
+does not count a login page, HTTP 401 or a generic 200 as acceptance. The private
+receipt now retains `errorDetails`: both deployment and recovery cause chains,
+plus recovery `phase`, `profileRestored`, `serviceRestarted` and `verified`.
+`PKW_ROLLBACK_FAILED` means recovery was not verified; it cannot be changed into
+success by matching a different error string. Inspect the nested causes first.
+
+`activate(options, execute, verify)` also supports a reviewed environment-specific
+verifier. Existing adapters may instead pass `options.verify`; conflicting or
+non-function verifiers are rejected before service changes. It is used for both
+activation and rollback and must validate actual
+business behavior (and the requested version on activation); never pass a no-op.
+The CLI continues to use the strict default probe. An authenticated collaboration
+gateway needs its own authenticated, space-scoped acceptance; do not remove its
+access protection just to satisfy the legacy single-profile probe.
+
 Run on the deployment machine **after fetching the reviewed commit from GitHub**.
 Use a fresh immutable version; neither source manifests nor old registry versions
 are overwritten. Supply absolute executable stop/start hooks for the actual DSH
