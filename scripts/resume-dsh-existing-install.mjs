@@ -3,7 +3,7 @@
 // Site paths are supplied privately by the caller. Never reinstall packages,
 // replace configuration, restore databases, or start the PKW service.
 import * as fs from 'node:fs';
-import { join, isAbsolute, resolve } from 'node:path';
+import { join, isAbsolute, resolve, dirname, relative } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
@@ -15,6 +15,7 @@ export function parseResumeOptions(args) {
   const options = Object.fromEntries([
     'profile', 'harness', 'helper', 'baseline', 'receipt', 'data-disk',
     'trusted-host', 'start-pre-exe', 'start-pre-script',
+    'protected-executable-dir', 'protected-executable-owner',
   ].map(name => [name, { type: 'string' }]));
   const { values } = parseArgs({ args, options, strict: true, allowPositionals: false });
   for (const name of ['profile', 'harness', 'helper', 'baseline', 'receipt', 'data-disk']) {
@@ -31,6 +32,17 @@ export function parseResumeOptions(args) {
   const pre = [values['start-pre-exe'], values['start-pre-script']];
   if (pre.some(Boolean) && !pre.every(p => p && isAbsolute(p) && !/[\s%\\]/.test(p))) {
     throw Object.assign(new Error('Invalid startup hook options'), { code: 'INVALID_START_PRE' });
+  }
+  const privateDir = values['protected-executable-dir'], owner = values['protected-executable-owner'];
+  if (privateDir !== undefined || owner !== undefined) {
+    const ids = /^(0|[1-9][0-9]*):(0|[1-9][0-9]*)$/.exec(owner ?? '');
+    const validIds = ids && Number(ids[1]) > 0 && ids.slice(1).every(x => Number(x) < 4294967295);
+    const below = privateDir && pre[0] ? relative(privateDir, pre[0]) : '';
+    if (!privateDir || !isAbsolute(privateDir) || resolve(privateDir) !== privateDir || privateDir === '/'
+        || /[\s%\\]/.test(privateDir) || !validIds || !pre.every(Boolean)
+        || !below || isAbsolute(below) || below === '..' || below.startsWith('../')) {
+      throw Object.assign(new Error('Invalid protected executable options'), { code: 'INVALID_PROTECTED_EXECUTABLE' });
+    }
   }
   return values;
 }
@@ -56,6 +68,58 @@ export function recognizedStartHooks(pre, post, executable, script) {
     && commands[0][3] === 'yes';
 }
 
+function fileIdentity(path, info) {
+  return { path, dev: info.dev, ino: info.ino, mode: info.mode, uid: info.uid,
+    gid: info.gid, nlink: info.nlink, size: info.size, mtimeMs: info.mtimeMs, ctimeMs: info.ctimeMs };
+}
+
+// The explicit owner exception applies only to the original executable, never
+// to its script. It inspects the existing layout without changing ownership.
+export function inspectStartupFile(path, { role, privateDirectory, approvedOwner } = {}, io = fs) {
+  const reject = (code, at, info) => {
+    throw Object.assign(new Error(code), { code, details: { path: at,
+      ...(info ? { uid: info.uid, gid: info.gid, mode: (info.mode & 0o7777).toString(8),
+        nlink: info.nlink, regularFile: info.isFile(), directory: info.isDirectory() } : {}) } });
+  };
+  const protectedExecutable = role === 'executable' && (privateDirectory !== undefined || approvedOwner !== undefined);
+  if (!protectedExecutable) {
+    const info = io.statSync(path);
+    if (!info.isFile() || info.uid !== 0 || (info.mode & 0o022)) reject('START_HOOK_FILE_UNSAFE', path, info);
+    return [fileIdentity(path, info)];
+  }
+  const ids = /^(0|[1-9][0-9]*):(0|[1-9][0-9]*)$/.exec(approvedOwner ?? '');
+  if (!ids || Number(ids[1]) <= 0 || ids.slice(1).some(x => Number(x) >= 4294967295)
+      || !privateDirectory || !isAbsolute(privateDirectory) || resolve(privateDirectory) !== privateDirectory
+      || privateDirectory === '/' || !isAbsolute(path) || resolve(path) !== path) {
+    reject('INVALID_PROTECTED_EXECUTABLE', path);
+  }
+  const owner = ids.slice(1).map(Number), chain = [];
+  for (let at = path; ; at = dirname(at)) {
+    chain.unshift(at);
+    if (at === '/') break;
+  }
+  const privateIndex = chain.indexOf(privateDirectory);
+  if (privateIndex < 0 || privateIndex >= chain.length - 1) reject('PROTECTED_DIRECTORY_NOT_ANCESTOR', path);
+  const identities = chain.map((at, index) => {
+    const info = io.lstatSync(at), last = index === chain.length - 1;
+    if (info.isSymbolicLink() || (last ? !info.isFile() : !info.isDirectory())) {
+      reject('START_HOOK_PATH_TYPE_CHANGED', at, info);
+    }
+    if (info.mode & 0o022) reject('START_HOOK_PATH_WRITABLE', at, info);
+    if (index <= privateIndex && (info.uid !== 0 || info.gid !== 0)) reject('START_HOOK_ANCESTOR_OWNER_CHANGED', at, info);
+    if (index === privateIndex && (info.mode & 0o7777) !== 0o700) reject('PROTECTED_DIRECTORY_NOT_PRIVATE', at, info);
+    if (index > privateIndex && !((info.uid === 0 && info.gid === 0) || (info.uid === owner[0] && info.gid === owner[1]))) {
+      reject('START_HOOK_PATH_OWNER_CHANGED', at, info);
+    }
+    if (last && (info.uid !== owner[0] || info.gid !== owner[1] || (info.mode & 0o7777) !== 0o755 || info.nlink !== 1)) {
+      reject('PROTECTED_EXECUTABLE_IDENTITY_CHANGED', at, info);
+    }
+    return fileIdentity(at, info);
+  });
+  if (io.realpathSync(path) !== path) reject('START_HOOK_CANONICAL_PATH_CHANGED', path);
+  return identities;
+}
+
 async function resume(options) {
   const { profile, harness, helper, baseline, receipt: receiptFile } = options;
   const host = options['trusted-host'];
@@ -78,11 +142,12 @@ function reviewStartHooks(pre, post) {
       preSha256: sha(pre), postSha256: sha(post) }));
     fail('UNIT_START_HOOK_UNKNOWN');
   }
-  for (const path of pre ? [executable, script] : []) {
-    const info = fs.statSync(path);
-    need(info.isFile() && info.uid === 0 && !(info.mode & 0o022), 'START_HOOK_FILE_UNSAFE');
-  }
-  return pre ? [executable, script] : [];
+  if (!pre) return { files: [], identities: [] };
+  return { files: [executable, script], identities: [
+    ...inspectStartupFile(executable, { role: 'executable',
+      privateDirectory: options['protected-executable-dir'], approvedOwner: options['protected-executable-owner'] }),
+    ...inspectStartupFile(script, { role: 'script' }),
+  ] };
 }
 function writers() {
   const units = run('systemctl', ['list-units', '--type=service', '--state=active,activating', '--no-legend', '--plain', '--no-pager']);
@@ -119,7 +184,7 @@ try {
   const command = prop('ExecStart');
   need(command.includes(`argv[]=/usr/local/bin/node --import tsx/esm ${harness}/apps/cli/src/bin.ts web --host 127.0.0.1 --port 3080 --trusted-host ${host} ;`), 'UNIT_ENTRY_CHANGED');
   const startPre = prop('ExecStartPre'), startPost = prop('ExecStartPost');
-  const startHookFiles = reviewStartHooks(startPre, startPost);
+  const startHookEvidence = reviewStartHooks(startPre, startPost);
   need(!run('ss', ['-ltnH', 'sport = :3080']).trim(), 'PORT_3080_BUSY');
   check = 'helper'; target = helper;
   need(sha(fs.readFileSync(helper)) === '4371a15bfd6c61e388f05c1cf7c3a1bebc8dac775dba01e5f5f5216a9ae7e250', 'HELPER_HASH_CHANGED');
@@ -147,7 +212,7 @@ try {
     entries.push(entry);
   }
   check = 'inputs'; target = profile;
-  const monitoredInputs = [join(profile, 'package.json'), join(profile, 'pnpm-lock.yaml'), join(profile, 'cordis.patch.yml'), '/root/.dsh/cordis.patch.yml', envPath, helper, join(baseline, 'effective.yml'), ...entries, ...startHookFiles];
+  const monitoredInputs = [join(profile, 'package.json'), join(profile, 'pnpm-lock.yaml'), join(profile, 'cordis.patch.yml'), '/root/.dsh/cordis.patch.yml', envPath, helper, join(baseline, 'effective.yml'), ...entries, ...startHookEvidence.files];
   const fingerprint = () => monitoredInputs.map(p => [p, fs.existsSync(p) ? sha(fs.readFileSync(p)) : null]);
   const before = fingerprint(), identity = H.runtimeDirectoryIdentity(harness);
   const disk = options['data-disk'];
@@ -191,13 +256,13 @@ try {
   check = 'final-recheck'; target = profile; writers();
   H.assertRuntimeDirectories(harness, identity, harness, undefined);
   need(equal(before, fingerprint()), 'FILES_CHANGED_DURING_CHECK');
-  reviewStartHooks(prop('ExecStartPre'), prop('ExecStartPost'));
+  need(equal(startHookEvidence, reviewStartHooks(prop('ExecStartPre'), prop('ExecStartPost'))), 'START_HOOK_CHANGED_DURING_CHECK');
   need(prop('ExecStart') === command && prop('ExecStartPre') === startPre && prop('ExecStartPost') === startPost && names.every(k => prop(k) === properties[k]) && prop('Environment') === unitEnv && run('systemctl', ['show-environment']) === managerEnv, 'UNIT_CHANGED_DURING_CHECK');
   need(['failed', 'inactive'].includes(prop('ActiveState')) && prop('ActiveState', pkwUnit) === 'inactive', 'SERVICE_STATE_CHANGED');
   console.log('DSH_PREFLIGHT_OK; no configuration or database was replaced.');
   preflightPassed = true;
 } catch (e) {
-  console.error(JSON.stringify({ status: 'STOP', check, target, code: e.code ?? 'CHECK_FAILED', ...(evidence ? { privateEvidence: evidence } : {}) }));
+  console.error(JSON.stringify({ status: 'STOP', check, target: e.details?.path ?? target, code: e.code ?? 'CHECK_FAILED', ...(e.details ? { details: e.details } : {}), ...(evidence ? { privateEvidence: evidence } : {}) }));
   process.exitCode = 1;
 }
   if (preflightPassed) {
