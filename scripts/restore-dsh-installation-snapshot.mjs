@@ -115,10 +115,218 @@ export function verifyCandidateLinks(candidate, liveProfile, backup, inventory) 
 
 const directoryIdentity = info => ({ dev: info.dev, ino: info.ino,
   mode: info.mode & 0o7777, uid: info.uid, gid: info.gid });
-function protectedPhysicalDirectory(path, code) {
+const membershipSources = ['/etc/group', '/etc/nsswitch.conf', '/etc/passwd'];
+function rootGroupContext({ paths, harnessRelease, targets }) {
+  const canonical = path => typeof path === 'string' && isAbsolute(path) && resolve(path) === path
+    && path !== '/' && !/[\s%\\\0]/.test(path);
+  need(canonical(harnessRelease) && Array.isArray(paths) && paths.length > 0 && paths.length <= 64
+    && paths.every(canonical) && new Set(paths).size === paths.length
+    && Array.isArray(targets) && targets.length > 0 && targets.length <= 256 && targets.every(canonical),
+  'ROOT_GROUP_POLICY_SCOPE_INVALID');
+  need(targets.every(path => path !== harnessRelease && below(harnessRelease, path))
+    && paths.every(path => path !== harnessRelease && below(harnessRelease, path)
+      && targets.some(target => below(path, target))), 'ROOT_GROUP_POLICY_SCOPE_INVALID');
+  return { paths: [...paths].sort(), harnessRelease, targets: [...new Set(targets)].sort() };
+}
+function rootGroupAncestorPaths(paths) {
+  const result = new Set();
+  for (let path of paths) {
+    for (;;) { result.add(path); if (dirname(path) === path) break; path = dirname(path); }
+  }
+  return [...result].sort();
+}
+
+/** Pure evidence validation; the production CLI always obtains evidence from the Linux observer. */
+export function validateRootGroupDirectoryEvidence(context, evidence) {
+  context = rootGroupContext(context);
+  need(evidence?.version === 1 && Array.isArray(evidence.listed)
+    && equal([...evidence.listed].sort(), context.paths) && Array.isArray(evidence.directories)
+    && Array.isArray(evidence.sources), 'ROOT_GROUP_AUDIT_INVALID');
+  const ancestors = rootGroupAncestorPaths(context.paths);
+  const directories = [...evidence.directories].sort((a, b) => a.path.localeCompare(b.path));
+  need(equal(directories.map(row => row.path).sort(), ancestors), 'ROOT_GROUP_ANCESTORS_INCOMPLETE');
+  const integer = value => Number.isSafeInteger(value) && value >= 0;
+  for (const row of directories) {
+    need(['dev', 'ino', 'mode', 'uid', 'gid'].every(key => integer(row[key]))
+      && row.mode <= 0o7777, 'ROOT_GROUP_AUDIT_INVALID');
+    need(row.aclAccess === 'absent' && row.aclDefault === 'absent', 'ROOT_GROUP_ACL_NOT_ABSENT');
+    need(row.uid === 0 && !(row.mode & 0o002) && (row.path !== '/' || row.mode === 0o755),
+      'ROOT_GROUP_ANCESTOR_UNSAFE');
+    if (context.paths.includes(row.path)) {
+      need(row.gid === 0 && row.mode === 0o775, 'ROOT_GROUP_DIRECTORY_NOT_APPROVED');
+    } else need(!(row.mode & 0o020), 'ROOT_GROUP_UNLISTED_GROUP_WRITE');
+  }
+  const allowedNss = value => equal(value, ['files']) || equal(value, ['files', 'systemd']);
+  need(allowedNss(evidence.nss?.passwd) && allowedNss(evidence.nss?.group)
+    && (evidence.nss.initgroups === undefined || allowedNss(evidence.nss.initgroups)), 'ROOT_GROUP_NSS_UNSUPPORTED');
+  need(evidence.rootAccount?.name === 'root' && evidence.rootAccount.uid === 0 && evidence.rootAccount.gid === 0,
+    'ROOT_GROUP_ROOT_ACCOUNT_INVALID');
+  need(evidence.rootGroup?.name === 'root' && evidence.rootGroup.gid === 0
+    && Array.isArray(evidence.rootGroup.members) && evidence.rootGroup.members.length === 0,
+  'ROOT_GROUP_ROOT_GROUP_INVALID');
+  for (const [key, code] of [['accountsWithRootGroup', 'ROOT_GROUP_ACCOUNT_MEMBERSHIP_UNSAFE'],
+    ['processesWithRootGroup', 'ROOT_GROUP_PROCESS_MEMBERSHIP_UNSAFE'], ['unreadableProcesses', 'ROOT_GROUP_PROCESS_UNREADABLE']]) {
+    need(Array.isArray(evidence[key]), 'ROOT_GROUP_AUDIT_INVALID'); need(evidence[key].length === 0, code);
+  }
+  const sources = [...evidence.sources].sort((a, b) => a.path.localeCompare(b.path));
+  need(equal(sources.map(row => row.path), membershipSources), 'ROOT_GROUP_MEMBERSHIP_SOURCES_INVALID');
+  for (const row of sources) {
+    need(['dev', 'ino', 'mode', 'uid', 'gid', 'size'].every(key => integer(row[key])) && row.size <= 4 * 1024 ** 2
+      && /^[a-f0-9]{64}$/.test(row.sha256) && /^\d+$/.test(row.mtimeNs) && /^\d+$/.test(row.ctimeNs)
+      && row.uid === 0 && !(row.mode & 0o022), 'ROOT_GROUP_MEMBERSHIP_SOURCES_INVALID');
+  }
+  return { version: 1, context, directories: structuredClone(directories), sources: structuredClone(sources),
+    nss: structuredClone(evidence.nss), rootAccount: structuredClone(evidence.rootAccount),
+    rootGroup: structuredClone(evidence.rootGroup) };
+}
+
+export function recheckRootGroupDirectoryEvidence(policy, evidence) {
+  const next = validateRootGroupDirectoryEvidence(policy.context, evidence);
+  need(equal(next.sources, policy.sources), 'ROOT_GROUP_MEMBERSHIP_SOURCE_CHANGED');
+  need(equal(next.directories, policy.directories), 'ROOT_GROUP_DIRECTORY_CHANGED');
+  need(equal(next.nss, policy.nss), 'ROOT_GROUP_NSS_CHANGED');
+  return next;
+}
+
+export function rootGroupDirectoryAllows(policy, path, identity) {
+  if (!policy?.context.paths.includes(path) || identity.uid !== 0 || identity.gid !== 0 || identity.mode !== 0o775) return false;
+  const observed = policy.directories.find(row => row.path === path);
+  return Boolean(observed && equal(directoryIdentity(observed), identity));
+}
+
+const rootGroupObserverSource = String.raw`
+import errno, grp, hashlib, json, os, pwd, stat, sys
+def fail(code):
+    print(json.dumps({'ok': False, 'code': code})); sys.exit(0)
+if sys.platform != 'linux': fail('ROOT_GROUP_AUDIT_PLATFORM_UNSUPPORTED')
+if os.geteuid() != 0: fail('ROOT_GROUP_AUDIT_REQUIRES_ROOT')
+try:
+    context = json.loads(sys.argv[1]); paths = context['paths']
+    source_paths = ['/etc/group', '/etc/nsswitch.conf', '/etc/passwd']
+    def read_source(path):
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            before = os.fstat(fd)
+            if not stat.S_ISREG(before.st_mode) or before.st_uid != 0 or before.st_mode & 0o022 or before.st_size > 4194304:
+                fail('ROOT_GROUP_MEMBERSHIP_SOURCES_INVALID')
+            data = b''
+            while True:
+                part = os.read(fd, 65536)
+                if not part: break
+                data += part
+                if len(data) > 4194304: fail('ROOT_GROUP_MEMBERSHIP_SOURCES_INVALID')
+            after = os.fstat(fd)
+            keys = ('st_dev', 'st_ino', 'st_mode', 'st_uid', 'st_gid', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+            if any(getattr(before, k) != getattr(after, k) for k in keys): fail('ROOT_GROUP_MEMBERSHIP_SOURCE_CHANGED')
+            row = dict(path=path, dev=after.st_dev, ino=after.st_ino, mode=stat.S_IMODE(after.st_mode),
+                uid=after.st_uid, gid=after.st_gid, size=after.st_size, mtimeNs=str(after.st_mtime_ns),
+                ctimeNs=str(after.st_ctime_ns), sha256=hashlib.sha256(data).hexdigest())
+            return row, data.decode('utf-8')
+        finally: os.close(fd)
+    initial = {p: read_source(p) for p in source_paths}
+    nss = {}
+    for line in initial['/etc/nsswitch.conf'][1].splitlines():
+        line = line.split('#', 1)[0].strip()
+        if ':' not in line: continue
+        key, value = line.split(':', 1)
+        if key in ('passwd', 'group', 'initgroups'):
+            if key in nss: fail('ROOT_GROUP_NSS_UNSUPPORTED')
+            nss[key] = value.split()
+    if any(nss.get(k) not in (['files'], ['files', 'systemd']) for k in ('passwd', 'group')):
+        fail('ROOT_GROUP_NSS_UNSUPPORTED')
+    if 'initgroups' in nss and nss['initgroups'] not in (['files'], ['files', 'systemd']): fail('ROOT_GROUP_NSS_UNSUPPORTED')
+    roots = [line.split(':') for line in initial['/etc/passwd'][1].splitlines() if line.startswith('root:')]
+    if len(roots) != 1 or len(roots[0]) != 7 or roots[0][2:4] != ['0', '0']: fail('ROOT_GROUP_ROOT_ACCOUNT_INVALID')
+    groups = [line.split(':') for line in initial['/etc/group'][1].splitlines() if line.startswith('root:')]
+    if len(groups) != 1 or len(groups[0]) != 4 or groups[0][2] != '0' or groups[0][3]: fail('ROOT_GROUP_ROOT_GROUP_INVALID')
+    account_violations = []
+    accounts = pwd.getpwall(); all_groups = grp.getgrall()
+    if len(accounts) > 100000 or len(all_groups) > 100000: fail('ROOT_GROUP_AUDIT_LIMIT')
+    for account in accounts:
+        if account.pw_uid != 0 and 0 in os.getgrouplist(account.pw_name, account.pw_gid):
+            account_violations.append({'uid': account.pw_uid, 'gid': account.pw_gid})
+    for group in all_groups:
+        if group.gr_gid == 0:
+            for member in group.gr_mem:
+                if pwd.getpwnam(member).pw_uid != 0: account_violations.append({'gid': 0})
+    ancestors = set()
+    for path in paths:
+        while True:
+            ancestors.add(path)
+            parent = os.path.dirname(path)
+            if parent == path: break
+            path = parent
+    directories = []
+    for path in sorted(ancestors):
+        info = os.lstat(path)
+        if not stat.S_ISDIR(info.st_mode) or os.path.realpath(path) != path: fail('ROOT_GROUP_DIRECTORY_NOT_CANONICAL')
+        row = dict(path=path, dev=info.st_dev, ino=info.st_ino, mode=stat.S_IMODE(info.st_mode), uid=info.st_uid, gid=info.st_gid)
+        for field, attribute in [('aclAccess', 'system.posix_acl_access'), ('aclDefault', 'system.posix_acl_default')]:
+            try:
+                os.getxattr(path, attribute, follow_symlinks=False); row[field] = 'present'
+            except OSError as error:
+                if error.errno != errno.ENODATA: fail('ROOT_GROUP_ACL_UNKNOWN')
+                row[field] = 'absent'
+        directories.append(row)
+    unsafe_processes = []; unreadable = []; tasks_checked = 0
+    vanished = (errno.ENOENT, errno.ESRCH)
+    for pid in os.listdir('/proc'):
+        if not pid.isdigit(): continue
+        try: tasks = os.listdir('/proc/' + pid + '/task')
+        except OSError as error:
+            if error.errno not in vanished: unreadable.append({'pid': int(pid)})
+            continue
+        for tid in tasks:
+            if not tid.isdigit(): continue
+            tasks_checked += 1
+            if tasks_checked > 200000: fail('ROOT_GROUP_AUDIT_LIMIT')
+            try:
+                with open('/proc/' + pid + '/task/' + tid + '/status', encoding='utf-8', errors='replace') as stream: status = stream.read(65537)
+                fields = {line.split(':', 1)[0]: line.split(':', 1)[1].split() for line in status.splitlines() if ':' in line}
+                uid = [int(x) for x in fields['Uid']]; gid = [int(x) for x in fields['Gid']]
+                supplemental = [int(x) for x in fields['Groups']]
+                if len(status) > 65536 or len(uid) != 4 or len(gid) != 4: raise ValueError('status')
+                if uid[3] != 0 and (gid[3] == 0 or 0 in supplemental): unsafe_processes.append({'pid': int(pid), 'tid': int(tid)})
+            except OSError as error:
+                if error.errno not in vanished: unreadable.append({'pid': int(pid), 'tid': int(tid)})
+            except (ValueError, KeyError, UnicodeError): unreadable.append({'pid': int(pid), 'tid': int(tid)})
+    for path in source_paths:
+        if read_source(path)[0] != initial[path][0]: fail('ROOT_GROUP_MEMBERSHIP_SOURCE_CHANGED')
+    print(json.dumps({'ok': True, 'evidence': {'version': 1, 'listed': paths, 'directories': directories,
+        'sources': [initial[p][0] for p in source_paths], 'nss': nss,
+        'rootAccount': {'name': 'root', 'uid': 0, 'gid': 0}, 'rootGroup': {'name': 'root', 'gid': 0, 'members': []},
+        'accountsWithRootGroup': account_violations, 'processesWithRootGroup': unsafe_processes,
+        'unreadableProcesses': unreadable}}))
+except Exception:
+    fail('ROOT_GROUP_AUDIT_FAILED')
+`;
+
+export function observeRootGroupDirectories(context) {
+  context = rootGroupContext(context);
+  let result;
+  try {
+    result = JSON.parse(execFileSync('/usr/bin/python3', ['-I', '-S', '-B', '-c', rootGroupObserverSource, JSON.stringify(context)], {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 15000, maxBuffer: 256 * 1024,
+    }));
+  } catch { throw Object.assign(new Error('ROOT_GROUP_AUDIT_FAILED'), { code: 'ROOT_GROUP_AUDIT_FAILED' }); }
+  need(result?.ok === true, typeof result?.code === 'string' && /^ROOT_GROUP_[A-Z_]+$/.test(result.code)
+    ? result.code : 'ROOT_GROUP_AUDIT_FAILED');
+  return result.evidence;
+}
+
+export function assertRootGroupDirectoryPolicy(context, previousPolicy, observer = observeRootGroupDirectories) {
+  context = rootGroupContext(context);
+  if (previousPolicy) need(equal(previousPolicy.context, context), 'ROOT_GROUP_POLICY_CONTEXT_CHANGED');
+  const evidence = observer(context);
+  return previousPolicy ? recheckRootGroupDirectoryEvidence(previousPolicy, evidence)
+    : validateRootGroupDirectoryEvidence(context, evidence);
+}
+
+function protectedPhysicalDirectory(path, code, policy) {
   need(isAbsolute(path) && resolve(path) === path && fs.realpathSync.native(path) === path, code);
   const info = fs.lstatSync(path);
-  need(info.isDirectory() && [0, process.getuid()].includes(info.uid) && !(info.mode & 0o022), code);
+  need(info.isDirectory() && [0, process.getuid()].includes(info.uid)
+    && (!(info.mode & 0o022) || rootGroupDirectoryAllows(policy, path, directoryIdentity(info))), code);
   return directoryIdentity(info);
 }
 function fallbackPackageInventory(target, profile, backup) {
@@ -128,51 +336,84 @@ function fallbackPackageInventory(target, profile, backup) {
   verifyCandidateLinks(target, profile, backup, inventory);
   return inventory;
 }
+function exactFallbackPackage(row, profile) {
+  if (row.type !== 'link') return;
+  const match = /^node_modules\/((?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*)$/.exec(row.path);
+  if (match && row.target === join(profile, '.dsh-module-fallback', 'node_modules', match[1])) return match[1];
+}
+
+/** Read-only target audit, usable before allocating a candidate or copying any tree. */
+export function auditFallbackLinkTargets({ profile, backup, inventory, harnessRelease, rootGroupPolicy }) {
+  const links = [], failures = [];
+  let harnessIdentity;
+  for (const row of inventory.rows.filter(x => x.type === 'link')) {
+    const packageName = exactFallbackPackage(row, profile);
+    if (!packageName) continue;
+    try {
+      need(typeof harnessRelease === 'string', 'FALLBACK_RELOCATION_REQUIRES_HARNESS');
+      harnessIdentity ??= protectedPhysicalDirectory(harnessRelease, 'FALLBACK_RELEASE_INVALID', rootGroupPolicy);
+      need(!below(profile, harnessRelease) && !below(backup, harnessRelease), 'FALLBACK_RELEASE_INVALID');
+      const target = fs.realpathSync.native(row.target);
+      need(target !== harnessRelease && below(harnessRelease, target), 'FALLBACK_TARGET_OUTSIDE_RELEASE');
+      const targetIdentity = protectedPhysicalDirectory(target, 'FALLBACK_TARGET_INVALID', rootGroupPolicy);
+      const packageFile = join(target, 'package.json');
+      need(fs.lstatSync(packageFile).isFile(), 'FALLBACK_PACKAGE_INVALID');
+      need(JSON.parse(fs.readFileSync(packageFile, 'utf8')).name === packageName, 'FALLBACK_PACKAGE_NAME_CHANGED');
+      const targetInventory = fallbackPackageInventory(target, profile, backup);
+      links.push({ path: row.path, packageName, sourceTarget: row.target, target,
+        targetIdentity, targetTreeHash: targetInventory.sha256, targetTreeBytes: targetInventory.bytes });
+    } catch (error) {
+      // Keep diagnostics structured: parser messages can contain file contents.
+      const code = typeof error.code === 'string' && /^[A-Z0-9_]+$/.test(error.code)
+        ? error.code : 'FALLBACK_PREFLIGHT_FAILED';
+      failures.push({ path: row.path, packageName, code });
+    }
+  }
+  return { version: 1, profile, backup, harnessRelease: links.length || failures.length ? harnessRelease ?? null : null,
+    harnessIdentity: harnessIdentity ?? null, rootGroupPolicy, links, failures };
+}
+
+function requireFallbackLinkAudit(audit) {
+  if (audit.failures.length) throw Object.assign(new Error(audit.failures[0].code), {
+    code: audit.failures[0].code, fallbackPreflight: audit,
+  });
+}
+
+export function fallbackAuditSummary(audit) {
+  return { matched: audit.links.length + audit.failures.length, failed: audit.failures.length,
+    failures: audit.failures.slice(0, 32).map(({ packageName, code }) => ({ packageName, code })) };
+}
 
 /** Plan only exact, same-name profile fallback links; never modify their source. */
-export function planCandidateLinkRelocations({ candidate, profile, backup, inventory, harnessRelease }) {
+export function planCandidateLinkRelocations({ candidate, profile, backup, inventory, harnessRelease, rootGroupPolicy }) {
   for (const path of [candidate, profile, backup]) checkDirectory(path);
   for (const root of [profile, backup]) {
     need(!below(root, candidate) && !below(candidate, root), 'OVERLAPPING_RECOVERY_PATHS');
   }
   const actual = installationInventory(candidate);
   need(actual.sha256 === inventory.sha256, 'CANDIDATE_INSTALLATION_CHANGED');
-  const rows = structuredClone(inventory.rows), links = [];
-  let harnessIdentity;
-  for (const row of rows.filter(x => x.type === 'link')) {
-    const match = /^node_modules\/((?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*)$/.exec(row.path);
-    if (!match || row.target !== join(profile, '.dsh-module-fallback', 'node_modules', match[1])) continue;
-    need(typeof harnessRelease === 'string', 'FALLBACK_RELOCATION_REQUIRES_HARNESS');
-    harnessIdentity ??= protectedPhysicalDirectory(harnessRelease, 'FALLBACK_RELEASE_INVALID');
-    need(!below(profile, harnessRelease) && !below(backup, harnessRelease), 'FALLBACK_RELEASE_INVALID');
-    const target = fs.realpathSync.native(row.target);
-    need(target !== harnessRelease && below(harnessRelease, target), 'FALLBACK_TARGET_OUTSIDE_RELEASE');
-    const targetIdentity = protectedPhysicalDirectory(target, 'FALLBACK_TARGET_INVALID');
-    const packageFile = join(target, 'package.json');
-    need(fs.lstatSync(packageFile).isFile(), 'FALLBACK_PACKAGE_INVALID');
-    need(JSON.parse(fs.readFileSync(packageFile, 'utf8')).name === match[1], 'FALLBACK_PACKAGE_NAME_CHANGED');
-    const targetInventory = fallbackPackageInventory(target, profile, backup);
-    links.push({ path: row.path, packageName: match[1], sourceTarget: row.target, target,
-      candidateLinkIdentity: directoryIdentity(fs.lstatSync(join(candidate, row.path))),
-      targetIdentity, targetTreeHash: targetInventory.sha256, targetTreeBytes: targetInventory.bytes });
-    row.target = target;
-  }
+  const audit = auditFallbackLinkTargets({ profile, backup, inventory, harnessRelease, rootGroupPolicy });
+  requireFallbackLinkAudit(audit);
+  const rows = structuredClone(inventory.rows), links = audit.links.map(link => ({ ...link,
+    candidateLinkIdentity: directoryIdentity(fs.lstatSync(join(candidate, link.path))) }));
+  const approved = new Map(links.map(link => [link.path, link.target]));
+  for (const row of rows) if (approved.has(row.path)) row.target = approved.get(row.path);
   const expected = { rows, bytes: inventory.bytes, sha256: sha(JSON.stringify(rows)) };
   // Unrecognized production/backup references still fail the original guard.
   // Validation of the entire plan precedes every candidate write.
   verifyCandidateLinks(candidate, profile, backup, expected);
   return { version: 1, candidate, profile, backup, originalHash: actual.sha256,
-    harnessRelease: links.length ? harnessRelease : null, harnessIdentity: harnessIdentity ?? null,
+    harnessRelease: audit.harnessRelease, harnessIdentity: audit.harnessIdentity, rootGroupPolicy,
     links, expected };
 }
 
 export function recheckCandidateLinkRelocations(plan) {
   if (!plan.links.length) return;
-  need(equal(protectedPhysicalDirectory(plan.harnessRelease, 'FALLBACK_RELEASE_CHANGED'), plan.harnessIdentity),
+  need(equal(protectedPhysicalDirectory(plan.harnessRelease, 'FALLBACK_RELEASE_CHANGED', plan.rootGroupPolicy), plan.harnessIdentity),
     'FALLBACK_RELEASE_CHANGED');
   for (const link of plan.links) {
     need(fs.realpathSync.native(link.sourceTarget) === link.target, 'FALLBACK_SOURCE_TARGET_CHANGED');
-    need(equal(protectedPhysicalDirectory(link.target, 'FALLBACK_TARGET_CHANGED'), link.targetIdentity),
+    need(equal(protectedPhysicalDirectory(link.target, 'FALLBACK_TARGET_CHANGED', plan.rootGroupPolicy), link.targetIdentity),
       'FALLBACK_TARGET_CHANGED');
     const inventory = fallbackPackageInventory(link.target, plan.profile, plan.backup);
     need(inventory.sha256 === link.targetTreeHash, 'FALLBACK_PACKAGE_CHANGED');
@@ -235,6 +476,30 @@ export async function restoreInstallation(options, hooks) {
   const configBefore = installationInventory(profile, monitored);
   const lock = join(profile, '.dsh-install-recovery.lock');
   need(!present(lock), 'RECOVERY_TRANSACTION_EXISTS');
+  const requestedRootGroupDirs = options.rootGroupWritableDirs ?? [];
+  need(Array.isArray(requestedRootGroupDirs), 'ROOT_GROUP_POLICY_SCOPE_INVALID');
+  need(options.checkOnly === undefined || typeof options.checkOnly === 'boolean', 'INVALID_RESTORE_OPTIONS');
+  let rootGroupPolicy;
+  const observeRootGroup = hooks.observeRootGroupDirectories ?? observeRootGroupDirectories;
+  if (requestedRootGroupDirs.length) {
+    const targets = historical.rows.filter(row => exactFallbackPackage(row, profile))
+      .map(row => fs.realpathSync.native(row.target));
+    rootGroupPolicy = assertRootGroupDirectoryPolicy({ paths: requestedRootGroupDirs,
+      harnessRelease: options.harnessRelease, targets }, undefined, observeRootGroup);
+  }
+  const recheckRootGroup = () => {
+    if (rootGroupPolicy) assertRootGroupDirectoryPolicy(rootGroupPolicy.context, rootGroupPolicy, observeRootGroup);
+  };
+  const fallbackPreflight = auditFallbackLinkTargets({ profile, backup, inventory: historical,
+    harnessRelease: options.harnessRelease, rootGroupPolicy });
+  requireFallbackLinkAudit(fallbackPreflight);
+  recheckRootGroup();
+  if (options.checkOnly) {
+    recheckCandidateLinkRelocations(fallbackPreflight);
+    hooks.checkState(); hooks.checkWriters();
+    return { status: 'PREFLIGHT_PASSED', checkOnly: true, fallbackTargets: fallbackPreflight.links.length,
+      rootGroupDirectories: requestedRootGroupDirs.length, servicesStarted: false, databasesRestored: false };
+  }
   const evidence = fs.mkdtempSync(join(workRoot, 'installation-recovery-'));
   fs.chmodSync(evidence, 0o700);
   const candidate = fs.mkdtempSync(join(dirname(profile), '.dsh-install-candidate-'));
@@ -244,7 +509,8 @@ export async function restoreInstallation(options, hooks) {
   const journalFile = join(evidence, 'journal.json');
   const journal = { status: 'preparing', profile, backup, candidate, retained,
     startedAt: new Date().toISOString(), originalHash: original.sha256, backupHash: historical.sha256,
-    receiptHash: sha(receiptBytes), steps: [], installationOnly: true, serviceStarted: false, databaseRestored: false };
+    receiptHash: sha(receiptBytes), fallbackPreflight, rootGroupPolicy, steps: [],
+    installationOnly: true, serviceStarted: false, databaseRestored: false };
   if (present(lock)) {
     durableJson(journalFile, { ...journal, status: 'stopped-existing-transaction' });
     throw Object.assign(new Error('RECOVERY_TRANSACTION_EXISTS'), { code: 'RECOVERY_TRANSACTION_EXISTS', evidence });
@@ -256,6 +522,7 @@ export async function restoreInstallation(options, hooks) {
   const completed = [];
   const renameStep = step => {
     hooks.beforeRename?.(step);
+    recheckRootGroup();
     hooks.checkState(); hooks.checkWriters();
     const source = fs.lstatSync(step.from);
     need(source.dev === step.dev && source.ino === step.inode && !present(step.to), 'RENAME_IDENTITY_CHANGED');
@@ -269,8 +536,10 @@ export async function restoreInstallation(options, hooks) {
     copyInstallation(profile, saved); verifyCopiedInstallation(profile, saved, original);
     durableJson(join(evidence, 'previous-inventory.json'), original);
     copyInstallation(backup, candidate); const staged = verifyCopiedInstallation(backup, candidate, historical);
+    recheckRootGroup();
+    recheckCandidateLinkRelocations(fallbackPreflight);
     const relocationPlan = planCandidateLinkRelocations({ candidate, profile, backup, inventory: staged,
-      harnessRelease: options.harnessRelease });
+      harnessRelease: options.harnessRelease, rootGroupPolicy });
     const { expected, ...relocationReceipt } = relocationPlan;
     durableJson(join(evidence, 'candidate-expected-inventory.json'), expected);
     journal.linkRelocations = relocationReceipt; journal.candidateExpectedHash = expected.sha256;
@@ -281,8 +550,10 @@ export async function restoreInstallation(options, hooks) {
       if (present(join(profile, name))) fs.cpSync(join(profile, name), join(candidate, name), { dereference: false, verbatimSymlinks: true });
     }
     journal.status = 'candidate-check'; save();
+    recheckRootGroup();
     recheckCandidateLinkRelocations(relocationPlan);
     const candidateReport = await hooks.checkRuntime(candidate, receipt.beforeHost);
+    recheckRootGroup();
     recheckCandidateLinkRelocations(relocationPlan);
     durableJson(join(evidence, 'candidate-check.json'), candidateReport);
     hooks.checkState(); hooks.checkWriters(); hooks.checkSpace(0, 0);
@@ -310,13 +581,16 @@ export async function restoreInstallation(options, hooks) {
     need(installationInventory(profile, monitored).sha256 === configBefore.sha256, 'LIVE_CONFIGURATION_CHANGED');
     hooks.checkState(); hooks.checkWriters(); hooks.recheckRuntime(candidateReport, candidate);
     journal.status = 'final-runtime-check'; save();
+    recheckRootGroup();
     recheckCandidateLinkRelocations(relocationPlan);
     const finalReport = await hooks.checkRuntime(profile, receipt.beforeHost);
+    recheckRootGroup();
     recheckCandidateLinkRelocations(relocationPlan);
     durableJson(join(evidence, 'final-check.json'), finalReport);
     hooks.recheckRuntime(finalReport); hooks.checkState(); hooks.checkWriters();
     need(installationInventory(profile).sha256 === expected.sha256
       && installationInventory(profile, monitored).sha256 === configBefore.sha256, 'FINAL_FILES_CHANGED');
+    recheckRootGroup();
     journal.status = 'installation-restored-verified'; journal.finishedAt = new Date().toISOString(); save();
     committed = true;
     fs.unlinkSync(join(lock, 'transaction.json')); fs.rmdirSync(lock); syncDir(profile);
@@ -327,6 +601,8 @@ export async function restoreInstallation(options, hooks) {
     try { save(); } catch { /* Retain filesystem objects even if journal storage fails. */ }
     try {
       // An external writer or restarted service makes a reverse rename unsafe.
+      // A failed root-group audit blocks forward use of the candidate, not
+      // restoration of the original objects under the original rollback guards.
       hooks.checkState(); hooks.checkWriters();
       for (const step of [...completed].reverse()) {
         hooks.checkState(); hooks.checkWriters();
@@ -357,12 +633,18 @@ const property = (unit, name) => run('systemctl', ['show', unit, '--property=' +
 export function parseRestoreOptions(args) {
   const names = ['profile', 'backup', 'receipt', 'work-root', 'harness', 'helper', 'resume-script', 'profile-snapshot',
     'resume-sha256', 'current-manifest-sha256', 'current-lock-sha256', 'backup-manifest-sha256', 'backup-lock-sha256'];
-  const { values } = parseArgs({ args, options: Object.fromEntries(names.map(name => [name, { type: 'string' }])), strict: true, allowPositionals: false });
+  const options = { ...Object.fromEntries(names.map(name => [name, { type: 'string' }])),
+    'root-group-writable-dir': { type: 'string', multiple: true }, 'check-only': { type: 'boolean', default: false } };
+  const { values } = parseArgs({ args, options, strict: true, allowPositionals: false });
   for (const name of names) {
     const value = values[name];
     need(typeof value === 'string' && (name.endsWith('sha256') ? /^[a-f0-9]{64}$/.test(value) :
       isAbsolute(value) && resolve(value) === value && value !== '/' && !/[\s%\\]/.test(value)), 'INVALID_RESTORE_OPTIONS');
   }
+  const rootGroupDirs = values['root-group-writable-dir'] ?? [];
+  need(rootGroupDirs.length <= 64 && new Set(rootGroupDirs).size === rootGroupDirs.length
+    && rootGroupDirs.every(path => isAbsolute(path) && resolve(path) === path && path !== '/' && !/[\s%\\\0]/.test(path)),
+  'INVALID_RESTORE_OPTIONS');
   need(values.profile === '/root/.dsh/profiles/web' && values.harness === '/opt/deepseek-harness', 'UNSUPPORTED_SERVICE_PROFILE');
   return values;
 }
@@ -464,16 +746,18 @@ async function main() {
       }
     };
     const result = await restoreInstallation({ profile: o.profile, backup: o.backup, receipt: o.receipt, workRoot: o['work-root'],
-      harnessRelease: canonical,
+      harnessRelease: canonical, rootGroupWritableDirs: o['root-group-writable-dir'] ?? [], checkOnly: o['check-only'],
       currentManifestHash: o['current-manifest-sha256'], currentLockHash: o['current-lock-sha256'],
       backupManifestHash: o['backup-manifest-sha256'], backupLockHash: o['backup-lock-sha256'] }, {
       checkState, checkWriters, checkSpace, checkRuntime, recheckRuntime,
+      observeRootGroupDirectories,
       progress: (phase, directory) => { evidence = directory; console.log(JSON.stringify({ phase, privateEvidence: directory })); }
     });
     console.log(JSON.stringify(result));
   } catch (e) {
     console.error(JSON.stringify({ status: 'RESTORE_STOP', code: e.code ?? 'RECOVERY_CHECK_FAILED',
-      recoveryStatus: e.recoveryStatus, privateEvidence: e.evidence ?? evidence }));
+      recoveryStatus: e.recoveryStatus, privateEvidence: e.evidence ?? evidence,
+      fallbackPreflight: e.fallbackPreflight ? fallbackAuditSummary(e.fallbackPreflight) : undefined }));
     process.exitCode = 1;
   }
 }
