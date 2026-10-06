@@ -1,8 +1,14 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
+import { lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
+import { isAbsolute, join, relative } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
-import { inspectStartupFile, parseResumeOptions, recognizedStartHooks, startupAction, writerProcessName } from '../resume-dsh-existing-install.mjs';
+import { inspectStartupFile, parseResumeOptions, recognizedStartHooks, snapshotHostBundles,
+  snapshotHostPatches, snapshotWorkspace, startupAction, verifyResumeConfiguration, writerProcessName } from '../resume-dsh-existing-install.mjs';
 
 const exe = '/example/bin/node', script = '/example/ops/session-check.mjs';
 const hook = `{ path=${exe} ; argv[]=${exe} ${script} ; ignore_errors=yes ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }`;
@@ -129,3 +135,400 @@ test('startup evidence records file and ancestor changes for the final recheck',
   rows.get(protectedExe).ino++;
   assert.notDeepEqual(before, inspectStartupFile(protectedExe, protectedOptions, io));
 });
+
+function option(base, name, value) {
+  const next = [...base], index = next.indexOf(name);
+  if (index !== -1) next.splice(index, 2);
+  if (value !== undefined) next.push(name, value);
+  return next;
+}
+
+const envHash = 'a'.repeat(64), rootHash = 'b'.repeat(64);
+const snapshotArgs = [...option(args, '--baseline'),
+  '--profile-snapshot', '/example/private/profile-snapshot',
+  '--snapshot-env-sha256', envHash, '--snapshot-root-sha256', rootHash];
+
+test('snapshot mode binds an explicit source and both hashes without requiring a recovery baseline', () => {
+  const before = [...snapshotArgs];
+  const parsed = parseResumeOptions(snapshotArgs);
+  assert.equal(parsed.baseline, undefined);
+  assert.equal(parsed['profile-snapshot'], '/example/private/profile-snapshot');
+  assert.equal(parsed['snapshot-env-sha256'], envHash);
+  assert.equal(parsed['snapshot-root-sha256'], rootHash);
+  assert.deepEqual(snapshotArgs, before);
+  assert.equal(parseResumeOptions(args).baseline, '/example/baseline');
+});
+
+test('exactly one historical source is required and snapshot hashes cannot decorate baseline mode', () => {
+  assert.throws(() => parseResumeOptions(option(args, '--baseline')), { code: 'INVALID_BASELINE_SOURCE' });
+  assert.throws(() => parseResumeOptions([...snapshotArgs, '--baseline', '/example/baseline']), { code: 'INVALID_BASELINE_SOURCE' });
+  for (const name of ['--snapshot-env-sha256', '--snapshot-root-sha256']) {
+    assert.throws(() => parseResumeOptions([...args, name, envHash]), { code: 'INVALID_SNAPSHOT_HASHES' }, name);
+  }
+});
+
+test('snapshot mode rejects missing, nonhex, uppercase and inexact-length hash bindings', () => {
+  for (const name of ['--snapshot-env-sha256', '--snapshot-root-sha256']) {
+    for (const value of [undefined, '', 'a'.repeat(63), 'a'.repeat(65), 'g'.repeat(64), 'A'.repeat(64), envHash + '\n']) {
+      assert.throws(() => parseResumeOptions(option(snapshotArgs, name, value)),
+        { code: 'INVALID_SNAPSHOT_HASHES' }, `${name}: ${JSON.stringify(value)}`);
+    }
+  }
+});
+
+test('snapshot source paths follow the same absolute-path restrictions as recovery baselines', () => {
+  for (const value of ['relative/snapshot', '/example/with space', '/example/%snapshot', '/example/with\\separator']) {
+    assert.throws(() => parseResumeOptions(option(snapshotArgs, '--profile-snapshot', value)),
+      { code: 'INVALID_PROFILE_SNAPSHOT' }, value);
+  }
+});
+
+const hostBundles = ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'];
+function manifestFixture() {
+  const oldManifest = {
+    private: true,
+    dsh: { profile: { bundles: [...hostBundles, '@deepseek-ai/dsh-pkw-base', '@deepseek-ai/dsh-extension-pkw'] } },
+    dependencies: {
+      '@deepseek-ai/dsh-base': 'file:/example/harness/base',
+      '@deepseek-ai/dsh-web-app': 'file:/example/harness/web',
+      '@example/host-extension': '1.0.0',
+      '@deepseek-ai/dsh-pkw-web': '0.1.0-pkw.1',
+      '@deepseek-ai/dsh-extension-pkw': '0.1.0-pkw.1',
+    },
+  };
+  const currentManifest = structuredClone(oldManifest);
+  currentManifest.dsh.profile = { bundles: [...hostBundles], patchReload: 'live' };
+  currentManifest.dependencies['@deepseek-ai/dsh-pkw-web'] = '0.2.0-pkw.1';
+  currentManifest.dependencies['@deepseek-ai/dsh-extension-pkw'] = '0.2.0-pkw.1';
+  return { oldManifest, currentManifest };
+}
+
+test('historical host bundles permit only PKW dependency-version changes without rewriting either manifest', () => {
+  const { oldManifest, currentManifest } = manifestFixture();
+  const oldBefore = structuredClone(oldManifest), currentBefore = structuredClone(currentManifest);
+  const actual = snapshotHostBundles(oldManifest, currentManifest);
+  assert.deepEqual(actual, hostBundles);
+  actual.push('@example/unrelated');
+  assert.deepEqual(oldManifest, oldBefore);
+  assert.deepEqual(currentManifest, currentBefore);
+  assert.equal(Object.hasOwn(oldManifest.dsh.profile, 'patchReload'), false);
+});
+
+test('unknown historical PKW bundles and any currently enabled PKW bundle reject recovery', () => {
+  {
+    const { oldManifest, currentManifest } = manifestFixture();
+    oldManifest.dsh.profile.bundles.push('@deepseek-ai/dsh-pkw-extra');
+    assert.throws(() => snapshotHostBundles(oldManifest, currentManifest), { code: 'SNAPSHOT_PKW_BUNDLE_UNSUPPORTED' });
+  }
+  for (const name of ['@deepseek-ai/dsh-pkw-base', '@deepseek-ai/dsh-extension-pkw', '@deepseek-ai/dsh-pkw-extra']) {
+    const { oldManifest, currentManifest } = manifestFixture();
+    currentManifest.dsh.profile.bundles.push(name);
+    assert.throws(() => snapshotHostBundles(oldManifest, currentManifest), { code: 'SNAPSHOT_PKW_STILL_BUNDLED' }, name);
+  }
+});
+
+test('host bundle membership and order cannot change under a PKW-only recovery', () => {
+  for (const bundles of [[...hostBundles].reverse(), hostBundles.slice(0, 1), [...hostBundles, '@example/new-host']]) {
+    const { oldManifest, currentManifest } = manifestFixture();
+    currentManifest.dsh.profile.bundles = bundles;
+    assert.throws(() => snapshotHostBundles(oldManifest, currentManifest), { code: 'SNAPSHOT_HOST_BUNDLES_CHANGED' });
+  }
+});
+
+test('changing, adding or removing a non-PKW dependency rejects the historical comparison', () => {
+  for (const mutate of [
+    deps => { deps['@example/host-extension'] = '2.0.0'; },
+    deps => { deps['@deepseek-ai/dsh-base'] = 'file:/example/other-harness/base'; },
+    deps => { deps['@example/added'] = '1.0.0'; },
+    deps => { delete deps['@example/host-extension']; },
+  ]) {
+    const { oldManifest, currentManifest } = manifestFixture();
+    mutate(currentManifest.dependencies);
+    assert.throws(() => snapshotHostBundles(oldManifest, currentManifest), { code: 'SNAPSHOT_HOST_DEPENDENCIES_CHANGED' });
+  }
+});
+
+test('malformed historical or current manifest structures cannot become a host baseline', () => {
+  for (const side of ['oldManifest', 'currentManifest']) {
+    for (const mutate of [
+      manifest => { delete manifest.dsh.profile.bundles; },
+      manifest => { manifest.dsh.profile.bundles.push(hostBundles[0]); },
+      manifest => { manifest.dsh.profile.bundles[0] = ' ' + hostBundles[0]; },
+      manifest => { manifest.dependencies = []; },
+      manifest => { delete manifest.dependencies; },
+      manifest => { manifest.dependencies['@example/host-extension'] = null; },
+    ]) {
+      const fixture = manifestFixture();
+      mutate(fixture[side]);
+      assert.throws(() => snapshotHostBundles(fixture.oldManifest, fixture.currentManifest),
+        { code: 'INVALID_SNAPSHOT_MANIFEST' }, side);
+    }
+  }
+});
+
+test('snapshot patch filtering preserves host overrides, mixed inserts and inert JS expressions', () => {
+  const expression = { __jsExpr: "(() => { throw new Error('must-not-execute'); })()" };
+  const jsonPatch = { id: 'storage-json', config: { root: expression } };
+  const domainPatch = { id: 'storage-domain', config: { backend: 'json', routes: { workspace: 'json' } } };
+  const workspacePatch = { id: 'workspace', config: { defaultWorkspace: 'workspace_example' } };
+  const hostInsert = { id: 'host-extra', name: '@example/host-extra', config: { expression } };
+  const prefixLookalike = { id: 'pkwish', name: '@example/pkw-tool', config: { enabled: true } };
+  const nestedHost = { id: 'nested-host', name: '@example/nested-host' };
+  const patches = [jsonPatch, domainPatch, workspacePatch,
+    { id: 'pkw-sync', config: { enabled: false } },
+    { id: 'custom-attachment', name: '@deepseek-ai/dsh-pkw-attachments', config: {} },
+    { id: 'custom-extension', name: '@deepseek-ai/dsh-extension-pkw' },
+    { insert: [hostInsert, { id: 'pkw-notes', name: '@deepseek-ai/dsh-pkw-notes' }, prefixLookalike,
+      { id: 'host-group', group: true, config: [nestedHost, { id: 'pkw-nested', name: '@deepseek-ai/dsh-pkw-tasks' }] }] },
+  ];
+  const before = structuredClone(patches);
+  const actual = snapshotHostPatches(patches);
+  assert.deepEqual(actual, [jsonPatch, domainPatch, workspacePatch,
+    { insert: [hostInsert, prefixLookalike, { id: 'host-group', group: true, config: [nestedHost] }] }]);
+  assert.deepEqual(patches, before);
+  actual[0].config.root.__jsExpr = 'changed-only-in-result';
+  assert.deepEqual(patches, before);
+});
+
+test('a PKW-targeted patch cannot silently discard a host insertion', () => {
+  const hostInsert = { id: 'host-extra', name: '@example/host-extra' };
+  for (const target of [{ id: 'pkw-web' }, { name: '@deepseek-ai/dsh-pkw-web' }]) {
+    const patches = [{ ...target, insert: [{ id: 'pkw-only', name: '@deepseek-ai/dsh-pkw-notes' }, hostInsert] }];
+    const before = structuredClone(patches);
+    assert.throws(() => snapshotHostPatches(patches), { code: 'SNAPSHOT_MIXED_PKW_PATCH' });
+    assert.deepEqual(patches, before);
+  }
+  assert.deepEqual(snapshotHostPatches([{ id: 'pkw-web', insert: [{ id: 'pkw-only' }] }]), []);
+});
+
+test('snapshot patch filtering rejects malformed containers instead of treating them as an empty layer', () => {
+  for (const patches of [undefined, null, {}, [null], [[]], [{ insert: {} }]]) {
+    assert.throws(() => snapshotHostPatches(patches), { code: 'INVALID_SNAPSHOT_PATCHES' });
+  }
+});
+
+function workspaceRow() {
+  return { id: 'workspace', name: '@deepseek-ai/dsh-workspace',
+    config: { root: { __jsExpr: "dshHomePath('example-workspace')" } } };
+}
+
+test('a unique enabled root workspace is preserved as a detached comparison snapshot', () => {
+  const workspace = workspaceRow(), rows = [{ id: 'unrelated', name: '@example/plugin' }, workspace];
+  const before = structuredClone(rows);
+  const actual = snapshotWorkspace(rows);
+  assert.deepEqual(actual, workspace);
+  actual.config.root.__jsExpr = 'changed-only-in-result';
+  assert.deepEqual(rows, before);
+  assert.deepEqual(snapshotWorkspace([{ ...workspace, disabled: false, isolate: {} }]),
+    { ...workspace, disabled: false, isolate: {} });
+});
+
+test('missing, duplicate, disabled, nested or isolated workspace services cannot authorize startup', () => {
+  for (const rows of [undefined, {}, [],
+    [workspaceRow(), workspaceRow()],
+    [workspaceRow(), { ...workspaceRow(), id: 'second-workspace' }],
+    [{ ...workspaceRow(), disabled: true }],
+    [{ ...workspaceRow(), name: '@example/replacement-workspace' }],
+    [{ ...workspaceRow(), id: 'renamed-workspace' }],
+    [{ id: 'group', group: true, config: [workspaceRow()] }],
+    [{ ...workspaceRow(), group: true, config: [] }],
+    [{ ...workspaceRow(), isolate: { workspace: true } }],
+  ]) assert.throws(() => snapshotWorkspace(rows), { code: 'INVALID_SNAPSHOT_WORKSPACE' });
+});
+
+test('conflicting host and PKW identities cannot disappear through snapshot filtering', () => {
+  for (const row of [
+    { id: 'storage-json', name: '@deepseek-ai/dsh-pkw-web' },
+    { id: 'pkw-storage', name: '@deepseek-ai/dsh-storage-json' },
+  ]) {
+    for (const patches of [[row], [{ insert: [row] }]]) {
+      const before = structuredClone(patches);
+      assert.throws(() => snapshotHostPatches(patches), { code: 'SNAPSHOT_MIXED_PKW_PATCH' });
+      assert.deepEqual(patches, before);
+    }
+  }
+});
+
+test('removing a PKW group rejects host descendants at any nested config or insert level', () => {
+  const host = { id: 'host-child', name: '@example/host-child' };
+  for (const descendant of [host,
+    { id: 'pkw-child', group: true, config: [host] },
+    { id: 'pkw-child', insert: [host] },
+  ]) {
+    const row = { id: 'pkw-group', group: true, config: [descendant] };
+    for (const patches of [[row], [{ insert: [row] }]]) {
+      assert.throws(() => snapshotHostPatches(patches), { code: 'SNAPSHOT_MIXED_PKW_PATCH' });
+    }
+  }
+  const onlyPkw = { id: 'pkw-group', group: true, config: [
+    { id: 'pkw-child', insert: [{ id: 'pkw-leaf' }] },
+    { id: 'pkw-nested', group: true, config: [{ name: '@deepseek-ai/dsh-pkw-notes' }] },
+  ] };
+  assert.deepEqual(snapshotHostPatches([onlyPkw]), []);
+  assert.deepEqual(snapshotHostPatches([{ insert: [onlyPkw] }]), [{ insert: [] }]);
+});
+
+test('historical relative plugin names remain anchored to the original profile location', () => {
+  const originalFile = '/example/live-profile/cordis.patch.yml';
+  const patches = [{ id: 'existing-target', name: './assertion-name.mjs', insert: [
+    { id: 'local-plugin', name: './relative-plugin.mjs' },
+    { id: 'host-group', group: true, config: [{ id: 'nested-local', name: '../shared/plugin.mjs' }] },
+  ] }];
+  const before = structuredClone(patches);
+  const actual = snapshotHostPatches(patches, originalFile);
+  assert.equal(actual[0].name, './assertion-name.mjs', 'target assertions must remain literal');
+  assert.equal(actual[0].insert[0].name, pathToFileURL('/example/live-profile/relative-plugin.mjs').href);
+  assert.equal(actual[0].insert[1].config[0].name, pathToFileURL('/example/shared/plugin.mjs').href);
+  assert.deepEqual(patches, before);
+});
+
+async function fixtureTreeFingerprint(root) {
+  const rows = [];
+  async function visit(path) {
+    const info = await lstat(path), name = relative(root, path) || '.';
+    if (info.isDirectory()) {
+      rows.push([name, 'directory', info.mode & 0o7777]);
+      for (const entry of (await readdir(path)).sort()) await visit(join(path, entry));
+    } else {
+      assert.equal(info.isFile(), true, `Unexpected fixture file type: ${name}`);
+      rows.push([name, 'file', info.mode & 0o7777, createHash('sha256').update(await readFile(path)).digest('hex')]);
+    }
+  }
+  await visit(root);
+  return rows;
+}
+
+test('real Harness reconstructs a saved profile without installing, evaluating plugins or changing fixture files',
+  { skip: !process.env.DSH_RESUME_TEST_HARNESS }, async t => {
+    const harness = process.env.DSH_RESUME_TEST_HARNESS;
+    assert.equal(isAbsolute(harness), true, 'DSH_RESUME_TEST_HARNESS must be an absolute Harness path');
+    const boot = await import(pathToFileURL(join(harness, 'packages/boot/app-boot/lib/index.js')).href);
+    const yaml = createRequire(join(harness, 'vendor/include/package.json'))('js-yaml');
+    const H = await import('../recover-dsh-without-pkw.mjs');
+    const root = await mkdtemp(join(tmpdir(), 'dsh-resume-harness-'));
+    const marker = Symbol.for(`dsh-resume-fixture-imports:${root}`);
+    const profile = join(root, 'current-profile'), snapshot = join(root, 'saved-profile');
+    const install = join(root, 'install'), installAnchor = join(install, 'package.json');
+    const homePatchFile = join(root, 'home', 'cordis.patch.yml');
+    const libraries = ['@deepseek-ai/dsh-storage', '@deepseek-ai/dsh-storage-json',
+      '@deepseek-ai/dsh-storage-domain', '@deepseek-ai/dsh-workspace', '@deepseek-ai/dsh-host-webserver'];
+    const bundleName = '@example/host-bundle';
+    const bundle = join(profile, 'node_modules', bundleName);
+    const hostPatch = `- id: storage-json
+  config:
+    root: !!js dshHomePath('storages')
+- id: workspace
+  config:
+    label: saved-workspace
+- insert:
+    - id: local-extra
+      name: ./relative-plugin.mjs
+`;
+    const oldPatch = hostPatch + `- id: pkw-notes
+  config:
+    enabled: false
+`;
+    const homePatch = '- id: host-webserver\n  config:\n    port: 4567\n';
+    const options = { profile, installAnchor, snapshot, homePatchFile };
+    try {
+      for (const path of [profile, snapshot, install, join(root, 'home'), bundle]) await mkdir(path, { recursive: true });
+      await writeFile(installAnchor, JSON.stringify({ name: '@example/fixture-install', private: true }));
+      const currentManifest = { private: true, type: 'module',
+        dependencies: Object.fromEntries([bundleName, ...libraries].map(name => [name, '1.0.0'])),
+        dsh: { profile: { bundles: [bundleName], patchReload: 'live' } } };
+      const oldManifest = structuredClone(currentManifest);
+      oldManifest.dsh.profile.bundles.push('@deepseek-ai/dsh-pkw-base');
+      oldManifest.dependencies['@deepseek-ai/dsh-pkw-base'] = '0.1.0-pkw.1';
+      delete oldManifest.dsh.profile.patchReload;
+      await writeFile(join(profile, 'package.json'), JSON.stringify(currentManifest));
+      await writeFile(join(snapshot, 'package.json'), JSON.stringify(oldManifest));
+      await writeFile(join(profile, 'cordis.patch.yml'), hostPatch);
+      await writeFile(join(snapshot, 'cordis.patch.yml'), oldPatch);
+      await writeFile(join(snapshot, 'generated-cordis.yml'), '[]\n');
+      await writeFile(homePatchFile, homePatch);
+      await writeFile(join(snapshot, 'home-cordis.patch.yml'), homePatch);
+      await writeFile(join(profile, 'relative-plugin.mjs'), "throw new Error('composition must not import or activate plugins');\n");
+      await writeFile(join(bundle, 'package.json'), JSON.stringify({ name: bundleName, type: 'module',
+        version: '1.0.0', main: 'index.js', dsh: { bundle: { patch: 'cordis.patch.yml' } } }));
+      await writeFile(join(bundle, 'index.js'), "throw new Error('composition must not import bundle entry');\n");
+      await writeFile(join(bundle, 'cordis.patch.yml'), `- insert:
+    - id: storage
+      name: '@deepseek-ai/dsh-storage'
+    - id: storage-json
+      name: '@deepseek-ai/dsh-storage-json'
+      config:
+        root: /example/default-storage
+    - id: storage-domain
+      name: '@deepseek-ai/dsh-storage-domain'
+      config:
+        backend: json
+    - id: workspace
+      name: '@deepseek-ai/dsh-workspace'
+      config:
+        label: bundle-workspace
+    - id: host-webserver
+      name: '@deepseek-ai/dsh-host-webserver'
+      config:
+        port: 4566
+`);
+      for (const name of libraries) {
+        const path = join(profile, 'node_modules', name);
+        await mkdir(path, { recursive: true });
+        await writeFile(join(path, 'package.json'), JSON.stringify({ name, version: '1.0.0', type: 'module', main: 'index.js' }));
+        await writeFile(join(path, 'index.js'),
+          `const key = Symbol.for(${JSON.stringify(Symbol.keyFor(marker))});\n`
+          + `(globalThis[key] ??= new Set()).add(${JSON.stringify(name)});\nexport const fixtureLibrary = true;\n`);
+      }
+      await assert.rejects(lstat(join(snapshot, 'node_modules')), { code: 'ENOENT' });
+      assert.throws(() => boot.resolveBundleDir('dsh', '@deepseek-ai/dsh-pkw-base', installAnchor, profile),
+        /cannot resolve profile bundle/, 'the historical PKW bundle is intentionally not installed');
+
+      await t.test('reconstructs with current host bundles and the original relative-plugin anchor', async () => {
+        const before = await fixtureTreeFingerprint(root), compositions = [];
+        const inspectedBoot = { ...boot, composeEntries(layers, warn) {
+          const rows = boot.composeEntries(layers, warn);
+          compositions.push(structuredClone(rows));
+          return rows;
+        } };
+        const result = await verifyResumeConfiguration(options, { boot: inspectedBoot, yaml, H });
+        assert.equal(result.sourceKind, 'saved-profile-inputs-current-host-bundles');
+        assert.equal(compositions.length, 2);
+        for (const rows of compositions) {
+          assert.equal(rows.find(row => row.id === 'local-extra').name, pathToFileURL(join(profile, 'relative-plugin.mjs')).href);
+          assert.equal(rows.some(row => row.id === 'pkw-notes'), false);
+          assert.deepEqual(rows.find(row => row.id === 'storage-json').config.root, { __jsExpr: "dshHomePath('storages')" });
+          assert.equal(rows.find(row => row.id === 'workspace').config.label, 'saved-workspace');
+        }
+        assert.deepEqual([...globalThis[marker]].sort(), [...libraries].sort(), 'all five installed library entries were imported');
+        assert.ok(result.inputs.some(([path]) => path === join(bundle, 'cordis.patch.yml')));
+        assert.ok(result.inputs.some(([path]) => path === join(snapshot, 'package.json')));
+        assert.equal(result.inputs.some(([path]) => path.startsWith(join(snapshot, 'node_modules'))), false);
+        assert.deepEqual(await fixtureTreeFingerprint(root), before);
+      });
+
+      for (const [title, changedPatch, rejection] of [
+        ['rejects a different historical JSON root', oldPatch.replace("root: !!js dshHomePath('storages')", 'root: /example/different-storage'),
+          { code: 'JSON_STORAGE_CONFIG_CHANGED' }],
+        ['rejects different historical workspace configuration', oldPatch.replace('label: saved-workspace', 'label: other-workspace'),
+          { code: 'WORKSPACE_CONFIG_CHANGED' }],
+      ]) {
+        await t.test(title, async () => {
+          await writeFile(join(snapshot, 'cordis.patch.yml'), changedPatch);
+          try {
+            const before = await fixtureTreeFingerprint(root);
+            await assert.rejects(verifyResumeConfiguration(options, { boot, yaml, H }), rejection);
+            assert.deepEqual(await fixtureTreeFingerprint(root), before);
+          } finally { await writeFile(join(snapshot, 'cordis.patch.yml'), oldPatch); }
+        });
+      }
+      await t.test('rejects a missing historical home layer when a current home patch exists', async () => {
+        await rm(join(snapshot, 'home-cordis.patch.yml'));
+        const before = await fixtureTreeFingerprint(root);
+        await assert.rejects(verifyResumeConfiguration(options, { boot, yaml, H }), { code: 'SNAPSHOT_HOME_LAYER_MISSING' });
+        assert.deepEqual(await fixtureTreeFingerprint(root), before);
+      });
+    } finally {
+      delete globalThis[marker];
+      await rm(root, { recursive: true, force: true });
+    }
+  });
