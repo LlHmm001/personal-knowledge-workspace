@@ -16,12 +16,20 @@ export function parseResumeOptions(args) {
     'profile', 'harness', 'helper', 'baseline', 'receipt', 'data-disk',
     'trusted-host', 'start-pre-exe', 'start-pre-script',
     'protected-executable-dir', 'protected-executable-owner',
+    'profile-snapshot', 'snapshot-env-sha256', 'snapshot-root-sha256',
   ].map(name => [name, { type: 'string' }]));
   const { values } = parseArgs({ args, options, strict: true, allowPositionals: false });
-  for (const name of ['profile', 'harness', 'helper', 'baseline', 'receipt', 'data-disk']) {
+  if (Boolean(values.baseline) === Boolean(values['profile-snapshot'])) {
+    throw Object.assign(new Error('Choose exactly one historical source'), { code: 'INVALID_BASELINE_SOURCE' });
+  }
+  for (const name of ['profile', 'harness', 'helper', 'receipt', 'data-disk', values.baseline ? 'baseline' : 'profile-snapshot']) {
     if (!values[name] || !isAbsolute(values[name]) || /[\s%\\]/.test(values[name])) {
       throw Object.assign(new Error('Invalid path option'), { code: 'INVALID_' + name.toUpperCase().replaceAll('-', '_') });
     }
+  }
+  const snapshotHashes = [values['snapshot-env-sha256'], values['snapshot-root-sha256']];
+  if (values['profile-snapshot'] ? !snapshotHashes.every(x => /^[a-f0-9]{64}$/.test(x ?? '')) : snapshotHashes.some(x => x !== undefined)) {
+    throw Object.assign(new Error('Snapshot hashes must be explicitly supplied'), { code: 'INVALID_SNAPSHOT_HASHES' });
   }
   if (!/^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$/.test(values['trusted-host'] ?? '')) {
     throw Object.assign(new Error('Invalid host option'), { code: 'INVALID_TRUSTED_HOST' });
@@ -66,6 +74,156 @@ export function recognizedStartHooks(pre, post, executable, script) {
     && commands[0].index === 0 && pre.endsWith(' }')
     && commands[0][1] === executable && commands[0][2] === executable + ' ' + script
     && commands[0][3] === 'yes';
+}
+
+const snapshotPkwBundles = new Set(['@deepseek-ai/dsh-pkw-base', '@deepseek-ai/dsh-extension-pkw']);
+const snapshotPkwName = name => typeof name === 'string' && (name.startsWith('@deepseek-ai/dsh-pkw-') || name === '@deepseek-ai/dsh-extension-pkw');
+const snapshotPkwEntry = row => snapshotPkwName(row?.name) || /^pkw(?:-|$)/.test(row?.id ?? '');
+const snapshotHostIds = new Set(['storage', 'storage-json', 'storage-domain', 'workspace', 'host-webserver']);
+const snapshotHostNames = new Set(['@deepseek-ai/dsh-storage', '@deepseek-ai/dsh-storage-json',
+  '@deepseek-ai/dsh-storage-domain', '@deepseek-ai/dsh-workspace', '@deepseek-ai/dsh-host-webserver']);
+const snapshotHostEntry = row => snapshotHostIds.has(row?.id) || snapshotHostNames.has(row?.name);
+const snapshotError = code => { throw Object.assign(new Error(code), { code }); };
+
+export function snapshotHostBundles(oldManifest, currentManifest) {
+  const lists = [oldManifest, currentManifest].map(m => m?.dsh?.profile?.bundles);
+  if (lists.some(list => !Array.isArray(list) || !list.every(x => typeof x === 'string' && x.trim() === x && x)
+      || new Set(list).size !== list.length)) snapshotError('INVALID_SNAPSHOT_MANIFEST');
+  if (lists[0].some(name => snapshotPkwName(name) && !snapshotPkwBundles.has(name))) snapshotError('SNAPSHOT_PKW_BUNDLE_UNSUPPORTED');
+  if (lists[1].some(snapshotPkwName)) snapshotError('SNAPSHOT_PKW_STILL_BUNDLED');
+  const host = lists[0].filter(name => !snapshotPkwBundles.has(name));
+  if (!equal(host, lists[1])) snapshotError('SNAPSHOT_HOST_BUNDLES_CHANGED');
+  const deps = m => {
+    if (!m.dependencies || typeof m.dependencies !== 'object' || Array.isArray(m.dependencies)
+        || Object.values(m.dependencies).some(x => typeof x !== 'string')) snapshotError('INVALID_SNAPSHOT_MANIFEST');
+    return Object.fromEntries(Object.entries(m.dependencies).filter(([name]) => !snapshotPkwName(name)));
+  };
+  if (!equal(deps(oldManifest), deps(currentManifest))) snapshotError('SNAPSHOT_HOST_DEPENDENCIES_CHANGED');
+  return host;
+}
+
+// A historical PKW layer is excluded only from the comparison tree. Host
+// overrides are retained; the production tree is never filtered or changed.
+export function snapshotHostPatches(patches, originalFile) {
+  if (!Array.isArray(patches)) snapshotError('INVALID_SNAPSHOT_PATCHES');
+  const checkRemoval = row => {
+    if (snapshotHostEntry(row)) snapshotError('SNAPSHOT_MIXED_PKW_PATCH');
+    for (const children of [row?.insert, row?.group ? row.config : undefined]) {
+      if (children === undefined) continue;
+      if (!Array.isArray(children)) snapshotError('INVALID_SNAPSHOT_PATCHES');
+      for (const child of children) {
+        if (!snapshotPkwEntry(child)) snapshotError('SNAPSHOT_MIXED_PKW_PATCH');
+        checkRemoval(child);
+      }
+    }
+  };
+  const inserts = rows => {
+    if (!Array.isArray(rows)) snapshotError('INVALID_SNAPSHOT_PATCHES');
+    const result = [];
+    for (const row of rows) {
+      if (!row || typeof row !== 'object' || Array.isArray(row)) snapshotError('INVALID_SNAPSHOT_PATCHES');
+      if (snapshotPkwEntry(row)) { checkRemoval(row); continue; }
+      const next = structuredClone(row);
+      if (originalFile && typeof next.name === 'string' && (isAbsolute(next.name) || next.name.startsWith('./') || next.name.startsWith('../'))) {
+        next.name = pathToFileURL(resolve(dirname(originalFile), next.name)).href;
+      }
+      if (next.group && Array.isArray(next.config)) next.config = inserts(next.config);
+      result.push(next);
+    }
+    return result;
+  };
+  const result = [];
+  for (const patch of patches) {
+    if (!patch || typeof patch !== 'object' || Array.isArray(patch)) snapshotError('INVALID_SNAPSHOT_PATCHES');
+    if (snapshotPkwEntry(patch)) {
+      checkRemoval(patch);
+      continue;
+    }
+    const next = structuredClone(patch);
+    if (next.insert !== undefined) next.insert = inserts(next.insert);
+    result.push(next);
+  }
+  return result;
+}
+
+export function snapshotWorkspace(rows) {
+  if (!Array.isArray(rows)) snapshotError('INVALID_SNAPSHOT_WORKSPACE');
+  const matches = [];
+  const visit = list => { for (const row of list) {
+    if (row?.id === 'workspace' || row?.name === '@deepseek-ai/dsh-workspace') matches.push(row);
+    if (row?.group && Array.isArray(row.config)) visit(row.config);
+  } };
+  visit(rows);
+  const row = matches[0];
+  if (matches.length !== 1 || !rows.includes(row) || row.id !== 'workspace'
+      || row.name !== '@deepseek-ai/dsh-workspace' || row.disabled || row.group
+      || row.isolate != null && Object.keys(row.isolate).length) snapshotError('INVALID_SNAPSHOT_WORKSPACE');
+  return structuredClone(row);
+}
+
+/** Compose configuration without CLI boot, link repair, installs or writes. */
+export async function verifyResumeConfiguration({ profile, installAnchor, baselineFile, snapshot, homePatchFile }, { boot, yaml, H }) {
+  const watched = new Map();
+  const watch = path => {
+    const bytes = fs.readFileSync(path), hash = createHash('sha256').update(bytes).digest('hex');
+    if (watched.has(path) && watched.get(path) !== hash) snapshotError('BUNDLE_FILES_CHANGED_DURING_CHECK');
+    watched.set(path, hash);
+    return bytes;
+  };
+  const js = new yaml.Type('tag:yaml.org,2002:js', { kind: 'scalar', construct: v => ({ __jsExpr: v }) });
+  const schema = yaml.JSON_SCHEMA.extend(js);
+  const parse = path => yaml.load(watch(path), { schema });
+  const currentManifest = JSON.parse(watch(join(profile, 'package.json')));
+  const bundlePatch = name => {
+    const dir = boot.resolveBundleDir('dsh', name, installAnchor, profile);
+    const manifest = JSON.parse(watch(join(dir, 'package.json'))), declared = manifest.dsh?.bundle?.patch;
+    if (typeof declared !== 'string' || !declared || isAbsolute(declared)) snapshotError('SNAPSHOT_BUNDLE_PATCH_INVALID');
+    const path = resolve(dir, declared), below = relative(dir, path);
+    if (!below || below === '..' || below.startsWith('../') || isAbsolute(below)) snapshotError('SNAPSHOT_BUNDLE_PATCH_INVALID');
+    watch(path);
+    return path;
+  };
+  for (const name of currentManifest.dsh.profile.bundles) bundlePatch(name);
+  if (fs.existsSync(join(profile, 'cordis.patch.yml'))) watch(join(profile, 'cordis.patch.yml'));
+  if (fs.existsSync(homePatchFile)) watch(homePatchFile);
+  const p = boot.loadProfileDirectory('dsh', profile, installAnchor);
+  const warnings = [];
+  const rows = boot.composeEntries([...p.layers.map(x => x.patches), p.patches,
+    boot.loadOptionalPatches('dsh', homePatchFile) ?? []], x => warnings.push(x));
+  if (warnings.length) snapshotError('CONFIG_PATCH_WARNING');
+  let historicalRows;
+  if (snapshot) {
+    const oldManifest = JSON.parse(watch(join(snapshot, 'package.json')));
+    const bundles = snapshotHostBundles(oldManifest, currentManifest);
+    const emptyRoot = parse(join(snapshot, 'generated-cordis.yml'));
+    if (!Array.isArray(emptyRoot) || emptyRoot.length) snapshotError('SNAPSHOT_ROOT_NOT_EMPTY');
+    const layers = bundles.map(name => boot.loadOverlayPatches('dsh', bundlePatch(name)));
+    const oldPatches = snapshotHostPatches(parse(join(snapshot, 'cordis.patch.yml')), join(profile, 'cordis.patch.yml'));
+    const homePath = join(snapshot, 'home-cordis.patch.yml');
+    if (!fs.existsSync(homePath) && fs.existsSync(homePatchFile)) snapshotError('SNAPSHOT_HOME_LAYER_MISSING');
+    const oldHome = fs.existsSync(homePath) ? snapshotHostPatches(parse(homePath), homePatchFile) : [];
+    const historicalWarnings = [];
+    historicalRows = boot.composeEntries([...layers, oldPatches, oldHome], x => historicalWarnings.push(x));
+    if (historicalWarnings.length) snapshotError('SNAPSHOT_PATCH_WARNING');
+  } else {
+    historicalRows = parse(baselineFile);
+  }
+  try { H.verifyRecovery(rows, H.jsonStorageConfig(historicalRows)); }
+  catch (e) {
+    if (String(e.message).startsWith('Original JSON adapter configuration changed')) snapshotError('JSON_STORAGE_CONFIG_CHANGED');
+    throw e;
+  }
+  if (!equal(snapshotWorkspace(rows), snapshotWorkspace(historicalRows))) snapshotError('WORKSPACE_CONFIG_CHANGED');
+  const profileRequire = createRequire(join(profile, 'package.json'));
+  for (const name of ['@deepseek-ai/dsh-storage', '@deepseek-ai/dsh-storage-json', '@deepseek-ai/dsh-storage-domain', '@deepseek-ai/dsh-workspace', '@deepseek-ai/dsh-host-webserver']) {
+    const entry = profileRequire.resolve(name);
+    watch(entry);
+    await import(pathToFileURL(entry).href);
+  }
+  for (const [path, expected] of watched) {
+    if (createHash('sha256').update(fs.readFileSync(path)).digest('hex') !== expected) snapshotError('BUNDLE_FILES_CHANGED_DURING_CHECK');
+  }
+  return { sourceKind: snapshot ? 'saved-profile-inputs-current-host-bundles' : 'verified-effective-config', inputs: [...watched] };
 }
 
 function fileIdentity(path, info) {
@@ -122,6 +280,7 @@ export function inspectStartupFile(path, { role, privateDirectory, approvedOwner
 
 async function resume(options) {
   const { profile, harness, helper, baseline, receipt: receiptFile } = options;
+  const snapshot = options['profile-snapshot'];
   const host = options['trusted-host'];
   const unit = 'deepseek-harness.service', pkwUnit = 'pkw-collaboration.service';
   let preflightPassed = false;
@@ -131,6 +290,14 @@ const need = (ok, code) => { if (!ok) fail(code); };
 const sha = b => createHash('sha256').update(b).digest('hex');
 const run = (cmd, args) => execFileSync(cmd, args, { encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'] });
 const prop = (name, service = unit) => run('systemctl', ['show', service, '--property=' + name, '--value']).trim();
+const present = path => { try { fs.lstatSync(path); return true; } catch (e) { if (e.code === 'ENOENT') return false; throw e; } };
+const snapshotIdentity = paths => paths.map(path => {
+  const info = fs.lstatSync(path), directory = path === snapshot;
+  need(fs.realpathSync(path) === path && (directory ? info.isDirectory() : info.isFile())
+    && info.uid === 0 && info.gid === 0 && (info.mode & 0o7777) === (directory ? 0o700 : 0o600)
+    && (directory || info.nlink === 1), 'SNAPSHOT_FILE_IDENTITY_UNSAFE');
+  return fileIdentity(path, info);
+});
 function reviewStartHooks(pre, post) {
   const executable = options['start-pre-exe'];
   const script = options['start-pre-script'];
@@ -193,14 +360,31 @@ try {
   const properties = Object.fromEntries(names.map(k => [k, prop(k)]));
   const unitEnv = prop('Environment'), managerEnv = run('systemctl', ['show-environment']);
   let environment = H.recoveryEnvironment(managerEnv, unitEnv, properties);
-  check = 'verified-baseline'; target = baseline;
-  const old = JSON.parse(fs.readFileSync(join(baseline, 'receipt.json'), 'utf8'));
-  need(old.status === 'configuration-verified-service-not-started' && old.checks?.hostStorage === 'json', 'BASELINE_NOT_VERIFIED');
   const envPath = H.confirmedEnvironmentFile(properties.EnvironmentFiles);
-  need(envPath && old.environmentFile?.path === envPath, 'ENVIRONMENT_SOURCE_CHANGED');
+  need(envPath, 'ENVIRONMENT_SOURCE_CHANGED');
   const envBytes = fs.readFileSync(envPath);
   H.environmentFileIdentity(fs.lstatSync(envPath));
-  need(H.inspectEnvironmentFile(envBytes).sha256 === old.environmentFile.sha256, 'ENVIRONMENT_HASH_CHANGED');
+  let historicalFile, historicalInputs, snapshotPaths = [], initialSnapshotIdentity;
+  if (baseline) {
+    check = 'verified-baseline'; target = baseline;
+    const old = JSON.parse(fs.readFileSync(join(baseline, 'receipt.json'), 'utf8'));
+    need(old.status === 'configuration-verified-service-not-started' && old.checks?.hostStorage === 'json', 'BASELINE_NOT_VERIFIED');
+    need(old.environmentFile?.path === envPath, 'ENVIRONMENT_SOURCE_CHANGED');
+    need(H.inspectEnvironmentFile(envBytes).sha256 === old.environmentFile.sha256, 'ENVIRONMENT_HASH_CHANGED');
+    historicalFile = join(baseline, 'effective.yml');
+    historicalInputs = [join(baseline, 'receipt.json'), historicalFile];
+  } else {
+    check = 'profile-snapshot'; target = snapshot;
+    const home = join(snapshot, 'home-cordis.patch.yml');
+    snapshotPaths = [snapshot, ...['package.json', 'cordis.patch.yml', 'generated-cordis.yml', 'agent-journal.env'].map(name => join(snapshot, name)), ...(present(home) ? [home] : [])];
+    initialSnapshotIdentity = snapshotIdentity(snapshotPaths);
+    need(sha(fs.readFileSync(join(snapshot, 'agent-journal.env'))) === options['snapshot-env-sha256']
+      && H.inspectEnvironmentFile(envBytes).sha256 === options['snapshot-env-sha256'], 'ENVIRONMENT_HASH_CHANGED');
+    need(sha(fs.readFileSync(join(snapshot, 'generated-cordis.yml'))) === options['snapshot-root-sha256'], 'SNAPSHOT_ROOT_HASH_CHANGED');
+    need(present(home) || !present('/root/.dsh/cordis.patch.yml'), 'SNAPSHOT_HOME_LAYER_MISSING');
+    snapshotHostBundles(JSON.parse(fs.readFileSync(join(snapshot, 'package.json'), 'utf8')), JSON.parse(fs.readFileSync(join(profile, 'package.json'), 'utf8')));
+    historicalInputs = snapshotPaths.filter(path => path !== snapshot);
+  }
   check = 'host-hashes'; target = receiptFile;
   const receipt = JSON.parse(fs.readFileSync(receiptFile, 'utf8'));
   need(receipt.profile === profile && receipt.beforeHost && Object.keys(receipt.beforeHost).length > 0, 'HOST_BASELINE_MISSING');
@@ -212,7 +396,7 @@ try {
     entries.push(entry);
   }
   check = 'inputs'; target = profile;
-  const monitoredInputs = [join(profile, 'package.json'), join(profile, 'pnpm-lock.yaml'), join(profile, 'cordis.patch.yml'), '/root/.dsh/cordis.patch.yml', envPath, helper, join(baseline, 'effective.yml'), ...entries, ...startHookEvidence.files];
+  const monitoredInputs = [join(profile, 'package.json'), join(profile, 'pnpm-lock.yaml'), join(profile, 'cordis.patch.yml'), '/root/.dsh/cordis.patch.yml', envPath, helper, ...historicalInputs, ...entries, ...startHookEvidence.files];
   const fingerprint = () => monitoredInputs.map(p => [p, fs.existsSync(p) ? sha(fs.readFileSync(p)) : null]);
   const before = fingerprint(), identity = H.runtimeDirectoryIdentity(harness);
   const disk = options['data-disk'];
@@ -225,44 +409,42 @@ try {
   check = 'runtime-config'; target = profile;
   const code = H.runtimeEnvironmentProbe(harness, identity) + `
     const { createRequire } = await import('node:module');
-    const { readFileSync } = await import('node:fs');
-    const { isDeepStrictEqual } = await import('node:util');
     const H = await import(${JSON.stringify(pathToFileURL(helper).href)});
+    const R = await import(${JSON.stringify(import.meta.url)});
     const boot = await import('@deepseek-ai/dsh-app-boot');
-    const p = boot.loadProfileDirectory('dsh', ${JSON.stringify(profile)}, ${JSON.stringify(join(identity.canonical, 'apps/cli/package.json'))});
-    const warnings = [];
-    const rows = boot.composeEntries([...p.layers.map(x => x.patches), p.patches, boot.loadOptionalPatches('dsh', '/root/.dsh/cordis.patch.yml') ?? []], x => warnings.push(x));
-    if (warnings.length) throw new Error('CONFIG_PATCH_WARNING');
     const yaml = createRequire(${JSON.stringify(join(identity.canonical, 'vendor/include/package.json'))})('js-yaml');
-    const js = new yaml.Type('tag:yaml.org,2002:js', {kind:'scalar', construct: v => ({__jsExpr:v})});
-    const baseline = yaml.load(readFileSync(${JSON.stringify(join(baseline, 'effective.yml'))}, 'utf8'), {schema:yaml.JSON_SCHEMA.extend(js)});
-    H.verifyRecovery(rows, H.jsonStorageConfig(baseline));
-    if (!isDeepStrictEqual(rows.find(x => x.id === 'workspace'), baseline.find(x => x.id === 'workspace'))) throw new Error('WORKSPACE_CONFIG_CHANGED');
-    const profileRequire = createRequire(${JSON.stringify(join(profile, 'package.json'))});
-    for (const name of ['@deepseek-ai/dsh-storage', '@deepseek-ai/dsh-storage-json', '@deepseek-ai/dsh-storage-domain', '@deepseek-ai/dsh-workspace', '@deepseek-ai/dsh-host-webserver']) {
-      const { pathToFileURL } = await import('node:url');
-      await import(pathToFileURL(profileRequire.resolve(name)).href);
-    }
-    process.stdout.write(' config-verified');
+    const report = await R.verifyResumeConfiguration(${JSON.stringify({ profile, installAnchor: join(identity.canonical, 'apps/cli/package.json'), baselineFile: historicalFile, snapshot, homePatchFile: '/root/.dsh/cordis.patch.yml' })}, { boot, yaml, H });
+    process.stdout.write(' config-verified ' + JSON.stringify(report));
   `;
+  let configEvidence;
   try {
     const result = execFileSync('/usr/local/bin/node', ['--import', 'tsx/esm', '--input-type=module', '-e', code], { cwd: identity.canonical, env: environment, timeout: 30000, encoding: 'utf8', maxBuffer: 524288, stdio: ['ignore', 'pipe', 'pipe'] });
-    need(result === 'environment-verified config-verified', 'PROBE_OUTPUT_CHANGED');
+    const prefix = 'environment-verified config-verified ';
+    need(result.startsWith(prefix), 'PROBE_OUTPUT_CHANGED');
+    configEvidence = JSON.parse(result.slice(prefix.length));
+    need(Array.isArray(configEvidence.inputs) && configEvidence.inputs.every(row => Array.isArray(row) && row.length === 2
+      && typeof row[0] === 'string' && isAbsolute(row[0]) && /^[a-f0-9]{64}$/.test(row[1])), 'PROBE_OUTPUT_CHANGED');
+    fs.writeFileSync(join(evidence, 'configuration-evidence.json'), JSON.stringify(configEvidence, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
   } catch (e) {
     fs.writeFileSync(join(evidence, 'probe-error.log'), e.stderr ?? String(e.code ?? 'PROBE_FAILED'), { mode: 0o600 });
-    const category = ['CONFIG_PATCH_WARNING', 'WORKSPACE_CONFIG_CHANGED'].find(x => String(e.stderr).includes(x));
+    const category = ['CONFIG_PATCH_WARNING', 'WORKSPACE_CONFIG_CHANGED', 'JSON_STORAGE_CONFIG_CHANGED', 'SNAPSHOT_PATCH_WARNING',
+      'SNAPSHOT_ROOT_NOT_EMPTY', 'SNAPSHOT_BUNDLE_PATCH_INVALID', 'SNAPSHOT_HOME_LAYER_MISSING',
+      'INVALID_SNAPSHOT_WORKSPACE', 'INVALID_SNAPSHOT_PATCHES', 'SNAPSHOT_MIXED_PKW_PATCH',
+      'BUNDLE_FILES_CHANGED_DURING_CHECK'].find(x => String(e.stderr).includes(x));
     fail(category ?? H.runtimePreflightFailure(e));
   }
   check = 'final-recheck'; target = profile; writers();
   H.assertRuntimeDirectories(harness, identity, harness, undefined);
   need(equal(before, fingerprint()), 'FILES_CHANGED_DURING_CHECK');
+  need(configEvidence.inputs.every(([path, expected]) => sha(fs.readFileSync(path)) === expected), 'BUNDLE_FILES_CHANGED_DURING_CHECK');
+  if (snapshot) need(equal(initialSnapshotIdentity, snapshotIdentity(snapshotPaths)), 'SNAPSHOT_CHANGED_DURING_CHECK');
   need(equal(startHookEvidence, reviewStartHooks(prop('ExecStartPre'), prop('ExecStartPost'))), 'START_HOOK_CHANGED_DURING_CHECK');
   need(prop('ExecStart') === command && prop('ExecStartPre') === startPre && prop('ExecStartPost') === startPost && names.every(k => prop(k) === properties[k]) && prop('Environment') === unitEnv && run('systemctl', ['show-environment']) === managerEnv, 'UNIT_CHANGED_DURING_CHECK');
   need(['failed', 'inactive'].includes(prop('ActiveState')) && prop('ActiveState', pkwUnit) === 'inactive', 'SERVICE_STATE_CHANGED');
-  console.log('DSH_PREFLIGHT_OK; no configuration or database was replaced.');
+  console.log(JSON.stringify({ status: 'DSH_PREFLIGHT_OK', sourceKind: configEvidence.sourceKind, privateEvidence: evidence, configurationReplaced: false, databaseRestored: false }));
   preflightPassed = true;
 } catch (e) {
-  console.error(JSON.stringify({ status: 'STOP', check, target: e.details?.path ?? target, code: e.code ?? 'CHECK_FAILED', ...(e.details ? { details: e.details } : {}), ...(evidence ? { privateEvidence: evidence } : {}) }));
+  console.error(JSON.stringify({ status: 'STOP', check, target: e.details?.path ?? (typeof e.path === 'string' ? e.path : target), code: e.code ?? 'CHECK_FAILED', ...(e.details ? { details: e.details } : {}), ...(evidence ? { privateEvidence: evidence } : {}) }));
   process.exitCode = 1;
 }
   if (preflightPassed) {
