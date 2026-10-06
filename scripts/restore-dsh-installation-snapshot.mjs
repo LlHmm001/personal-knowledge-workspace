@@ -113,6 +113,96 @@ export function verifyCandidateLinks(candidate, liveProfile, backup, inventory) 
   }
 }
 
+const directoryIdentity = info => ({ dev: info.dev, ino: info.ino,
+  mode: info.mode & 0o7777, uid: info.uid, gid: info.gid });
+function protectedPhysicalDirectory(path, code) {
+  need(isAbsolute(path) && resolve(path) === path && fs.realpathSync.native(path) === path, code);
+  const info = fs.lstatSync(path);
+  need(info.isDirectory() && [0, process.getuid()].includes(info.uid) && !(info.mode & 0o022), code);
+  return directoryIdentity(info);
+}
+function fallbackPackageInventory(target, profile, backup) {
+  const inventory = installationInventory(target, fs.readdirSync(target).sort());
+  // This binds this package's files and literal links, not its transitive
+  // dependency closure. Links inside the package may not borrow an installation.
+  verifyCandidateLinks(target, profile, backup, inventory);
+  return inventory;
+}
+
+/** Plan only exact, same-name profile fallback links; never modify their source. */
+export function planCandidateLinkRelocations({ candidate, profile, backup, inventory, harnessRelease }) {
+  for (const path of [candidate, profile, backup]) checkDirectory(path);
+  for (const root of [profile, backup]) {
+    need(!below(root, candidate) && !below(candidate, root), 'OVERLAPPING_RECOVERY_PATHS');
+  }
+  const actual = installationInventory(candidate);
+  need(actual.sha256 === inventory.sha256, 'CANDIDATE_INSTALLATION_CHANGED');
+  const rows = structuredClone(inventory.rows), links = [];
+  let harnessIdentity;
+  for (const row of rows.filter(x => x.type === 'link')) {
+    const match = /^node_modules\/((?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*)$/.exec(row.path);
+    if (!match || row.target !== join(profile, '.dsh-module-fallback', 'node_modules', match[1])) continue;
+    need(typeof harnessRelease === 'string', 'FALLBACK_RELOCATION_REQUIRES_HARNESS');
+    harnessIdentity ??= protectedPhysicalDirectory(harnessRelease, 'FALLBACK_RELEASE_INVALID');
+    need(!below(profile, harnessRelease) && !below(backup, harnessRelease), 'FALLBACK_RELEASE_INVALID');
+    const target = fs.realpathSync.native(row.target);
+    need(target !== harnessRelease && below(harnessRelease, target), 'FALLBACK_TARGET_OUTSIDE_RELEASE');
+    const targetIdentity = protectedPhysicalDirectory(target, 'FALLBACK_TARGET_INVALID');
+    const packageFile = join(target, 'package.json');
+    need(fs.lstatSync(packageFile).isFile(), 'FALLBACK_PACKAGE_INVALID');
+    need(JSON.parse(fs.readFileSync(packageFile, 'utf8')).name === match[1], 'FALLBACK_PACKAGE_NAME_CHANGED');
+    const targetInventory = fallbackPackageInventory(target, profile, backup);
+    links.push({ path: row.path, packageName: match[1], sourceTarget: row.target, target,
+      candidateLinkIdentity: directoryIdentity(fs.lstatSync(join(candidate, row.path))),
+      targetIdentity, targetTreeHash: targetInventory.sha256, targetTreeBytes: targetInventory.bytes });
+    row.target = target;
+  }
+  const expected = { rows, bytes: inventory.bytes, sha256: sha(JSON.stringify(rows)) };
+  // Unrecognized production/backup references still fail the original guard.
+  // Validation of the entire plan precedes every candidate write.
+  verifyCandidateLinks(candidate, profile, backup, expected);
+  return { version: 1, candidate, profile, backup, originalHash: actual.sha256,
+    harnessRelease: links.length ? harnessRelease : null, harnessIdentity: harnessIdentity ?? null,
+    links, expected };
+}
+
+export function recheckCandidateLinkRelocations(plan) {
+  if (!plan.links.length) return;
+  need(equal(protectedPhysicalDirectory(plan.harnessRelease, 'FALLBACK_RELEASE_CHANGED'), plan.harnessIdentity),
+    'FALLBACK_RELEASE_CHANGED');
+  for (const link of plan.links) {
+    need(fs.realpathSync.native(link.sourceTarget) === link.target, 'FALLBACK_SOURCE_TARGET_CHANGED');
+    need(equal(protectedPhysicalDirectory(link.target, 'FALLBACK_TARGET_CHANGED'), link.targetIdentity),
+      'FALLBACK_TARGET_CHANGED');
+    const inventory = fallbackPackageInventory(link.target, plan.profile, plan.backup);
+    need(inventory.sha256 === link.targetTreeHash, 'FALLBACK_PACKAGE_CHANGED');
+  }
+}
+
+/** Only a fresh candidate is changed; exact metadata and source inventories remain authoritative. */
+export function applyCandidateLinkRelocations(candidate, plan) {
+  need(candidate === plan.candidate && installationInventory(candidate).sha256 === plan.originalHash,
+    'CANDIDATE_INSTALLATION_CHANGED');
+  recheckCandidateLinkRelocations(plan);
+  for (const [index, link] of plan.links.entries()) {
+    const path = join(candidate, link.path), info = fs.lstatSync(path);
+    need(info.isSymbolicLink() && equal(directoryIdentity(info), link.candidateLinkIdentity)
+      && fs.readlinkSync(path) === link.sourceTarget, 'FALLBACK_CANDIDATE_LINK_CHANGED');
+    const temp = path + `.pkw-relocation-${process.pid}-${index}`;
+    fs.symlinkSync(link.target, temp);
+    const created = fs.lstatSync(temp);
+    need(created.uid === info.uid && created.gid === info.gid && (created.mode & 0o7777) === (info.mode & 0o7777),
+      'FALLBACK_LINK_METADATA_CHANGED');
+    need(equal(directoryIdentity(fs.lstatSync(path)), link.candidateLinkIdentity)
+      && fs.readlinkSync(path) === link.sourceTarget, 'FALLBACK_CANDIDATE_LINK_CHANGED');
+    fs.renameSync(temp, path); syncDir(dirname(path));
+  }
+  need(installationInventory(candidate).sha256 === plan.expected.sha256, 'CANDIDATE_INSTALLATION_CHANGED');
+  verifyCandidateLinks(candidate, plan.profile, plan.backup, plan.expected);
+  recheckCandidateLinkRelocations(plan);
+  return plan.expected;
+}
+
 /**
  * A journal precedes every rename. Interrupted transactions retain original
  * objects and a lock; a subsequent invocation refuses to overwrite that state.
@@ -179,12 +269,21 @@ export async function restoreInstallation(options, hooks) {
     copyInstallation(profile, saved); verifyCopiedInstallation(profile, saved, original);
     durableJson(join(evidence, 'previous-inventory.json'), original);
     copyInstallation(backup, candidate); const staged = verifyCopiedInstallation(backup, candidate, historical);
-    verifyCandidateLinks(candidate, profile, backup, staged);
+    const relocationPlan = planCandidateLinkRelocations({ candidate, profile, backup, inventory: staged,
+      harnessRelease: options.harnessRelease });
+    const { expected, ...relocationReceipt } = relocationPlan;
+    durableJson(join(evidence, 'candidate-expected-inventory.json'), expected);
+    journal.linkRelocations = relocationReceipt; journal.candidateExpectedHash = expected.sha256;
+    journal.relocationState = 'planned'; save();
+    applyCandidateLinkRelocations(candidate, relocationPlan);
+    journal.relocationState = 'applied'; save();
     for (const name of monitored) {
       if (present(join(profile, name))) fs.cpSync(join(profile, name), join(candidate, name), { dereference: false, verbatimSymlinks: true });
     }
     journal.status = 'candidate-check'; save();
+    recheckCandidateLinkRelocations(relocationPlan);
     const candidateReport = await hooks.checkRuntime(candidate, receipt.beforeHost);
+    recheckCandidateLinkRelocations(relocationPlan);
     durableJson(join(evidence, 'candidate-check.json'), candidateReport);
     hooks.checkState(); hooks.checkWriters(); hooks.checkSpace(0, 0);
     need(sha(fs.readFileSync(options.receipt)) === sha(receiptBytes), 'DEPLOYMENT_RECEIPT_CHANGED');
@@ -192,7 +291,7 @@ export async function restoreInstallation(options, hooks) {
       && installationInventory(profile).sha256 === original.sha256, 'CURRENT_INSTALLATION_CHANGED');
     need(equal(installationInventory(backup).identities, historical.identities)
       && installationInventory(backup).sha256 === historical.sha256, 'BACKUP_INSTALLATION_CHANGED');
-    need(installationInventory(candidate).sha256 === historical.sha256, 'CANDIDATE_INSTALLATION_CHANGED');
+    need(installationInventory(candidate).sha256 === expected.sha256, 'CANDIDATE_INSTALLATION_CHANGED');
     need(installationInventory(profile, monitored).sha256 === configBefore.sha256, 'LIVE_CONFIGURATION_CHANGED');
     hooks.recheckRuntime(candidateReport);
     journal.status = 'switching'; save();
@@ -207,14 +306,16 @@ export async function restoreInstallation(options, hooks) {
         journal.steps.push(step); save(); renameStep(step);
       }
     }
-    need(installationInventory(profile).sha256 === historical.sha256, 'FINAL_INSTALLATION_MISMATCH');
+    need(installationInventory(profile).sha256 === expected.sha256, 'FINAL_INSTALLATION_MISMATCH');
     need(installationInventory(profile, monitored).sha256 === configBefore.sha256, 'LIVE_CONFIGURATION_CHANGED');
     hooks.checkState(); hooks.checkWriters(); hooks.recheckRuntime(candidateReport, candidate);
     journal.status = 'final-runtime-check'; save();
+    recheckCandidateLinkRelocations(relocationPlan);
     const finalReport = await hooks.checkRuntime(profile, receipt.beforeHost);
+    recheckCandidateLinkRelocations(relocationPlan);
     durableJson(join(evidence, 'final-check.json'), finalReport);
     hooks.recheckRuntime(finalReport); hooks.checkState(); hooks.checkWriters();
-    need(installationInventory(profile).sha256 === historical.sha256
+    need(installationInventory(profile).sha256 === expected.sha256
       && installationInventory(profile, monitored).sha256 === configBefore.sha256, 'FINAL_FILES_CHANGED');
     journal.status = 'installation-restored-verified'; journal.finishedAt = new Date().toISOString(); save();
     committed = true;
@@ -363,6 +464,7 @@ async function main() {
       }
     };
     const result = await restoreInstallation({ profile: o.profile, backup: o.backup, receipt: o.receipt, workRoot: o['work-root'],
+      harnessRelease: canonical,
       currentManifestHash: o['current-manifest-sha256'], currentLockHash: o['current-lock-sha256'],
       backupManifestHash: o['backup-manifest-sha256'], backupLockHash: o['backup-lock-sha256'] }, {
       checkState, checkWriters, checkSpace, checkRuntime, recheckRuntime,
