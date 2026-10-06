@@ -282,6 +282,71 @@ test('successful restore verifies all twelve peers at both locations while prese
   assert.ok(journal.steps.every(step => step.state === 'done'));
 });
 
+for (const mask of [0o077, 0o022]) {
+  test(`complete restoration preserves exact metadata under child umask ${mask.toString(8)}`, () => {
+    // Changing umask in this test worker would affect concurrent filesystem tests.
+    // Links are created under the child's mask: unlike Linux, macOS stores a
+    // symlink mode that can vary with umask. This does not claim to repair old
+    // macOS link modes created under a different mask.
+    const code = `
+      import assert from 'node:assert/strict';
+      import * as fs from 'node:fs';
+      import { createHash } from 'node:crypto';
+      import { execFileSync } from 'node:child_process';
+      import { createRequire } from 'node:module';
+      import { tmpdir } from 'node:os';
+      import { dirname, join } from 'node:path';
+      import { installationFiles, installationInventory, restoreInstallation,
+        verifyCopiedInstallation } from ${JSON.stringify(moduleUrl.href)};
+      const hash = ${hash}, hashFile = ${hashFile}, exists = ${exists}, inside = ${inside};
+      const hostNames = ${JSON.stringify(hostNames)};
+      ${[temporaryRoot, write, packageFixture, copyMembers, fixture, runtimeProbe,
+        hooksFor, assertProtected, assertOriginalObjects].map(fn => fn.toString()).join('\n')}
+      process.umask(${mask});
+      const cleanup = [], f = fixture({ after(fn) { cleanup.push(fn); } });
+      try {
+        for (const directory of [f.profile, f.backup]) {
+          const modules = join(directory, 'node_modules'), varied = join(modules, 'permission-fixture');
+          fs.mkdirSync(varied); fs.mkdirSync(join(varied, 'empty'));
+          fs.writeFileSync(join(varied, 'plain.txt'), 'metadata fixture\\n');
+          fs.writeFileSync(join(varied, 'run.mjs'), 'export const runnable = true;\\n');
+          fs.symlinkSync('plain.txt', join(varied, 'raw-link'));
+          fs.chmodSync(modules, 0o755);
+          fs.chmodSync(varied, 0o755);
+          fs.chmodSync(join(varied, 'empty'), 0o750);
+          fs.chmodSync(join(varied, 'plain.txt'), 0o644);
+          fs.chmodSync(join(varied, 'run.mjs'), 0o755);
+        }
+        f.original = installationInventory(f.profile);
+        f.historical = installationInventory(f.backup);
+        const { hooks, calls } = hooksFor(f);
+        const result = await restoreInstallation(f.options, hooks);
+        assert.equal(result.status, 'installation-restored-verified');
+        assert.equal(installationInventory(f.profile).sha256, f.historical.sha256);
+        assert.deepEqual(installationInventory(f.backup), f.historical);
+        assertOriginalObjects(f, result.retainedOriginal);
+        assertProtected(f);
+        verifyCopiedInstallation(f.backup, f.profile, f.historical);
+        assert.deepEqual(calls.runtime, [result.candidate, f.profile]);
+        for (const directory of [f.profile, result.retainedOriginal,
+          join(result.evidence, 'previous-installation')]) {
+          const rows = installationInventory(directory).rows;
+          for (const [name, mode] of [['', 0o755], ['/empty', 0o750], ['/plain.txt', 0o644], ['/run.mjs', 0o755]]) {
+            assert.equal(rows.find(row => row.path === 'node_modules/permission-fixture' + name).mode, mode);
+          }
+          assert.equal(fs.readlinkSync(join(directory, 'node_modules/permission-fixture/raw-link')), 'plain.txt');
+        }
+        assert.equal(exists(join(f.profile, '.dsh-install-recovery.lock')), false);
+        process.stdout.write(JSON.stringify({status: result.status, mask: process.umask().toString(8)}));
+      } finally { for (const fn of cleanup.reverse()) fn(); }
+    `;
+    const result = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-'], {
+      input: code, encoding: 'utf8', stdio: 'pipe', timeout: 20000,
+    }));
+    assert.deepEqual(result, { status: 'installation-restored-verified', mask: mask.toString(8) });
+  });
+}
+
 for (let failedStep = 1; failedStep <= 9; failedStep++) {
   test(`failure before rename ${failedStep} reverses completed renames without replacing original files`, async t => {
     const f = fixture(t);
