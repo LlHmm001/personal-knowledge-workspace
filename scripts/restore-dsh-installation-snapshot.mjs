@@ -71,7 +71,11 @@ function syncDir(path) { const fd = fs.openSync(path, 'r'); try { fs.fsyncSync(f
 function copyInstallation(source, destination) {
   for (const name of installationFiles) {
     if (present(join(source, name))) fs.cpSync(join(source, name), join(destination, name), {
-      recursive: true, dereference: false, verbatimSymlinks: true, preserveTimestamps: true, errorOnExist: true, force: false
+      recursive: true, dereference: false, verbatimSymlinks: true, preserveTimestamps: true, errorOnExist: true, force: false,
+      // The native recursive branch applies the caller's umask to directories.
+      // A filter selects the branch that restores each source mode explicitly.
+      // Ownership, content and link checks below remain exact and mandatory.
+      filter: () => true
     });
   }
 }
