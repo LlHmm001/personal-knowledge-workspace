@@ -12,12 +12,23 @@
  *
  * Transaction shape
  * -----------------
- * Everything after the first `stop` is one recoverable block. If any of it fails —
- * snapshot, drift re-check, promotion, repointing, starting the new release, or
- * verification — the previous release is restored, `current` is repointed back, the
- * service is started again, and BOTH errors are reported: the original one and any
- * error raised while recovering. A failed recovery is never reported as a successful
- * rollback, and a failure before the first stop does not stop anything at all.
+ * Everything after the first `stop` is one recoverable block, and its order is fixed:
+ *
+ *   1. stop the release in service and prove it stopped
+ *   2. snapshot its declared inputs — the rollback material, taken before anything else can fail
+ *   3. re-check that the candidate did not drift since the install digest
+ *   4. promote the candidate and replace `current` by an atomic rename
+ *   5. start the new release and verify it
+ *
+ * Any failure from step 1 onwards is recovered: the release that was in service is started again,
+ * `current` is pointed back at it by an atomic rename, and the snapshot is applied only when it is
+ * complete. The release tree is never copied over, so it keeps every file it already had. Without
+ * a complete snapshot nothing is written back at all, and a fresh stop must be proven first,
+ * because starting the old release beside a possibly live writer would create a second writer.
+ *
+ * Both errors are reported: the original one as the cause and any error raised while recovering.
+ * A failed recovery is never reported as a successful rollback, a deployment that failed is never
+ * reported as activated, and a failure before the stop does not stop anything at all.
  *
  * Reachability and acceptance stay separate: a rollback only has to prove the previous
  * release came back up; whether the deployment is acceptable is the verifier's decision.
@@ -82,6 +93,51 @@ export async function assertSnapshotFree(snapshotDir) {
 }
 
 /**
+ * Point `current` at one release without ever leaving it missing.
+ *
+ * Removing the link and creating a new one opens a window in which the installation has no
+ * entry point at all: a reader arriving inside it sees a broken installation rather than the
+ * release that is still in service. The link is therefore built beside the entry point and
+ * moved onto it by rename, which is atomic within the installation root. The temporary name is
+ * unique per call so two switches cannot fight over it, and it is removed on every failure path.
+ */
+export async function pointCurrentAtomically(root, releaseRelativePath, ops = {}) {
+  const entry = join(root, 'current')
+  const staged = join(root, `.current.switch-${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`)
+  const createLink = ops.createLink ?? symlink
+  const replaceLink = ops.rename ?? rename
+  try {
+    // The staged link is created first, while the entry point is untouched: whatever happens to
+    // this step cannot take the installation's entry point away.
+    await createLink(releaseRelativePath, staged)
+    // Only this rename replaces the entry point, and it either happens or it does not.
+    await replaceLink(staged, entry)
+  } catch (error) {
+    await rm(staged, { force: true }).catch(() => {})
+    throw error
+  }
+  return true
+}
+
+/**
+ * Whether two trees hold identical regular files. Symlinks, directories and unreadable entries
+ * are all "not identical", so the caller re-copies rather than keeping something it cannot
+ * vouch for.
+ */
+export async function sameTree(from, to) {
+  const FROM = await stat(from).catch(() => null)
+  const TO = await stat(to).catch(() => null)
+  if (!FROM || !TO || FROM.isDirectory() !== TO.isDirectory()) return false
+  if (!FROM.isDirectory()) return sha256(await readFile(from)) === sha256(await readFile(to))
+  const entries = (await readdir(from)).sort()
+  if (entries.join('\u0000') !== (await readdir(to)).sort().join('\u0000')) return false
+  for (const name of entries) {
+    if (!(await sameTree(join(from, name), join(to, name)))) return false
+  }
+  return true
+}
+
+/**
  * A verifier result is only acceptance when it says so explicitly.
  *
  * A report that is `ok: false`, that declares itself non-enforcing, or that omits the
@@ -133,12 +189,59 @@ function run(command, args, cwd) {
   })
 }
 
-function releaseName(releasePath, root) {
+/**
+ * The value `current` has to hold so it resolves to `releasePath`.
+ *
+ * `current` lives in the installation root and its target is resolved against that root, so the
+ * answer is the path relative to the root — `releases/<version>` — not the release directory's
+ * own base name. For a release outside the installation the absolute path is the only honest
+ * answer, and it is returned unchanged.
+ */
+function currentLinkTarget(releasePath, root) {
   const releasesDir = join(root, 'releases')
-  return releasePath.startsWith(releasesDir + sep) ? releasePath.slice(releasesDir.length + 1) : releasePath
+  return releasePath.startsWith(releasesDir + sep) ? join('releases', releasePath.slice(releasesDir.length + 1)) : releasePath
 }
 
-/** Restore the previous release and start it again; report step-by-step progress. */
+/**
+ * Stage the inputs a rollback needs into `snapshotDir`.
+ *
+ * Every input is copied into the snapshot before any of them is considered usable, and the copy
+ * is verified against its source. A run that fails halfway leaves a snapshot directory holding
+ * some inputs and none of the others; that state is reported as such so the caller can tell
+ * "nothing usable was captured" from "a complete snapshot is available". The tree being
+ * snapshotted is only read here, never written.
+ */
+async function stageSnapshot({ snapshotDir, installed, staged }) {
+  // The progress object is owned by the caller, so a failure halfway through still leaves a
+  // faithful description of what was staged and what was not.
+  staged.dir = snapshotDir
+  await mkdir(snapshotDir, { recursive: true, mode: 0o700 })
+  for (const name of PROFILE_INPUTS) {
+    const from = join(installed, 'profile', name)
+    if (!existsSync(from)) continue
+    staged.expected.push(name)
+    await cp(from, join(snapshotDir, name))
+    // A snapshot that does not match its source is not a snapshot of anything.
+    if (!(await sameTree(from, join(snapshotDir, name)))) throw new Error(`snapshot of ${name} does not match its source`)
+    staged.written.push(name)
+  }
+  staged.complete = true
+  return staged
+}
+
+/**
+ * The failure raised when a stop could not be confirmed. The original stop error is preserved as
+ * the message and as `stopError`, and the code says which of the two happened: the stop hook
+ * itself failed, or it did not establish that nothing is running any more.
+ */
+function stopNotConfirmed(confirmation, label) {
+  const { reason, stopError } = confirmation
+  const failure = new Error(`${label}: ${reason}${stopError ? `; the stop hook also failed: ${stopError.message}` : ''}`)
+  failure.code = stopError ? 'PKW_STOP_FAILED' : 'PKW_STOP_NOT_CONFIRMED'
+  failure.stopError = stopError ? stopError.message : null
+  return failure
+}
+
 /**
  * Stop the service and establish that it really stopped.
  *
@@ -147,80 +250,147 @@ function releaseName(releasePath, root) {
  * again for the instance they are about to replace, and a probe that reports a live process,
  * an unknown state or a failure blocks whatever the caller intended.
  *
- * `stop: 'run'` executes the stop hook; `stop: 'skip'` does not, because the caller already
- * did it, and the outcome is passed in. Skipping never implies "stopped": the probe is still
- * consulted, and without one a skipped stop with no success is unknown.
+ * The stop hook always runs: a stop that reported failure is never retried here, because
+ * retrying a stop that reported "not stopped" can take a healthy service down and then fail
+ * again. A hook that returns without throwing is still not evidence by itself, and a probe that
+ * reports a live writer or an unknown state yields no evidence at all.
  */
-async function stopAndConfirm({ hooks, report, label, stop = 'run', stopSucceeded = null }) {
-  let succeeded = stopSucceeded === true
+async function stopAndConfirm({ hooks, report, label }) {
+  let succeeded = false
   let stopError = null
-  if (stop === 'run') {
-    try {
-      await hooks.stop()
-      succeeded = true
-    } catch (error) {
-      stopError = error
-    }
+  try {
+    await hooks.stop()
+    succeeded = true
+  } catch (error) {
+    stopError = error
   }
   let evidence = null
   let reason = null
+  // What the probe established, when a probe was supplied and did not confirm the stop.
+  // `still-running` is a positive observation that a writer is alive; `unknown` means the state
+  // could not be established at all. Neither is ever treated as "stopped".
+  let probeOutcome = null
   if (hooks.isStopped) {
     let probed
     try { probed = await hooks.isStopped() } catch (error) { probed = { known: false, error: error.message } }
     if (probed?.known === true && probed?.stopped === true) {
       evidence = { ...probed, stopHookSucceeded: succeeded, stage: label }
+    } else if (probed?.known === true && probed?.stopped === false) {
+      probeOutcome = 'still-running'
+      reason = `the probe reports the service is still running (${JSON.stringify(probed)})`
     } else {
-      reason = `the probe reports the service is not stopped (${JSON.stringify(probed)})`
+      probeOutcome = 'unknown'
+      reason = `the stop state could not be established (${JSON.stringify(probed)})`
     }
   } else if (succeeded) {
     evidence = { known: true, stopped: true, source: 'stop-hook-succeeded', stage: label }
   } else {
+    probeOutcome = 'unknown'
     reason = 'the stop did not succeed and no stop state probe was supplied'
   }
-  const record = { label, stop: stop === 'run' ? 'executed' : 'skipped', stopSucceeded: succeeded, evidence, reason, stopError: stopError ? stopError.message : null }
+  const record = { label, stop: 'executed', stopSucceeded: succeeded, evidence, probeOutcome, reason, stopError: stopError ? stopError.message : null }
   report.stopAttempts = [...(report.stopAttempts ?? []), record]
-  report.stopState = evidence ?? { known: false, stopped: false, reason, stage: label }
-  if (!evidence) {
-    const failure = new Error(`${label}: ${reason}${stopError ? `; the stop hook also failed: ${stopError.message}` : ''}`)
-    failure.code = stopError ? 'PKW_STOP_FAILED' : 'PKW_STOP_NOT_CONFIRMED'
-    failure.stopError = stopError ? stopError.message : null
-    throw failure
-  }
-  return { stopSucceeded: succeeded, evidence }
+  report.stopState = evidence ?? { known: false, stopped: false, probeOutcome, reason, stage: label }
+  return { stopSucceeded: succeeded, evidence, probeOutcome, reason, stopError }
 }
 
-async function recoverPreviousRelease({ root, installed, snapshotDir, hooks, report, stop = 'run', stopSucceeded = null }) {
-  const steps = { stop: stop === 'run' ? 'executed' : 'skipped', evidence: null, inputsRestored: false, currentRepointed: false, started: false }
-  try {
-    // Evidence is established for the instance being replaced, before restoring inputs,
-    // repointing `current` or starting anything.
-    let confirmation
-    try {
-      confirmation = await stopAndConfirm({ hooks, report, label: 'before restoring the previous release', stop, stopSucceeded })
-    } catch (error) {
+/**
+ * Restore the release in service after a failure.
+ *
+ * Two modes, both of which end the same way: `current` is replaced by an atomic rename, the old
+ * release is started again, and its version is read back rather than assumed.
+ *
+ *   snapshotDir given   the completed snapshot holds the inputs the old release was built from;
+ *                       they are written back and nothing else in the tree is touched.
+ *   snapshotDir null    nothing is written back at all, and a fresh stop must be confirmed first,
+ *                       because starting the old release beside a possibly live writer would
+ *                       create the second writer this whole transaction exists to prevent.
+ */
+async function recoverPreviousRelease({ root, installed, snapshotDir, hooks, report }) {
+  const applySnapshot = typeof snapshotDir === 'string'
+  const steps = {
+    stop: applySnapshot ? 'already-confirmed-before-promotion' : 'refused-without-evidence',
+    stopEvidence: null, inputsRestored: false, inputsUnchanged: !applySnapshot,
+    currentRepointed: false, started: false, versionConfirmed: false,
+  }
+  if (!applySnapshot) {
+    // The instance to silence is whatever `current` leads to now, so the probe is asked again
+    // instead of trusting evidence gathered before the failure.
+    const confirmation = await stopAndConfirm({ hooks, report, label: 'before restoring the previous release' })
+    if (!confirmation.evidence) {
+      const failure = stopNotConfirmed(confirmation, 'before restoring the previous release')
       report.recoverySteps = steps
       report.status = 'recovery-blocked-unverified-stop'
-      return { recovered: false, error: { message: error.message, stopError: error.stopError ?? null } }
+      return { recovered: false, failureReason: failure.message, error: { message: failure.message, code: failure.code, stopError: failure.stopError } }
     }
-    steps.evidence = confirmation.evidence
-    for (const name of PROFILE_INPUTS) {
-      const from = join(snapshotDir, name)
-      if (!existsSync(from)) continue
-      await rm(join(installed, 'profile', name), { recursive: true, force: true })
-      await cp(from, join(installed, 'profile', name))
+    steps.stop = 'confirmed'
+    steps.stopEvidence = confirmation.evidence
+  }
+  const restored = await startPreviousReleaseSteps({ root, previousRelease: installed, snapshotDir, report, hooks, steps, applySnapshot })
+  report.recoverySteps = steps
+  return restored
+}
+
+/**
+ * The shared tail of both recovery modes: apply the inputs, replace the entry point atomically,
+ * start the release, and read its version back.
+ */
+async function startPreviousReleaseSteps({ root, previousRelease, snapshotDir, report, hooks, steps, applySnapshot }) {
+  try {
+    if (applySnapshot) {
+      for (const name of PROFILE_INPUTS) {
+        const from = join(snapshotDir, name)
+        const to = join(previousRelease, 'profile', name)
+        if (!existsSync(from)) continue
+        // Unchanged inputs are left alone: copying over a file that already matches its snapshot
+        // can only lose something, never restore anything.
+        if (await sameTree(from, to)) continue
+        await rm(to, { recursive: true, force: true })
+        await cp(from, to)
+        steps.inputsRestored = true
+      }
+      if (!steps.inputsRestored) steps.inputsUnchanged = true
     }
-    steps.inputsRestored = true
-    await rm(join(root, 'current'), { force: true })
-    await symlink(join('releases', releaseName(installed, root)), join(root, 'current'))
-    steps.currentRepointed = true
+    steps.currentRepointed = await pointCurrentAtomically(root, currentLinkTarget(previousRelease, root))
     await hooks.start()
     steps.started = true
-    report.recoverySteps = steps
+    steps.versionConfirmed = (await profileVersion(join(previousRelease, 'profile'))) !== null
+    report.previousRestore = { required: true, steps }
     return { recovered: true }
   } catch (error) {
-    report.recoverySteps = steps
-    return { recovered: false, error: { message: error.message, details: deploymentErrorDetails?.(error) } }
+    report.previousRestore = { required: true, steps, error: { message: error.message } }
+    return { recovered: false, failureReason: error.message, error: { message: error.message, details: deploymentErrorDetails?.(error) } }
   }
+}
+
+/**
+ * The uniform refusal for a failure that happened before the candidate was promoted.
+ * `previousRestore` is attached by the caller before this runs, so the caller can say separately
+ * whether the predecessor had to be brought back and whether it was.
+ */
+function refusedBeforePromotion(error, report) {
+  if (!report.status || report.status === 'activated') report.status = 'failed-before-promotion'
+  const failure = new Error(`Deployment failed before the candidate was promoted: ${error.message}`)
+  failure.code = error.code ?? 'PKW_DEPLOYMENT_FAILED'
+  failure.report = report
+  failure.cause = error
+  return failure
+}
+
+/**
+ * Whether the entry point no longer leads to the release that was in service.
+ *
+ * A partial promotion can leave `current` pointing at the candidate, or absent entirely when the
+ * replacement failed midway. Both have to be undone, so the answer is read from the filesystem
+ * rather than remembered from the recorded actions; an unreadable entry point counts as needing
+ * restoration because a broken installation is worse than an unnecessary one.
+ */
+async function pointerNeedsRestoring(root, installed) {
+  let target
+  try {
+    target = await currentRelease(root)
+  } catch { return true }
+  return target !== installed
 }
 
 /**
@@ -231,12 +401,18 @@ export async function switchRelease({
   root, version, artifacts, registry, storeDir, hooks, allowFreshRelease = false, packageNames,
   snapshotDir, deps = {},
 }) {
-  // A stop hook that has already reported failure must not be called again: retrying a
-  // stop that reported "not stopped" can take a healthy service down and then fail again.
-  let stopAlreadyFailed = false
-  // Whether the candidate became the release in service. Stage 2 recovery only applies after
-  // that point: before it, nothing has to be undone.
+  // Whether the candidate became the release in service. Recovery applies from the confirmed
+  // stop onwards; this flag records how far the promotion itself got.
   let promoted = false
+  // Whether the rollback snapshot is complete. Until the whole loop has finished, the snapshot
+  // directory holds a partial copy that must never be applied over the old release.
+  let snapshotTaken = false
+  // What this run actually did on disk, recorded item by item as it happens. Recovery reads this
+  // instead of inferring the state of the installation from the error that ended the run.
+  const actions = {
+    stopConfirmed: false, renamedCandidateToProfile: false, pointerSwitched: false,
+    candidateStarted: false, startFailed: false, verificationFailed: false,
+  }
   const install = deps.prepareInstall ?? prepareInstall
   const digest = deps.profileInputDigest ?? profileInputDigest
   const releaseDir = join(root, 'releases', version)
@@ -273,23 +449,45 @@ export async function switchRelease({
   // ── Stage 1: the predecessor must be provably stopped before the candidate is promoted ──
   // The probe is consulted here even when the stop hook reports success, and a live or unknown
   // answer refuses the switch: promoting the candidate or repointing `current` while an old
-  // writer may still be running is exactly the outcome this design prevents. The original stop
-  // error is preserved in the report either way.
-  let stopSucceeded = false
-  try {
+  // writer may still be running is exactly the outcome this design prevents. A refusal here
+  // leaves the release in service running and its entry point untouched, and the original stop
+  // error is preserved in the report.
+  {
     const firstStop = await stopAndConfirm({ hooks, report, label: 'before promotion' })
-    stopSucceeded = firstStop.stopSucceeded
-  } catch (error) {
-    report.status = 'failed-before-promotion'
-    report.stopError = error.stopError ? { message: error.stopError } : report.stopError ?? null
-    const failure = new Error(`Deployment refused before promoting the candidate: ${error.message}`)
-    failure.code = error.code ?? 'PKW_STOP_NOT_CONFIRMED'
-    failure.report = report
-    throw failure
+    if (!firstStop.evidence) {
+      report.status = 'failed-before-promotion'
+      report.previousRestore = {
+        required: false,
+        reason: `the release in service was not stopped (${firstStop.probeOutcome ?? 'no evidence'}), so it was left running and its entry point was not touched`,
+      }
+      const failure = stopNotConfirmed(firstStop, 'Deployment refused before promoting the candidate')
+      failure.report = report
+      report.actions = { ...actions }
+      report.stopError = failure.stopError
+      throw failure
+    }
+    actions.stopConfirmed = true
   }
   try {
-    if (deps.afterStopBeforeDriftCheck) await deps.afterStopBeforeDriftCheck({ candidate, releaseDir })
+    // The snapshot is taken first, immediately after the stop is confirmed. Every later failure in
+    // this block has a complete rollback snapshot available to it, and no later check can fail
+    // before the recovery material exists.
+    report.snapshot = { dir: snapshotDir, expected: [], written: [], complete: false }
+    try {
+      await stageSnapshot({ snapshotDir, installed, staged: report.snapshot })
+      report.snapshotWritten = snapshotDir
+    } catch (snapshotError) {
+      // Nothing may be restored from a snapshot that was never completed: staging some of the
+      // inputs and copying them back would replace a complete release with an incomplete one.
+      // The code names the phase that failed. The underlying errno stays in the message.
+      snapshotError.code = 'PKW_SNAPSHOT_INCOMPLETE'
+      throw snapshotError
+    }
+    // Only now is the snapshot complete enough to restore from.
+    snapshotTaken = true
 
+    // Then the candidate is re-checked: it must not have changed since the install digest.
+    if (deps.afterStopBeforeDriftCheck) await deps.afterStopBeforeDriftCheck({ candidate, releaseDir })
     const digestBeforePromotion = await digest(candidate, packageNames)
     report.candidateDigestBeforePromotion = digestBeforePromotion
     if (digestBeforePromotion !== digestAfterInstall) {
@@ -298,52 +496,66 @@ export async function switchRelease({
       throw drift
     }
 
-    // Snapshot the inputs a rollback needs; the old release tree itself is never deleted.
-    await mkdir(snapshotDir, { recursive: true, mode: 0o700 })
-    for (const name of PROFILE_INPUTS) {
-      const from = join(installed, 'profile', name)
-      if (existsSync(from)) await cp(from, join(snapshotDir, name))
-    }
-    report.snapshotWritten = snapshotDir
-
+    // Each step that changes the installation on disk is recorded as it completes, so the
+    // recovery knows exactly how much has to be undone instead of guessing from the error.
     await rename(candidate, profilePath)
-    await rm(join(root, 'current'), { force: true })
-    await symlink(join('releases', version), join(root, 'current'))
+    actions.renamedCandidateToProfile = true
+    actions.pointerSwitched = await pointCurrentAtomically(root, join('releases', version))
     report.promoted = profilePath
     promoted = true
 
-    await hooks.start()
-    const verdict = await hooks.verify({ expectedVersion: version, expectedRelease: releaseDir })
-    report.verification = assertAcceptance(verdict, { expectedVersion: version, label: 'activation verification' })
+    try {
+      await hooks.start()
+      actions.candidateStarted = true
+    } catch (startError) {
+      actions.startFailed = true
+      throw startError
+    }
+    try {
+      const verdict = await hooks.verify({ expectedVersion: version, expectedRelease: releaseDir })
+      report.verification = assertAcceptance(verdict, { expectedVersion: version, label: 'activation verification' })
+    } catch (verificationError) {
+      actions.verificationFailed = true
+      throw verificationError
+    }
     report.status = 'activated'
     return report
   } catch (error) {
     report.activationError = { message: error.message, code: error.code ?? null, details: deploymentErrorDetails?.(error) }
-    // A failure before anything was promoted has nothing to recover.
-    if (!promoted) {
-      report.status = 'failed-before-promotion'
-      const failure = new Error(`Deployment failed before the candidate was promoted: ${error.message}`)
-      failure.code = error.code ?? 'PKW_DEPLOYMENT_FAILED'
-      failure.report = report
-      failure.cause = error
-      throw failure
+    report.actions = { ...actions }
+    // A failure before promotion may still have stopped the release in service and may still have
+    // taken its entry point apart. "Not promoted yet" is never treated as "no side effects": the
+    // entry point is always inspected, and the snapshot is applied only when it is complete.
+    // A confirmed stop is on its own a reason to restore: the release in service is down whether
+    // or not a snapshot was ever completed, and leaving it down is not an acceptable outcome.
+    const needsRecovery = promoted || actions.renamedCandidateToProfile
+      || actions.startFailed || actions.verificationFailed
+      || actions.stopConfirmed
+      || await pointerNeedsRestoring(root, installed)
+    if (!needsRecovery) {
+      report.previousRestore = { required: false, reason: 'the release in service was never stopped and its entry point still points at it, so nothing was written back' }
+      throw refusedBeforePromotion(error, report)
     }
+    report.previousRestore = { required: true, stopEvidenceAtFailure: actions.stopConfirmed }
 
-    // ── Stage 2: the candidate was promoted, so the stage 1 evidence is stale by definition ──
-    // Verification failed or `start` threw, and a thrown `start` does not prove that no process
-    // appeared. The instance to stop is now the candidate, so a fresh probe decides whether the
-    // previous release may be restored at all.
+    // The release to restore is the one this run found in service, and that is decided by the
+    // reading taken before anything was touched. `current` deliberately leads elsewhere after a
+    // promotion, so consulting it here would restore the candidate instead of the predecessor.
+    const releaseToRestore = installed
+    // A complete snapshot is applied; without one nothing is written back and a fresh stop must be
+    // confirmed first, because restarting the old release beside a possibly live writer would
+    // create the second writer this whole transaction exists to prevent.
     const recovery = await recoverPreviousRelease({
-      root, installed, snapshotDir, hooks, report,
-      stop: 'run', stopSucceeded: null,
+      root, installed: releaseToRestore, snapshotDir: snapshotTaken ? snapshotDir : null, hooks, report,
     })
-    const restoredVersion = await profileVersion(join(installed, 'profile'))
-    report.rollback = { restoredRelease: installed, restoredVersion }
+
+    const restoredVersion = await profileVersion(join(releaseToRestore, 'profile'))
+    report.rollback = { restoredRelease: releaseToRestore, restoredVersion }
     if (!recovery.recovered || restoredVersion !== previousVersion) {
-      report.status = 'rollback-failed'
+      if (report.status !== 'recovery-blocked-unverified-stop') report.status = 'rollback-failed'
       const reasons = [error, ...(recovery.error ? [new Error(`recovery failed: ${recovery.error.message}`)] : []),
         ...(restoredVersion !== previousVersion ? [new Error(`restored release declares ${restoredVersion}, expected ${previousVersion}`)] : [])]
-      const failure = new AggregateError(reasons, `Deployment failed and the rollback did not restore the previous release`)
+      const failure = new AggregateError(reasons, `Deployment failed and the previous release was not restored`)
       failure.code = 'PKW_ROLLBACK_FAILED'
       failure.report = report
       throw failure
