@@ -19,7 +19,7 @@
  */
 import { cp, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { join, resolve, sep } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
 /**
@@ -129,16 +129,33 @@ export async function copyDataRoot(sourceRoot, targetRoot, options = {}) {
   return { targetRoot, rewritten, leaks, databases }
 }
 
-/** Any file, database path field or symlink inside the copy that still names the source. */
+/**
+ * Any file, database path field or symlink inside the copy that still names the source.
+ *
+ * Links are resolved with `realpath`, so a *relative* link or a link that points at
+ * another link which finally reaches the source is caught as well: comparing the link's
+ * literal text alone would miss both.
+ */
 export async function findLeaks(sourceRoot, targetRoot) {
   const leaks = []
-  const { readlink } = await import('node:fs/promises')
+  const { readlink, realpath } = await import('node:fs/promises')
+  const sourceReal = await realpath(sourceRoot).catch(() => sourceRoot)
   const walk = async dir => {
     for (const entry of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
       const full = join(dir, entry.name)
       if (entry.isSymbolicLink()) {
-        const target = await readlink(full).catch(() => '')
-        if (target.includes(sourceRoot)) leaks.push({ path: full, target })
+        const literal = await readlink(full).catch(() => '')
+        const resolved = await realpath(full).catch(() => null)
+        if (literal.includes(sourceRoot) || (resolved && (resolved === sourceReal || resolved.startsWith(sourceReal + sep)))) {
+          leaks.push({ path: full, target: literal, resolved: resolved ?? 'dangling' })
+        }
+        continue
+      }
+      // A real subdirectory reached through a link must be walked too, because the copy
+      // may contain the source tree behind a perfectly ordinary-looking directory.
+      const real = await realpath(full).catch(() => null)
+      if (real && real !== full && (real === sourceReal || real.startsWith(sourceReal + sep))) {
+        leaks.push({ path: full, target: 'directory-resolves-into-source', resolved: real })
         continue
       }
       if (entry.isDirectory()) { await walk(full); continue }

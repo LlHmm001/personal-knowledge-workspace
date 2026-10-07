@@ -59,10 +59,15 @@ function serviceStub(verifyImpl, reachableImpl = async () => ({ reachable: true,
   }
 }
 
+/**
+ * An acceptance result in the shape an enforcing verifier produces. The switch validates
+ * this shape, so a stub that omits `ok`, `enforcing` or the authenticated check must be
+ * rejected — which the tests below assert separately.
+ */
 const verifyOk = async ({ expectedVersion, expectedRelease }) => {
   const version = await profileVersion(join(expectedRelease, 'profile'))
   if (version !== expectedVersion) throw new Error(`serving ${version}, expected ${expectedVersion}`)
-  return { serving: version }
+  return { ok: true, enforcing: true, checks: { authenticated: 'verified', servingVersion: version } }
 }
 
 test('switch: a non-empty candidate directory is refused and never cleaned', async () => {
@@ -285,5 +290,115 @@ test('switch: a promoted release is never reused as a candidate', async () => {
       root, version: NEW_VERSION, artifacts: [], registry: 'http://127.0.0.1:1', hooks: service.hooks,
       snapshotDir: join(root, 'snapshots', NEW_VERSION), deps: { prepareInstall: fakeInstall() },
     }), /already has a promoted profile/)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('switch: a verifier result that is not acceptance is refused', async () => {
+  const cases = [
+    ['ok:false', async () => ({ ok: false, enforcing: true, checks: { authenticated: 'verified', servingVersion: NEW_VERSION } })],
+    ['diagnostics', async () => ({ ok: true, enforcing: false, checks: { authenticated: 'not_verified_no_credentials', servingVersion: NEW_VERSION } })],
+    ['unauthenticated', async () => ({ ok: true, enforcing: true, checks: { authenticated: 'failed_credentials_rejected', servingVersion: NEW_VERSION } })],
+    ['no serving version', async () => ({ ok: true, enforcing: true, checks: { authenticated: 'verified' } })],
+    ['wrong serving version', async () => ({ ok: true, enforcing: true, checks: { authenticated: 'verified', servingVersion: '0.0.0-other' } })],
+  ]
+  for (const [label, verify] of cases) {
+    // Each case needs its own release root: a rejected switch still promotes, so the
+    // version directory must not be reused between cases.
+    const { root } = await makeRoot()
+    const service = serviceStub(verify)
+    try {
+      await assert.rejects(() => switchRelease({
+        root, version: NEW_VERSION, artifacts: [], registry: 'http://127.0.0.1:1', hooks: service.hooks,
+        snapshotDir: join(root, 'snapshots', NEW_VERSION),
+        deps: { prepareInstall: fakeInstall() },
+      }), error => {
+        assert.equal(error.code, 'PKW_DEPLOYMENT_ROLLED_BACK', `${label}: unexpected code ${error.code}: ${error.message}`)
+        const evidence = error.rollbackEvidence ?? error.report?.rollbackEvidence
+        assert.notEqual(evidence?.acceptance, 'verified', `${label}: acceptance must not be recorded as verified`)
+        assert.equal(error.rollbackVerified, false, `${label}: acceptance must not be claimed`)
+        assert.match(error.message, /NOT verified/, `${label}: the unverified state must be stated`)
+        return true
+      })
+      assert.equal(await currentRelease(root), join(root, 'releases', OLD_VERSION), `${label}: current must point back at the old release`)
+    } finally { await rm(root, { recursive: true, force: true }) }
+  }
+})
+
+test('switch: a rollback with no acceptance evidence is reported as unverified', async () => {
+  const { root } = await makeRoot()
+  let failOnce = true
+  const service = serviceStub(async context => {
+    if (failOnce) { failOnce = false; throw new Error('synthetic verification failure') }
+    return verifyOk(context)
+  })
+  try {
+    await assert.rejects(() => switchRelease({
+      root, version: NEW_VERSION, artifacts: [], registry: 'http://127.0.0.1:1', hooks: service.hooks,
+      snapshotDir: join(root, 'snapshots', NEW_VERSION), deps: { prepareInstall: fakeInstall() },
+      // hooks.verifyPrevious is deliberately absent, so acceptance cannot be claimed.
+    }), error => {
+      assert.equal(error.code, 'PKW_DEPLOYMENT_ROLLED_BACK')
+      assert.equal(error.report.status, 'rolled-back-unverified')
+      assert.equal(error.report.rollbackEvidence.acceptance, 'not_verified')
+      assert.match(error.message, /NOT verified/)
+      return true
+    })
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('switch: a failing stop is investigated instead of assuming what happened', async () => {
+  const { root } = await makeRoot()
+  const service = serviceStub(verifyOk)
+  let stopAttempts = 0
+  const hooks = {
+    ...service.hooks,
+    stop: async () => {
+      stopAttempts += 1
+      if (stopAttempts === 1) throw new Error('synthetic stop failure')
+    },
+    isStopped: async () => ({ known: true, stopped: false }),
+  }
+  try {
+    await assert.rejects(() => switchRelease({
+      root, version: NEW_VERSION, artifacts: [], registry: 'http://127.0.0.1:1', hooks,
+      snapshotDir: join(root, 'snapshots', NEW_VERSION), deps: { prepareInstall: fakeInstall() },
+    }), error => {
+      // The stop failed and the service is still running, so nothing can be rolled back
+      // and the caller must be told that rather than told "nothing was stopped".
+      // The stop failed and the site reports the service is still running: nothing was
+      // stopped, so no rollback may be claimed.
+      assert.equal(error.code, 'PKW_STOP_FAILED')
+      assert.equal(error.report.status, 'failed-before-stop')
+      assert.equal(error.report.stopState.stopped, false)
+      assert.match(error.message, /still running/)
+      return true
+    })
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('switch: a stop failure whose state cannot be observed proceeds with recovery', async () => {
+  const { root } = await makeRoot()
+  const service = serviceStub(verifyOk)
+  let stopAttempts = 0
+  const hooks = {
+    ...service.hooks,
+    stop: async () => { stopAttempts += 1; if (stopAttempts === 1) throw new Error('synthetic stop failure') },
+    isStopped: async () => ({ known: false }),
+  }
+  try {
+    await assert.rejects(() => switchRelease({
+      root, version: NEW_VERSION, artifacts: [], registry: 'http://127.0.0.1:1', hooks,
+      snapshotDir: join(root, 'snapshots', NEW_VERSION), deps: { prepareInstall: fakeInstall() },
+    }), error => {
+      // The stop failed and its state is unknown. The transaction must not silently
+      // succeed; it must attempt recovery and report the original failure.
+      assert.equal(error.code, 'PKW_DEPLOYMENT_ROLLED_BACK', `unexpected code ${error.code}`)
+      assert.equal(error.report.stopState.assumed, 'stopped')
+      assert.match(error.message, /synthetic stop failure/, 'the original stop failure must be preserved')
+      assert.equal(error.report.rollback?.restoredVersion, OLD_VERSION, 'the old release must be restored')
+      return true
+    })
+    assert.ok(stopAttempts >= 2, `recovery must attempt to stop again (attempts=${stopAttempts})`)
+    assert.equal(await currentRelease(root), join(root, 'releases', OLD_VERSION))
   } finally { await rm(root, { recursive: true, force: true }) }
 })

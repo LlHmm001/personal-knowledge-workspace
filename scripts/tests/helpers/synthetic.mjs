@@ -60,6 +60,7 @@ export async function makeSyntheticDataRoot({ owner = 'owner', noteBody = '# syn
 
   const state = new DatabaseSync(join(spaceDir, 'state.sqlite'))
   state.exec(`
+    PRAGMA user_version = 1;
     CREATE TABLE units (name TEXT PRIMARY KEY, version INTEGER NOT NULL) STRICT;
     CREATE TABLE u_workspace_workspaces (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
     CREATE TABLE u_pkw_notes_note_index (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
@@ -96,91 +97,6 @@ export async function makeSyntheticDataRoot({ owner = 'owner', noteBody = '# syn
   }
   state.close()
   return { root, spaceId, workspaceId, noteId, relativePath, contentHash, userId }
-}
-
-/**
- * Copy a data root the way a rehearsal must: a consistent database snapshot, and every
- * absolute path that pointed at the source rewritten to the copy.
- *
- * The WAL file is not copied, and it is not deleted from a plain copy either: the
- * snapshot is taken with SQLite's own backup API, so it already contains whatever the
- * WAL held.
- */
-export async function copyDataRootConsistently(sourceRoot, { stubUrl, spaceId, apiKeyEnv = 'PKW_TEST_RETRIEVAL_KEY' } = {}) {
-  const target = await mkdtemp(join(tmpdir(), 'pkw-synth-copy-'))
-  // mkdtemp already created the root; the identity snapshot writes into it directly.
-  await mkdir(join(target, 'spaces'), { recursive: true, mode: 0o700 })
-  const rewrittenPaths = []
-
-  const snapshot = async (from, to) => {
-    await mkdir(dirname(to), { recursive: true, mode: 0o700 })
-    const db = new DatabaseSync(from, { readOnly: true })
-    try { await db.exec(`VACUUM INTO '${to.replace(/'/g, "''")}'`) } finally { db.close() }
-  }
-
-  await snapshot(join(sourceRoot, 'identity.sqlite'), join(target, 'identity.sqlite'))
-  const spaces = await readdir(join(sourceRoot, 'spaces'), { withFileTypes: true }).catch(() => [])
-  for (const space of spaces) {
-    if (!space.isDirectory()) continue
-    const from = join(sourceRoot, 'spaces', space.name)
-    const to = join(target, 'spaces', space.name)
-    await mkdir(to, { recursive: true, mode: 0o700 })
-    await mkdir(dirname(to), { recursive: true, mode: 0o700 })
-    for (const entry of await readdir(from, { withFileTypes: true })) {
-      if (entry.name === 'state.sqlite' || entry.name.endsWith('-wal') || entry.name.endsWith('-shm')) continue
-      await cp(join(from, entry.name), join(to, entry.name), { recursive: true, preserveTimestamps: true })
-    }
-    await snapshot(join(from, 'state.sqlite'), join(to, 'state.sqlite'))
-    // Rewrite every absolute path that pointed at the source; refuse to leave one.
-    const statePath = join(to, 'state.sqlite')
-    const db = new DatabaseSync(statePath)
-    try {
-      const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(r => r.name)
-      for (const table of tables) {
-        const columns = db.prepare(`PRAGMA table_info("${table}")`).all().map(c => c.name)
-        for (const column of columns) {
-          for (const row of db.prepare(`SELECT rowid AS rid, "${column}" AS value FROM "${table}" WHERE typeof("${column}")='text'`).all()) {
-            if (typeof row.value !== 'string' || !row.value.includes(sourceRoot)) continue
-            const next = row.value.split(sourceRoot).join(target)
-            db.prepare(`UPDATE "${table}" SET "${column}"=? WHERE rowid=?`).run(next, row.rid)
-            rewrittenPaths.push({ table, column, from: row.value, to: next })
-          }
-        }
-      }
-    } finally { db.close() }
-  }
-
-  const configPath = join(target, 'collaboration.json')
-  await writeFile(configPath, JSON.stringify({
-    dataPath: target,
-    publicOrigin: 'http://127.0.0.1:0',
-    bootstrapUsername: 'owner',
-    bootstrapPasswordEnv: 'PKW_TEST_BOOTSTRAP',
-    ...(stubUrl ? { retrieval: { [spaceId]: { baseUrl: stubUrl, kbId: 'kb-synthetic', apiKeyEnv } } } : {}),
-  }, null, 2) + '\n', { mode: 0o600 })
-  return { root: target, configPath, rewrittenPaths }
-}
-
-/** Point out every absolute path inside the copy that still names the source root. */
-export async function findPathsLeakingTo(sourceRoot, copyRoot) {
-  const leaks = []
-  const walk = async (dir) => {
-    for (const entry of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
-      const full = join(dir, entry.name)
-      if (entry.isSymbolicLink()) {
-        const { readlink } = await import('node:fs/promises')
-        const link = await readlink(full).catch(() => '')
-        if (link.includes(sourceRoot)) leaks.push({ path: full, target: link })
-        continue
-      }
-      if (entry.isDirectory()) { await walk(full); continue }
-      if (!entry.isFile()) continue
-      const bytes = await readFile(full).catch(() => null)
-      if (bytes && bytes.includes(Buffer.from(sourceRoot))) leaks.push({ path: full })
-    }
-  }
-  await walk(copyRoot)
-  return leaks
 }
 
 /** A minimal synthetic release profile: the shape a candidate directory has. */

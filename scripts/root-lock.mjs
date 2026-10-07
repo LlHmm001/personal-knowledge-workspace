@@ -87,7 +87,17 @@ export async function writerStatus(record) {
   if (exists === false) return { gone: true, certain: true, reason: 'pid-not-present' }
   if (exists === null) return { gone: false, certain: false, reason: 'pid-state-unreadable' }
   const recorded = record?.identity
-  if (recorded && typeof recorded === 'object') {
+  if (recorded !== undefined && recorded !== null) {
+    // An identity is only usable when it is complete and well-formed. `{}`, a partial
+    // object or wrong types are *unknown*, not a mismatch: a malformed identity is not
+    // evidence that the writer is gone. `{}`, a partial
+    // object, or wrong types are *unknown*, not a mismatch: a malformed identity is not
+    // evidence that the writer is gone.
+    const usable = typeof recorded === 'object' && !Array.isArray(recorded)
+      && typeof recorded.bootId === 'string' && recorded.bootId.length > 0
+      && typeof recorded.startTicks === 'string' && /^[0-9]+$/.test(recorded.startTicks)
+      && (recorded.pid === undefined || Number(recorded.pid) === pid)
+    if (!usable) return { gone: false, certain: false, reason: 'identity-incomplete-or-malformed' }
     // A recorded identity can be compared exactly; a mismatch means a different process.
     const statText = await readText(`/proc/${pid}/stat`)
     const bootId = (await readText('/proc/sys/kernel/random/boot_id'))?.trim() ?? null

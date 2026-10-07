@@ -68,78 +68,26 @@ async function startStub({ delayMs = 0, status = 200 } = {}) {
   return { url: `http://127.0.0.1:${server.address().port}`, calls, close: () => new Promise(r => server.close(r)) }
 }
 
-/** Build an isolated data root: copied DBs + rewritten paths + stub retrieval. */
+/**
+ * Build an isolated data root with the shared copier: SQLite snapshots written straight
+ * to the final destination, declared path fields remapped, and a leak check. Nothing is
+ * copied and then patched afterwards, and no WAL is deleted from a plain copy.
+ */
 async function makeDataRoot({ stubUrl, spaceId }) {
-  const root = await mkdtemp(join(tmpdir(), 'pkw-shutdown-'))
-  const source = sourceDataRoot()
-  await cp(source, root, { recursive: true, dereference: false })
-  for (const name of ['gateway.lock', 'identity.sqlite-wal', 'identity.sqlite-shm']) {
-    await rm(join(root, name), { force: true })
-  }
-  // Rewrite any absolute path that still points at the source root so the copy is
-  // genuinely self-contained.
-  const rewritten = []
-  for (const space of await readdir(join(root, 'spaces'), { withFileTypes: true })) {
-    if (!space.isDirectory()) continue
-    const dbPath = join(root, 'spaces', space.name, 'state.sqlite')
-    if (!existsSync(dbPath)) continue
-    const db = new DatabaseSync(dbPath)
-    try {
-      for (const table of ['u_workspace_workspaces']) {
-        const columns = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name)
-        for (const column of columns) {
-          const rows = db.prepare(`SELECT rowid AS rid, ${column} AS value FROM ${table} WHERE typeof(${column})='text'`).all()
-          for (const row of rows) {
-            if (typeof row.value === 'string' && row.value.includes(source)) {
-              const next = row.value.split(source).join(root)
-              db.prepare(`UPDATE ${table} SET ${column}=? WHERE rowid=?`).run(next, row.rid)
-              rewritten.push({ table, column, from: row.value, to: next })
-            }
-          }
-        }
-      }
-    } finally { db.close() }
-  }
+  const root = join(await mkdtemp(join(tmpdir(), 'pkw-shutdown-')), 'data')
+  const { copyDataRoot } = await import('../../scripts/copy-data-root.mjs')
+  const copy = await copyDataRoot(sourceDataRoot(), root)
+  assert.equal(copy.leaks.length, 0, `the copy must be self-contained: ${JSON.stringify(copy.leaks.slice(0, 2))}`)
   await setCopyPassword(join(root, 'identity.sqlite'), testUsername(), TEST_PASSWORD)
   const configPath = join(root, 'collaboration.json')
   await writeFile(configPath, JSON.stringify({
     dataPath: root,
-    publicOrigin: `http://127.0.0.1:0`, // replaced per run by the caller
+    publicOrigin: 'http://127.0.0.1:0',
     bootstrapUsername: testUsername(),
-    bootstrapPasswordEnv: 'PKW_TEST_BOOTSTRAP',
+    bootstrapPasswordEnv: 'PW',
     ...(stubUrl ? { retrieval: { [spaceId]: { baseUrl: stubUrl, kbId: 'kb-shutdown-test', apiKeyEnv: 'PKW_TEST_WEKNORA_KEY' } } } : {}),
   }, null, 2), { mode: 0o600 })
-  return { root, configPath, rewritten }
-}
-
-/** Run the listener as a child process and give the caller control over its life. */
-function startGateway({ profile, configPath, port, drainTimeoutMs }) {
-  // The port is passed explicitly: the listener's default is a production port, and
-  // a test must never depend on (or collide with) whatever is running there.
-  const child = spawn(process.execPath, [
-    join(scriptsDir, 'serve-collaboration.mjs'), '--profile', profile, '--config', configPath, '--port', String(port),
-    ...(drainTimeoutMs === undefined ? [] : ['--drain-timeout-ms', String(drainTimeoutMs)]),
-  ], {
-    env: { ...process.env, PKW_TEST_BOOTSTRAP: TEST_PASSWORD, PKW_TEST_WEKNORA_KEY: 'stub-key' },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
-  const lines = []
-  let stdout = '', stderr = ''
-  child.stdout.on('data', chunk => { stdout += chunk; lines.push(...String(chunk).split('\n').filter(Boolean)) })
-  child.stderr.on('data', chunk => { stderr += chunk })
-  const exited = new Promise(resolvePromise => child.once('exit', (code, signal) => resolvePromise({ code, signal })))
-  return {
-    child, lines, exited,
-    get stdout() { return stdout }, get stderr() { return stderr },
-    async ready(timeoutMs = 20_000) {
-      const deadline = Date.now() + timeoutMs
-      while (Date.now() < deadline) {
-        if (lines.some(l => l.includes('"status":"listening"'))) return true
-        await new Promise(r => setTimeout(r, 100))
-      }
-      throw new Error(`gateway did not report listening; stdout=${stdout} stderr=${stderr}`)
-    },
-  }
+  return { root, configPath, rewritten: copy.rewritten }
 }
 
 /** The first space id in the source data, so tests follow the data, not a fixture. */

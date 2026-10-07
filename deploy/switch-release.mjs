@@ -81,6 +81,31 @@ export async function assertSnapshotFree(snapshotDir) {
   }
 }
 
+/**
+ * A verifier result is only acceptance when it says so explicitly.
+ *
+ * A report that is `ok: false`, that declares itself non-enforcing, or that omits the
+ * fields acceptance depends on, is a refusal — never a pass. Reporting reachability is
+ * not acceptance either, so a diagnostics result can never gate a deployment.
+ */
+export function assertAcceptance(result, { expectedVersion, label = 'verification' }) {
+  const refuse = message => {
+    const error = new Error(message)
+    error.code = 'PKW_ACCEPTANCE_INVALID'
+    throw error
+  }
+  if (!result || typeof result !== 'object') refuse(`${label} returned no structured result`)
+  if (result.ok !== true) refuse(`${label} did not report ok:true (got ${JSON.stringify(result.ok)})`)
+  if (result.enforcing === false) refuse(`${label} is a diagnostics run, which cannot accept a deployment`)
+  if (result.checks && result.checks.authenticated !== 'verified') {
+    refuse(`${label} did not verify an authenticated session (authenticated=${JSON.stringify(result.checks.authenticated)})`)
+  }
+  const serving = result.checks?.servingVersion ?? result.servingVersion
+  if (!serving) refuse(`${label} did not report which release is serving`)
+  if (expectedVersion && serving !== expectedVersion) refuse(`${label} reports ${serving} serving, expected ${expectedVersion}`)
+  return result
+}
+
 /** Reachability only — deliberately NOT acceptance. */
 export async function checkReachable({ origin, timeoutMs = 20_000 }) {
   const deadline = Date.now() + timeoutMs
@@ -113,7 +138,9 @@ function releaseName(releasePath, root) {
 async function recoverPreviousRelease({ root, installed, snapshotDir, hooks, report }) {
   const steps = { stopped: false, inputsRestored: false, currentRepointed: false, started: false }
   try {
-    await hooks.stop().catch(() => {})
+    // A stop that fails here cannot be ignored: if the old writer is still up, restoring
+    // its inputs and starting again would be reported as a recovery that did not happen.
+    await hooks.stop()
     steps.stopped = true
     for (const name of PROFILE_INPUTS) {
       const from = join(snapshotDir, name)
@@ -177,9 +204,56 @@ export async function switchRelease({
 
   // ── transaction: everything below runs while the service is stopped ───────────
   let stopped = false
+  let stopError = null
   try {
     await hooks.stop()
     stopped = true
+  } catch (error) {
+    // A stop that reports failure may still have stopped the service. Ask the site
+    // rather than assuming, because the recovery path depends on the real state.
+    stopError = { message: error.message }
+    report.stopError = stopError
+    report.stopErrorHandled = true
+    if (hooks.isStopped) {
+      const state = await hooks.isStopped().catch(() => ({ known: false }))
+      report.stopState = state
+      if (state.known === true && state.stopped === true) {
+        // It reported failure but the service is down, so the transaction can proceed.
+        stopped = true
+      } else if (state.known === true) {
+        // Still running: nothing is stopped, so there is nothing to recover, and the
+        // caller must not be told that a rollback happened.
+        report.status = 'failed-before-stop'
+        const failure = new Error(`the service is still running after the stop failed: ${error.message}`)
+        failure.code = 'PKW_STOP_FAILED'
+        failure.report = report
+        failure.cause = error
+        throw failure
+      } else {
+        // Unknown: the safe reading is "assume it did stop" and let recovery try again.
+        // Refusing here would leave a service that may be down with the new release
+        // installed and no attempt to bring the old one back.
+        stopped = true
+        report.stopState = { ...state, assumed: 'stopped' }
+        report.stopFailureProceeded = true
+      }
+    } else {
+      // No way to observe the state: assume the stop happened, because refusing to
+      // attempt recovery would leave a stopped service with the new release installed.
+      stopped = true
+      report.stopState = { known: false, assumed: 'stopped' }
+    }
+  }
+  try {
+    // A stop that reported failure is never swallowed. The site's own answer above
+    // decided whether the transaction may continue, but the deployment still ends as a
+    // failure, because pretending it succeeded would hide a service that did not stop
+    // when it was told to.
+    if (stopError) {
+      const failure = new Error(`the stop command reported failure: ${stopError.message}`)
+      failure.code = 'PKW_STOP_FAILED'
+      throw failure
+    }
     if (deps.afterStopBeforeDriftCheck) await deps.afterStopBeforeDriftCheck({ candidate, releaseDir })
 
     const digestBeforePromotion = await digest(candidate, packageNames)
@@ -204,7 +278,8 @@ export async function switchRelease({
     report.promoted = profilePath
 
     await hooks.start()
-    report.verification = await hooks.verify({ expectedVersion: version, expectedRelease: releaseDir })
+    const verdict = await hooks.verify({ expectedVersion: version, expectedRelease: releaseDir })
+    report.verification = assertAcceptance(verdict, { expectedVersion: version, label: 'activation verification' })
     report.status = 'activated'
     return report
   } catch (error) {
@@ -231,8 +306,12 @@ export async function switchRelease({
       failure.report = report
       throw failure
     }
+    // Rollback evidence is graded. Reachability is infrastructure; acceptance is
+    // business. Claiming success without either would be a claim we cannot support.
+    report.rollbackEvidence = { reachability: 'not_verified', acceptance: 'not_verified' }
     if (hooks.reachable) {
       report.rollbackReachable = await hooks.reachable({ previousVersion })
+      report.rollbackEvidence.reachability = report.rollbackReachable.reachable ? 'verified' : 'failed'
       if (!report.rollbackReachable.reachable) {
         report.status = 'rollback-failed'
         const failure = new Error(`Deployment failed and the restored release is not reachable: ${report.rollbackReachable.error ?? 'unknown'}`)
@@ -241,10 +320,27 @@ export async function switchRelease({
         failure.cause = error
         throw failure
       }
+    } else {
+      report.rollbackEvidence.reachability = 'not_observed_no_check'
     }
-    report.status = 'rolled-back'
-    const failure = new Error(`Deployment failed; previous release ${previousVersion} restored and reachable. Original error: ${error.message}`)
+    if (hooks.verifyPrevious) {
+      try {
+        report.rollbackAcceptance = assertAcceptance(await hooks.verifyPrevious({ expectedVersion: previousVersion }), {
+          expectedVersion: previousVersion, label: 'rollback acceptance',
+        })
+        report.rollbackEvidence.acceptance = 'verified'
+      } catch (acceptanceError) {
+        report.rollbackEvidence.acceptance = 'failed'
+        report.rollbackAcceptanceError = { message: acceptanceError.message }
+      }
+    }
+    report.status = report.rollbackEvidence.acceptance === 'verified' ? 'rolled-back' : 'rolled-back-unverified'
+    const detail = report.rollbackEvidence.acceptance === 'verified'
+      ? 'previous release restored; rollback acceptance verified'
+      : `previous release restored; rollback acceptance NOT verified (reachability ${report.rollbackEvidence.reachability})`
+    const failure = new Error(`Deployment failed; ${detail}. Original error: ${error.message}`)
     failure.code = 'PKW_DEPLOYMENT_ROLLED_BACK'
+    failure.rollbackVerified = report.rollbackEvidence.acceptance === 'verified'
     failure.report = report
     failure.cause = error
     throw failure
