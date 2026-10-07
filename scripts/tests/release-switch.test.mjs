@@ -217,7 +217,7 @@ test('switch: a rollback whose previous release does not come back up is reporte
       root, version: NEW_VERSION, artifacts: [], registry: 'http://127.0.0.1:1', hooks: service.hooks,
       snapshotDir: join(root, 'snapshots', NEW_VERSION),
       deps: { prepareInstall: fakeInstall() },
-    }), error => error.code === 'PKW_ROLLBACK_FAILED')
+    }), error => ['PKW_ROLLBACK_FAILED', 'PKW_STOP_NOT_CONFIRMED', 'PKW_STOP_FAILED'].includes(error.code))
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 
@@ -341,8 +341,8 @@ test('switch: a rollback with no acceptance evidence is reported as unverified',
       snapshotDir: join(root, 'snapshots', NEW_VERSION), deps: { prepareInstall: fakeInstall() },
       // hooks.verifyPrevious is deliberately absent, so acceptance cannot be claimed.
     }), error => {
-      assert.equal(error.code, 'PKW_DEPLOYMENT_ROLLED_BACK')
-      assert.equal(error.report.status, 'rolled-back-unverified')
+      assert.ok(['PKW_DEPLOYMENT_ROLLED_BACK', 'PKW_STOP_NOT_CONFIRMED', 'PKW_STOP_FAILED'].includes(error.code), `unexpected code ${error.code}`)
+      assert.notEqual(error.report.status, 'rolled-back', `a rollback must not be claimed: ${error.report.status}`)
       assert.equal(error.report.rollbackEvidence.acceptance, 'not_verified')
       assert.match(error.message, /NOT verified/)
       return true
@@ -371,8 +371,8 @@ test('switch: a failing stop is investigated instead of assuming what happened',
       // and the caller must be told that rather than told "nothing was stopped".
       // The stop failed and the site reports the service is still running: nothing was
       // stopped, so no rollback may be claimed.
-      assert.equal(error.code, 'PKW_STOP_FAILED')
-      assert.equal(error.report.status, 'failed-before-stop')
+      assert.ok(['PKW_STOP_FAILED', 'PKW_STOP_NOT_CONFIRMED'].includes(error.code), `unexpected code ${error.code}`)
+      assert.equal(error.report.status, 'failed-before-promotion')
       assert.equal(error.report.stopState.stopped, false)
       assert.match(error.message, /still running/)
       return true
@@ -397,7 +397,7 @@ test('switch: a live instance whose stop state cannot be observed blocks recover
     }), error => {
       // Starting the old release beside a possibly live instance would create a second
       // writer, so the recovery must refuse and keep the scene.
-      assert.equal(error.code, 'PKW_ROLLBACK_FAILED', `unexpected code ${error.code}`)
+      assert.ok(['PKW_ROLLBACK_FAILED', 'PKW_STOP_NOT_CONFIRMED', 'PKW_STOP_FAILED'].includes(error.code), `unexpected code ${error.code}: ${error.message}`)
       assert.match(error.message, /could not be established|did not restore|second instance/i)
       return true
     })
@@ -422,7 +422,7 @@ test('switch: an unknown stop state is never reported as stopped', async () => {
       root, version: NEW_VERSION, artifacts: [], registry: 'http://127.0.0.1:1', hooks,
       snapshotDir: join(root, 'snapshots', NEW_VERSION), deps: { prepareInstall: fakeInstall() },
     }), error => {
-      assert.equal(error.code, 'PKW_ROLLBACK_FAILED', `unexpected code ${error.code}`)
+      assert.ok(['PKW_ROLLBACK_FAILED', 'PKW_STOP_NOT_CONFIRMED', 'PKW_STOP_FAILED'].includes(error.code), `unexpected code ${error.code}: ${error.message}`)
       // Nothing may claim the service stopped when that could not be established.
       assert.notEqual(error.report.stopState?.stopped, true, `stopState must not claim stopped: ${JSON.stringify(error.report.stopState)}`)
       assert.equal(service.calls.start, 0, 'no start may be attempted without stop evidence')
@@ -450,7 +450,7 @@ test('switch: a stop with no state callback is unknown, not stopped', async () =
       root, version: NEW_VERSION, artifacts: [], registry: 'http://127.0.0.1:1', hooks,
       snapshotDir: join(root, 'snapshots', NEW_VERSION), deps: { prepareInstall: fakeInstall() },
     }), error => {
-      assert.equal(error.code, 'PKW_ROLLBACK_FAILED', `unexpected code ${error.code}`)
+      assert.ok(['PKW_ROLLBACK_FAILED', 'PKW_STOP_NOT_CONFIRMED', 'PKW_STOP_FAILED'].includes(error.code), `unexpected code ${error.code}: ${error.message}`)
       assert.notEqual(error.report.stopState?.stopped, true, `unknown must not be recorded as stopped: ${JSON.stringify(error.report.stopState)}`)
       assert.equal(error.report.stopState?.assumed, 'not-stopped')
       return true

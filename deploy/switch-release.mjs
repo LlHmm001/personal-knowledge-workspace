@@ -139,37 +139,70 @@ function releaseName(releasePath, root) {
 }
 
 /** Restore the previous release and start it again; report step-by-step progress. */
-async function recoverPreviousRelease({ root, installed, snapshotDir, hooks, report, skipStop = false, stopSucceeded: stopSucceededFromTransaction = null }) {
-  const steps = { stopSkipped: skipStop, stopSucceeded: false, evidence: null, inputsRestored: false, currentRepointed: false, started: false }
-  try {
-    // skipStop decides one thing only: whether the stop hook is executed again. It is not
-    // evidence that anything stopped.
-    const stopSucceeded = stopSucceededFromTransaction ?? (skipStop ? false : await hooks.stop().then(() => true, () => false))
-    steps.stopSucceeded = stopSucceeded
+/**
+ * Stop the service and establish that it really stopped.
+ *
+ * Stage boundary: a stop hook reporting success is not evidence by itself, and evidence from
+ * an earlier stage is worthless once a different instance has been started. Callers run this
+ * again for the instance they are about to replace, and a probe that reports a live process,
+ * an unknown state or a failure blocks whatever the caller intended.
+ *
+ * `stop: 'run'` executes the stop hook; `stop: 'skip'` does not, because the caller already
+ * did it, and the outcome is passed in. Skipping never implies "stopped": the probe is still
+ * consulted, and without one a skipped stop with no success is unknown.
+ */
+async function stopAndConfirm({ hooks, report, label, stop = 'run', stopSucceeded = null }) {
+  let succeeded = stopSucceeded === true
+  let stopError = null
+  if (stop === 'run') {
+    try {
+      await hooks.stop()
+      succeeded = true
+    } catch (error) {
+      stopError = error
+    }
+  }
+  let evidence = null
+  let reason = null
+  if (hooks.isStopped) {
+    let probed
+    try { probed = await hooks.isStopped() } catch (error) { probed = { known: false, error: error.message } }
+    if (probed?.known === true && probed?.stopped === true) {
+      evidence = { ...probed, stopHookSucceeded: succeeded, stage: label }
+    } else {
+      reason = `the probe reports the service is not stopped (${JSON.stringify(probed)})`
+    }
+  } else if (succeeded) {
+    evidence = { known: true, stopped: true, source: 'stop-hook-succeeded', stage: label }
+  } else {
+    reason = 'the stop did not succeed and no stop state probe was supplied'
+  }
+  const record = { label, stop: stop === 'run' ? 'executed' : 'skipped', stopSucceeded: succeeded, evidence, reason, stopError: stopError ? stopError.message : null }
+  report.stopAttempts = [...(report.stopAttempts ?? []), record]
+  report.stopState = evidence ?? { known: false, stopped: false, reason, stage: label }
+  if (!evidence) {
+    const failure = new Error(`${label}: ${reason}${stopError ? `; the stop hook also failed: ${stopError.message}` : ''}`)
+    failure.code = stopError ? 'PKW_STOP_FAILED' : 'PKW_STOP_NOT_CONFIRMED'
+    failure.stopError = stopError ? stopError.message : null
+    throw failure
+  }
+  return { stopSucceeded: succeeded, evidence }
+}
 
-    // Establish real stop evidence *before* restoring inputs, repointing current, or starting.
-    // The evidence is either the stop hook reporting success, or a probe that answers
-    // "stopped" with certainty. Anything else is unknown, and unknown keeps the scene.
-    // The transaction already established the evidence before calling recovery, so this only
-    // records it. A probe that reported a live writer never reaches this point.
-    let evidence = null
-    if (stopSucceeded || report.stopConfirmed === true) {
-      evidence = report.stopState ?? { known: true, stopped: true, source: 'stop-hook-succeeded' }
-      if (evidence.known !== true) evidence = { known: true, stopped: true, source: 'stop-hook-succeeded' }
+async function recoverPreviousRelease({ root, installed, snapshotDir, hooks, report, stop = 'run', stopSucceeded = null }) {
+  const steps = { stop: stop === 'run' ? 'executed' : 'skipped', evidence: null, inputsRestored: false, currentRepointed: false, started: false }
+  try {
+    // Evidence is established for the instance being replaced, before restoring inputs,
+    // repointing `current` or starting anything.
+    let confirmation
+    try {
+      confirmation = await stopAndConfirm({ hooks, report, label: 'before restoring the previous release', stop, stopSucceeded })
+    } catch (error) {
+      report.recoverySteps = steps
+      report.status = 'recovery-blocked-unverified-stop'
+      return { recovered: false, error: { message: error.message, stopError: error.stopError ?? null } }
     }
-    if (evidence === null) {
-      report.status = hooks.isStopped ? 'recovery-blocked-unverified-stop' : 'recovery-blocked-no-state-probe'
-      return {
-        recovered: false,
-        error: {
-          message: hooks.isStopped
-            ? `cannot establish that the previous writer stopped (${JSON.stringify(steps.evidence ?? { known: false })}); refused to restore or start a release that may already be running`
-            : 'the stop did not succeed and no stop state probe was supplied; refused to restore or start a release that may already be running',
-        },
-      }
-    }
-    steps.stopped = true
-    report.stopState = evidence
+    steps.evidence = confirmation.evidence
     for (const name of PROFILE_INPUTS) {
       const from = join(snapshotDir, name)
       if (!existsSync(from)) continue
@@ -201,6 +234,9 @@ export async function switchRelease({
   // A stop hook that has already reported failure must not be called again: retrying a
   // stop that reported "not stopped" can take a healthy service down and then fail again.
   let stopAlreadyFailed = false
+  // Whether the candidate became the release in service. Stage 2 recovery only applies after
+  // that point: before it, nothing has to be undone.
+  let promoted = false
   const install = deps.prepareInstall ?? prepareInstall
   const digest = deps.profileInputDigest ?? profileInputDigest
   const releaseDir = join(root, 'releases', version)
@@ -234,70 +270,24 @@ export async function switchRelease({
   report.candidateDigestAfterInstall = digestAfterInstall
 
   // ── transaction: everything below runs while the service is stopped ───────────
-  let stopped = false
-  let stopError = null
+  // ── Stage 1: the predecessor must be provably stopped before the candidate is promoted ──
+  // The probe is consulted here even when the stop hook reports success, and a live or unknown
+  // answer refuses the switch: promoting the candidate or repointing `current` while an old
+  // writer may still be running is exactly the outcome this design prevents. The original stop
+  // error is preserved in the report either way.
   let stopSucceeded = false
   try {
-    await hooks.stop()
-    stopped = true
-    stopSucceeded = true
+    const firstStop = await stopAndConfirm({ hooks, report, label: 'before promotion' })
+    stopSucceeded = firstStop.stopSucceeded
   } catch (error) {
-    // A stop that reports failure may still have stopped the service. Ask the site
-    // rather than assuming, because the recovery path depends on the real state.
-    stopError = { message: error.message }
-    stopAlreadyFailed = true
-    report.stopError = stopError
-    report.stopErrorHandled = true
-    if (hooks.isStopped) {
-      const state = await hooks.isStopped().catch(() => ({ known: false }))
-      report.stopState = state
-      if (state.known === true && state.stopped === true) {
-        // It reported failure but the service is down, so the transaction can proceed.
-        stopped = true
-      } else if (state.known === true) {
-        // Still running: nothing is stopped, so there is nothing to recover, and the
-        // caller must not be told that a rollback happened.
-        report.status = 'failed-before-stop'
-        const failure = new Error(`the service is still running after the stop failed: ${error.message}`)
-        failure.code = 'PKW_STOP_FAILED'
-        failure.report = report
-        failure.cause = error
-        throw failure
-      } else {
-        // Unknown is not "stopped". The transaction ends here with the current release and
-        // the original error intact, and the recovery path decides what may be done: it will
-        // not start anything until it can establish that no writer is running.
-        // Unknown is not "stopped". The state is recorded and the transaction fails through
-        // the normal path, so the recovery logic (which refuses to start without evidence)
-        // makes the decision instead of a branch that skips recovery entirely.
-        report.stopState = { ...state, assumed: 'not-stopped' }
-        report.stopUnverified = true
-      }
-    } else {
-      // No way to observe the state at all. That is unknown, not stopped: recording it as
-      // stopped would let the recovery path start a second instance beside a live one.
-      stopError = stopError ?? { message: 'the stop command reported no state' }
-      report.stopState = { known: false, assumed: 'not-stopped', reason: 'no-state-callback' }
-      report.stopUnverified = true
-    }
+    report.status = 'failed-before-promotion'
+    report.stopError = error.stopError ? { message: error.stopError } : report.stopError ?? null
+    const failure = new Error(`Deployment refused before promoting the candidate: ${error.message}`)
+    failure.code = error.code ?? 'PKW_STOP_NOT_CONFIRMED'
+    failure.report = report
+    throw failure
   }
   try {
-    // A stop that reported failure is never swallowed. The site's own answer above
-    // decided whether the transaction may continue, but the deployment still ends as a
-    // failure, because pretending it succeeded would hide a service that did not stop
-    // when it was told to.
-    if (stopError) {
-      const failure = new Error(report.stopUnverified
-        ? `the stop command reported failure and the service state could not be established: ${stopError.message}`
-        : `the stop command reported failure: ${stopError.message}`)
-      failure.code = report.stopUnverified ? 'PKW_STOP_STATE_UNKNOWN' : 'PKW_STOP_FAILED'
-      throw failure
-    }
-    if (!stopped) {
-      const failure = new Error('the transaction did not establish that the service is stopped')
-      failure.code = 'PKW_STOP_STATE_UNKNOWN'
-      throw failure
-    }
     if (deps.afterStopBeforeDriftCheck) await deps.afterStopBeforeDriftCheck({ candidate, releaseDir })
 
     const digestBeforePromotion = await digest(candidate, packageNames)
@@ -320,6 +310,7 @@ export async function switchRelease({
     await rm(join(root, 'current'), { force: true })
     await symlink(join('releases', version), join(root, 'current'))
     report.promoted = profilePath
+    promoted = true
 
     await hooks.start()
     const verdict = await hooks.verify({ expectedVersion: version, expectedRelease: releaseDir })
@@ -328,32 +319,24 @@ export async function switchRelease({
     return report
   } catch (error) {
     report.activationError = { message: error.message, code: error.code ?? null, details: deploymentErrorDetails?.(error) }
-    if (!stopped) {
-      // Nothing was stopped. Recovery still runs when the stop itself failed, because the
-      // inputs may have to be restored and the state has to be established; it will refuse to
-      // start anything it cannot prove is safe. A failure that never attempted a stop has
-      // nothing to recover.
-      const stopWasAttempted = stopAlreadyFailed
-      if (!stopWasAttempted) {
-        report.status = 'failed-before-stop'
-        const failure = new Error(`Deployment failed before the service was stopped: ${error.message}`)
-        failure.code = error.code ?? 'PKW_DEPLOYMENT_FAILED'
-        failure.report = report
-        failure.cause = error
-        throw failure
-      }
-      const recovery = await recoverPreviousRelease({ root, installed, snapshotDir, hooks, report, skipStop: true, stopSucceeded })
-      report.status = recovery.recovered ? 'rolled-back-unverified' : 'recovery-blocked-unverified-stop'
-      const reasons = [error, ...(recovery.error ? [new Error(recovery.error.message)] : [])]
-      const failure = new AggregateError(reasons, `Deployment failed and the service state could not be established; the current release was left in place`)
-      failure.code = 'PKW_ROLLBACK_FAILED'
+    // A failure before anything was promoted has nothing to recover.
+    if (!promoted) {
+      report.status = 'failed-before-promotion'
+      const failure = new Error(`Deployment failed before the candidate was promoted: ${error.message}`)
+      failure.code = error.code ?? 'PKW_DEPLOYMENT_FAILED'
       failure.report = report
+      failure.cause = error
       throw failure
     }
 
-    // The stop ran once for this switch and its outcome is already known, so the recovery
-    // never repeats it: a second stop can take down a healthy service and fail again.
-    const recovery = await recoverPreviousRelease({ root, installed, snapshotDir, hooks, report, skipStop: true, stopSucceeded })
+    // ── Stage 2: the candidate was promoted, so the stage 1 evidence is stale by definition ──
+    // Verification failed or `start` threw, and a thrown `start` does not prove that no process
+    // appeared. The instance to stop is now the candidate, so a fresh probe decides whether the
+    // previous release may be restored at all.
+    const recovery = await recoverPreviousRelease({
+      root, installed, snapshotDir, hooks, report,
+      stop: 'run', stopSucceeded: null,
+    })
     const restoredVersion = await profileVersion(join(installed, 'profile'))
     report.rollback = { restoredRelease: installed, restoredVersion }
     if (!recovery.recovered || restoredVersion !== previousVersion) {
