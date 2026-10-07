@@ -109,7 +109,7 @@ function resolvePeer(name) {
   for (const candidate of [
     join(harnessRoot, 'node_modules', name),
     join(harnessRoot, 'apps', 'cli', 'node_modules', name),
-    join('/root/.dsh/profiles/node_modules', name),
+    ...(process.env.PKW_PEER_FALLBACK_ROOT ? [join(process.env.PKW_PEER_FALLBACK_ROOT, name)] : []),
   ]) {
     const manifestPath = join(candidate, 'package.json')
     if (!existsSync(manifestPath)) continue
@@ -346,7 +346,10 @@ try {
 }
 
 // ------------------------------------------------------------------ verification
-const forbiddenRoots = [harnessRoot, '/root/.dsh/profiles/node_modules', '/root/.dsh/profiles/web']
+// Optional extra roots that a resolved path must never fall under (comma
+// separated). A site sets this to its DSH profile farm so the check also catches
+// a profile that silently borrows the live installation.
+const forbiddenRoots = [harnessRoot, ...String(process.env.PKW_FORBIDDEN_RESOLUTION_ROOTS ?? '').split(',').map(s => s.trim()).filter(Boolean)]
 const verifyRequire = createRequire(join(profile, 'package.json'))
 const resolved = {}
 const violations = []
@@ -362,7 +365,10 @@ const passed = installExit === 0 && violations.length === 0
  * Informational only: switching PKW to this profile may change a peer version, and
  * the operator must be able to see exactly which ones before any cutover. */
 async function compareWithRunningDsh(names) {
-  const runningProfile = process.env.PKW_RUNNING_PROFILE ?? '/root/.dsh/profiles/web'
+  // Opt-in: only a site knows which profile is currently serving. When unset the
+  // comparison is skipped rather than guessing a path.
+  const runningProfile = process.env.PKW_RUNNING_PROFILE
+  if (!runningProfile) return { available: false, reason: 'PKW_RUNNING_PROFILE not set' }
   if (!existsSync(join(runningProfile, 'package.json'))) return { available: false, reason: 'running profile not found' }
   const requireFromRunning = createRequire(join(runningProfile, 'package.json'))
   const differences = []

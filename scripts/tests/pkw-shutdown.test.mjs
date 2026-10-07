@@ -32,14 +32,17 @@ const scrypt = promisify(scryptCallback)
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const scriptsDir = join(repoRoot, 'scripts')
 
-/** Profile under test: the independent profile when provided, else a DSH profile. */
+/** Profile under test. Required: tests never guess a site path. */
 function profileUnderTest() {
   return process.env.PKW_TEST_PROFILE
-    ?? (existsSync('/LlHmm9527/pkw-independent/profile') ? '/LlHmm9527/pkw-independent/profile' : undefined)
 }
 /** Source collaboration data root, copied per test. Never written in place. */
 function sourceDataRoot() {
-  return process.env.PKW_TEST_DATA_ROOT ?? '/root/.dsh/pkw-collab'
+  return process.env.PKW_TEST_DATA_ROOT ?? ''
+}
+/** Account to log in with inside the copy; its password is rewritten per run. */
+function testUsername() {
+  return process.env.PKW_TEST_USERNAME ?? 'owner'
 }
 
 const TEST_PASSWORD = 'shutdown-test-passphrase-only'
@@ -97,12 +100,12 @@ async function makeDataRoot({ stubUrl, spaceId }) {
       }
     } finally { db.close() }
   }
-  await setCopyPassword(join(root, 'identity.sqlite'), 'llhmm001', TEST_PASSWORD)
+  await setCopyPassword(join(root, 'identity.sqlite'), testUsername(), TEST_PASSWORD)
   const configPath = join(root, 'collaboration.json')
   await writeFile(configPath, JSON.stringify({
     dataPath: root,
     publicOrigin: `http://127.0.0.1:0`, // replaced per run by the caller
-    bootstrapUsername: 'llhmm001',
+    bootstrapUsername: testUsername(),
     bootstrapPasswordEnv: 'PKW_TEST_BOOTSTRAP',
     ...(stubUrl ? { retrieval: { [spaceId]: { baseUrl: stubUrl, kbId: 'kb-shutdown-test', apiKeyEnv: 'PKW_TEST_WEKNORA_KEY' } } } : {}),
   }, null, 2), { mode: 0o600 })
@@ -135,6 +138,12 @@ function startGateway({ profile, configPath, port, drainTimeoutMs }) {
       throw new Error(`gateway did not report listening; stdout=${stdout} stderr=${stderr}`)
     },
   }
+}
+
+/** The first space id in the source data, so tests follow the data, not a fixture. */
+async function firstSpaceId() {
+  const identity = new DatabaseSync(join(sourceDataRoot(), 'identity.sqlite'), { readOnly: true })
+  try { return identity.prepare('SELECT id FROM spaces LIMIT 1').get().id } finally { identity.close() }
 }
 
 /** Minimal cookie-jar HTTP client for the collaboration surface. */
@@ -176,7 +185,7 @@ async function bootAndLogin({ profile, configPath, port, drainTimeoutMs }) {
   }
 }
 
-async function loginWith(clientInstance, username = 'llhmm001') {
+async function loginWith(clientInstance, username = testUsername()) {
   const login = await clientInstance.call('/pkw/login', { method: 'POST', body: { username, password: TEST_PASSWORD } })
   assert.equal(login.status, 200, `login failed: ${JSON.stringify(login.body)}`)
   const session = await clientInstance.call('/pkw/session')
@@ -195,7 +204,7 @@ function freePort() {
 }
 
 const skipReason = profileUnderTest() ? false : 'no PKW profile available (set PKW_TEST_PROFILE)'
-const dataRootAvailable = existsSync(join(sourceDataRoot(), 'identity.sqlite'))
+const dataRootAvailable = sourceDataRoot() !== '' && existsSync(join(sourceDataRoot(), 'identity.sqlite'))
 
 test('S3/T-EXIT graceful shutdown while idle exits 0', { skip: skipReason || !dataRootAvailable }, async () => {
   const profile = profileUnderTest()
@@ -372,10 +381,7 @@ test('S3/T-EXIT graceful shutdown during a slow remote sync keeps committed data
   // 8s remote latency: the sync pass is still running when the signal arrives, so
   // the drain budget genuinely has to be respected rather than bypassed.
   const stub = await startStub({ delayMs: 8000 })
-  const identity = new DatabaseSync(join(sourceDataRoot(), 'identity.sqlite'), { readOnly: true })
-  const spaceId = identity.prepare('SELECT id FROM spaces LIMIT 1').get().id
-  identity.close()
-  const { root, configPath } = await makeDataRoot({ stubUrl: stub.url, spaceId })
+  const spaceId = await firstSpaceId()
   const config = JSON.parse(await readFile(configPath, 'utf8'))
   config.publicOrigin = `http://127.0.0.1:${port}`
   await writeFile(configPath, JSON.stringify(config, null, 2))

@@ -84,7 +84,7 @@ service restart is performed by this command:
 
 ```sh
 node scripts/inspect-profile.mjs \
-  --profile /root/.dsh/profiles/web \
+  --profile <installed-profile> \
   --harness /opt/deepseek-harness
 ```
 
@@ -170,7 +170,7 @@ DSH_HARNESS_ROOT=/opt/deepseek-harness \
 PKW_STOP_HOOK=/absolute/path/stop-dsh-web \
 PKW_START_HOOK=/absolute/path/start-dsh-web \
 pnpm run deploy \
-  --profile /root/.dsh/profiles/web \
+  --profile <installed-profile> \
   --version 0.1.1-pkw.1 \
   --registry http://localhost:4873 \
   --url http://127.0.0.1:3080 \

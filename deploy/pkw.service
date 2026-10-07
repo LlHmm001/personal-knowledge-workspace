@@ -1,7 +1,7 @@
 # PKW independent collaboration service (template).
 #
 # Install:
-#   sed -e 's|@PKW_ROOT@|/LlHmm9527/pkw|g' \
+#   sed -e 's|@PKW_ROOT@|/srv/pkw|g' \
 #       -e 's|@PKW_VERSION@|0.1.8-pkw.1|g' \
 #       deploy/pkw.service > /etc/systemd/system/pkw-collaboration.service
 #   systemctl daemon-reload
