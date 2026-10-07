@@ -35,6 +35,8 @@ export const SYNTHETIC_PEERS = Object.freeze({
  */
 export async function makeSyntheticHarness(root) {
   const dir = root ?? await mkdtemp(join(tmpdir(), 'pkw-harness-'))
+  // The caller may hand us a path that does not exist yet.
+  await mkdir(dir, { recursive: true })
   await writeFile(join(dir, 'package.json'), JSON.stringify({
     name: '@deepseek-ai/dsh-root', version: '0.1.2-alpha.1', private: true, type: 'module',
   }, null, 2) + '\n')

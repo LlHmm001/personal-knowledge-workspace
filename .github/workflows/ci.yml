@@ -110,6 +110,15 @@ jobs:
       - name: Packed registry install and plain Node runtime
         run: pnpm verify:packed
 
+      - name: Independent profile with a real closure
+        run: |
+          pnpm run build
+          node scripts/pkw-independent-profile.mjs \
+            --profile "$PWD/.ci/profile" --version 0.9.9-ci \
+            --harness "$DSH_HARNESS_ROOT" \
+            --store "$PWD/.ci/store" --cache "$PWD/.ci/cache" --tmp "$PWD/.ci/tmp"
+          node scripts/check-profile-selfcontained.mjs --profile "$PWD/.ci/profile" --require-runtime-import
+
       # The deployment tests that need real artifacts and a built profile run HERE,
       # where a Harness checkout exists and `pnpm run build` has produced lib/. The
       # tooling job keeps only self-contained tests, so no gate is replaced by a skip.
@@ -133,6 +142,41 @@ jobs:
   # Self-contained deployment checks: no Harness, no network, no private artifacts.
   # Profile-builder guards generate their own synthetic Harness tree, so a green run
   # here is real coverage rather than a skip.
+  # Builds and installs a release with no private Harness and no network beyond the
+  # public registry, then proves the profile is self-contained. This is a real run of the
+  # artifact path, not a skip: the harness peers come from a fixture the job generates.
+  artifact-deployment:
+    name: artifact build and self-contained profile
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: pnpm install --frozen-lockfile
+      - name: Stage this checkout as a release
+        run: |
+          node -e "
+            const { stagePackages } = await import('./scripts/deployment.mjs');
+            const artifacts = await stagePackages('.ci/packages', '0.9.9-ci', 'http://127.0.0.1:4873');
+            console.log(JSON.stringify(artifacts.map(a => ({ name: a.name, sha256: a.sha256 })), null, 1));
+          " --input-type=module
+      - name: Generate the fixture Harness tree
+        run: node scripts/tests/helpers/fixture-harness.mjs "$PWD/.ci/harness"
+      - name: Build a self-contained profile from the staged release
+        run: |
+          node scripts/pkw-independent-profile.mjs \
+            --profile "$PWD/.ci/profile" \
+            --version 0.9.9-ci \
+            --harness "$PWD/.ci/harness" \
+            --store "$PWD/.ci/store" --cache "$PWD/.ci/cache" --tmp "$PWD/.ci/tmp" 
+      - name: Self-contained resolution (proves no dependency on a host installation)
+        run: node scripts/check-profile-selfcontained.mjs --profile "$PWD/.ci/profile"
+
   tooling:
     name: deployment tooling (no private Harness required)
     runs-on: ubuntu-latest
