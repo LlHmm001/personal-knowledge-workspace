@@ -117,9 +117,27 @@ export async function probeAcceptance({ url, hook, expectedVersion, mode = 'acti
   const run = await runVerifier({ hook, expectedVersion, mode })
   const verdict = parseVerifierReport(run.stdout)
   reported.verifier = verdict
+  reported.run = {
+    code: run.code ?? null,
+    error: run.error ?? null,
+    stderr: String(run.stderr ?? '').trim() || null,
+  }
+  // The process has to have succeeded on its own terms. A verifier that printed a success report and
+  // then failed, was killed on its deadline, or could not be started at all has not verified
+  // anything: the report is one observation, the exit status is another, and neither replaces the
+  // other. This is checked before the report is read, so a success payload cannot cover a failure.
+  const runFailed = reported.run.error !== null
+    || reported.run.code !== 0
+  if (runFailed) {
+    reported.run.failure = reported.run.error
+      ?? (reported.run.code === null ? 'the verifier produced no exit status' : `the verifier exited ${reported.run.code}`)
+    reported.auth.detail = `the verifier run failed: ${reported.run.failure}`
+    reported.failure = { stage: 'verifier-run', ...reported.run }
+    return reported
+  }
   if (!verdict) {
-    reported.auth.detail = 'the verifier produced no report'
-    reported.auth.detail = run.error ?? (String(run.stderr ?? '').trim() || `the verifier exited ${run.code}`)
+    reported.auth.detail = reported.run.stderr ?? 'the verifier produced no report'
+    reported.failure = { stage: 'verifier-report', code: 0, error: null, stderr: reported.run.stderr }
     return reported
   }
 

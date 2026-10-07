@@ -64,18 +64,18 @@ test('acceptance: reachable but not acceptable is refused, and the two are repor
   const result = await probeAcceptance({
     url: URL, hook: '/verifier', expectedVersion: VERSION,
     fetchImpl: fetchFor({ status: 404 }),
-    runVerifier: verifyRunner({ stdout: report({ authenticated: 'failed_credentials_rejected' }), code: 1 }),
+    runVerifier: verifyRunner({ stdout: report({ authenticated: 'failed_credentials_rejected' }) }),
   })
   assert.deepEqual(result.reach, { checked: true, reachable: false, status: 404, error: null })
   assert.equal(result.ok, false, 'a 404 is not reachability, let alone acceptance')
   assert.ok(!('authenticated' in result.checks) || result.checks.authenticated !== 'verified')
 
-  // Now the endpoint answers 200 but the verifier refuses. Reachability is verified; acceptance
-  // is not, and the report says which observation failed.
+  // Now the endpoint answers 200 but the verifier's checks do not hold. Reachability is verified;
+  // acceptance is not, and the report says which observation failed.
   const answered = await probeAcceptance({
     url: URL, hook: '/verifier', expectedVersion: VERSION,
     fetchImpl: fetchFor({ status: 200 }),
-    runVerifier: verifyRunner({ stdout: report({ authenticated: 'failed_credentials_rejected' }), code: 1 }),
+    runVerifier: verifyRunner({ stdout: report({ authenticated: 'failed_credentials_rejected' }) }),
   })
   assert.deepEqual(answered.reach, { checked: true, reachable: true, status: 200, error: null })
   assert.equal(answered.ok, false)
@@ -88,11 +88,64 @@ test('acceptance: reachable but not acceptable is refused, and the two are repor
   assert.throws(() => assertAcceptance(answered, { expectedVersion: VERSION, label: 'activation verification' }), /authenticated/)
 })
 
+test('acceptance: a success report followed by a non-zero exit is refused', async () => {
+  // The report every check would accept, printed by a process that then failed. The payload may
+  // not cover the failure of the run that produced it.
+  for (const mode of ['activate', 'rollback']) {
+    const result = await probeAcceptance({
+      url: URL, hook: '/verifier', expectedVersion: VERSION, mode,
+      fetchImpl: fetchFor({ status: 200 }),
+      runVerifier: verifyRunner({ stdout: report({ ok: true }), code: 1 }),
+    })
+    assert.equal(result.ok, false, `${mode}: a non-zero exit must refuse`)
+    assert.deepEqual(result.run, { code: 1, error: null, stderr: null, failure: 'the verifier exited 1' })
+    assert.equal(result.failure.stage, 'verifier-run')
+    assert.throws(() => assertAcceptance(result, { expectedVersion: VERSION, label: `${mode} verification` }))
+  }
+  // A report that says the checks failed, printed by a process that exited 1, is refused for the
+  // process: the two findings are reported, not merged into one.
+  const both = await probeAcceptance({
+    url: URL, hook: '/verifier', expectedVersion: VERSION,
+    fetchImpl: fetchFor({ status: 200 }),
+    runVerifier: verifyRunner({ stdout: report({ authenticated: 'failed_credentials_rejected' }), stderr: 'login refused\n', code: 1 }),
+  })
+  assert.equal(both.ok, false)
+  assert.deepEqual(both.run, { code: 1, error: null, stderr: 'login refused', failure: 'the verifier exited 1' })
+})
+
+test('acceptance: a success report followed by a timeout is refused', async () => {
+  for (const mode of ['activate', 'rollback']) {
+    const result = await probeAcceptance({
+      url: URL, hook: '/verifier', expectedVersion: VERSION, mode,
+      fetchImpl: fetchFor({ status: 200 }),
+      // The runner killed the verifier on its deadline: it printed a success report first, which is
+      // exactly the case where the payload must not be believed.
+      runVerifier: verifyRunner({ stdout: report({ ok: true }), code: null, error: 'the verifier did not finish within 30000ms' }),
+    })
+    assert.equal(result.ok, false, `${mode}: a timeout must refuse`)
+    assert.equal(result.run.code, null)
+    assert.equal(result.run.failure, 'the verifier did not finish within 30000ms')
+    assert.equal(result.failure.stage, 'verifier-run')
+    assert.throws(() => assertAcceptance(result, { expectedVersion: VERSION, label: `${mode} verification` }))
+  }
+})
+
+test('acceptance: a verifier that could not be started is refused', async () => {
+  const result = await probeAcceptance({
+    url: URL, hook: '/verifier', expectedVersion: VERSION,
+    fetchImpl: fetchFor({ status: 200 }),
+    runVerifier: verifyRunner({ stdout: report({ ok: true }), code: null, error: 'spawn /verifier ENOENT' }),
+  })
+  assert.equal(result.ok, false)
+  assert.equal(result.run.failure, 'spawn /verifier ENOENT')
+  assert.equal(result.checks.authenticated, undefined, 'nothing may be published from a run that did not happen')
+})
+
 test('acceptance: a wrong serving version is refused even with a working session', async () => {
   const result = await probeAcceptance({
     url: URL, hook: '/verifier', expectedVersion: VERSION,
     fetchImpl: fetchFor({ status: 200 }),
-    runVerifier: verifyRunner({ stdout: report({ servingVersion: PREVIOUS }), code: 1 }),
+    runVerifier: verifyRunner({ stdout: report({ servingVersion: PREVIOUS }) }),
   })
   assert.deepEqual(result.reach, { checked: true, reachable: true, status: 200, error: null })
   assert.equal(result.auth.verified, true, 'the session was established')
@@ -107,7 +160,7 @@ test('acceptance: a note that cannot be read back is a refusal', async () => {
   const result = await probeAcceptance({
     url: URL, hook: '/verifier', expectedVersion: VERSION,
     fetchImpl: fetchFor({ status: 200 }),
-    runVerifier: verifyRunner({ stdout: report({ ok: false, noteReadable: false }), code: 1 }),
+    runVerifier: verifyRunner({ stdout: report({ noteReadable: false }) }),
   })
   assert.equal(result.auth.verified, true)
   assert.equal(result.version.matches, true)
@@ -130,7 +183,7 @@ test('acceptance: a verifier that produces no report is refused without hanging'
   const result = await probeAcceptance({
     url: URL, hook: '/verifier', expectedVersion: VERSION,
     fetchImpl: fetchFor({ status: 200 }),
-    runVerifier: verifyRunner({ stderr: 'TypeError: fetch failed', code: 1 }),
+    runVerifier: verifyRunner({ stderr: 'TypeError: fetch failed', code: 0 }),
   })
   assert.equal(result.ok, false)
   assert.equal(result.verifier, null)

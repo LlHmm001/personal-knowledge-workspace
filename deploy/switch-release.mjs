@@ -247,6 +247,19 @@ function run(command, args, cwd) {
 }
 
 /**
+ * The origin of a URL, or null when the value is not a URL at all.
+ *
+ * Two URLs are the same service when their origins match: scheme, host and port. A path never
+ * changes which service is being probed, so a health endpoint on the same host as the portal is
+ * accepted, while a different port, host or scheme is not.
+ */
+export function parseOrigin(value) {
+  try {
+    return new URL(value).origin
+  } catch { return null }
+}
+
+/**
  * Run a command and keep everything it produced: stdout, stderr and the exit code.
  *
  * A command that ran and failed resolves with its code; only a command that could not be started
@@ -846,9 +859,24 @@ unknown, and an unknown stop state is never treated as stopped. Supply one of:
     process.stderr.write('refusing to run: --reachable-url is required; without it reachability, authentication, the serving version and the note read-back cannot be observed, and a rollback could not be accepted on evidence\n')
     process.exit(2)
   }
-  if (values['public-origin'] && values['reachable-url'].replace(/\/$/, '') !== values['public-origin'].replace(/\/$/, '')) {
-    process.stderr.write(`refusing to run: --reachable-url ${values['reachable-url']} and --public-origin ${values['public-origin']} must name the same origin, so that the reachability observation and the acceptance probe describe one service\n`)
+  // Same origin, by URL semantics rather than by string equality: a health endpoint
+  // (`http://127.0.0.1:3081/healthz`) and the origin users reach (`http://127.0.0.1:3081`) describe
+  // one service, and refusing that pair would refuse the ordinary configuration.
+  const reachableOrigin = parseOrigin(values['reachable-url'])
+  if (!reachableOrigin) {
+    process.stderr.write(`refusing to run: --reachable-url ${values['reachable-url']} is not a URL this deployment can probe\n`)
     process.exit(2)
+  }
+  if (values['public-origin']) {
+    const publicOrigin = parseOrigin(values['public-origin'])
+    if (!publicOrigin) {
+      process.stderr.write(`refusing to run: --public-origin ${values['public-origin']} is not a URL\n`)
+      process.exit(2)
+    }
+    if (reachableOrigin !== publicOrigin) {
+      process.stderr.write(`refusing to run: --reachable-url ${values['reachable-url']} and --public-origin ${values['public-origin']} must name the same origin (${reachableOrigin} vs ${publicOrigin}), so that the reachability observation and the acceptance probe describe one service\n`)
+      process.exit(2)
+    }
   }
   const { startLoopbackRegistry } = await import('./site/loopback-registry.mjs')
   const registry = await startLoopbackRegistry()

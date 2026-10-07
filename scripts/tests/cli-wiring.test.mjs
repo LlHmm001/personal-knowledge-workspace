@@ -20,7 +20,7 @@ import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import test from 'node:test'
 import { probeSystemdStopState } from '../../deploy/site/systemd-stop-state.mjs'
-import { switchRelease, currentRelease, profileVersion } from '../../deploy/switch-release.mjs'
+import { switchRelease, currentRelease, profileVersion, assertAcceptance } from '../../deploy/switch-release.mjs'
 import { makeSyntheticProfile } from './helpers/synthetic.mjs'
 
 const run = promisify(execFile)
@@ -68,12 +68,45 @@ test('CLI: an origin that disagrees with --public-origin is refused before anyth
   const root = join(workspace, 'installation')
   const artifactDir = join(workspace, 'artifacts-that-do-not-exist')
   try {
+    // A different port is a different service, even on the same host.
     const result = await runCli(cliArgs({
       root, artifactDir,
-      extra: ['--reachable-url', 'http://127.0.0.1:3081/pkw', '--public-origin', 'https://pkw.example.com'],
+      extra: ['--reachable-url', 'http://127.0.0.1:3081/pkw', '--public-origin', 'http://127.0.0.1:9999'],
     }))
     assert.equal(result.code, 2, `unexpected exit ${result.code}: ${result.stderr}`)
-    assert.match(result.stderr, /must name the same origin/)
+    assert.match(result.stderr, /must name the same origin \(http:\/\/127\.0\.0\.1:3081 vs http:\/\/127\.0\.0\.1:9999\)/)
+    await assert.rejects(() => readdir(root), /ENOENT/)
+  } finally { await rm(workspace, { recursive: true, force: true }) }
+})
+
+test('CLI: a health endpoint on the public origin is accepted, because the paths differ only', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'pkw-cli-'))
+  const root = join(workspace, 'installation')
+  try {
+    // The reported defect: a health check path on the same host and port was refused because the
+    // whole URL was compared as a string. It must pass the origin check and fail later, on the
+    // artifacts that do not exist, which proves the guard let it through.
+    const result = await runCli(cliArgs({
+      root, artifactDir: join(workspace, 'artifacts-that-do-not-exist'),
+      extra: ['--reachable-url', 'http://127.0.0.1:3081/healthz', '--public-origin', 'http://127.0.0.1:3081'],
+    }))
+    assert.notEqual(result.code, 2, `the origin guard refused a same-origin health URL: ${result.stderr}`)
+    assert.doesNotMatch(result.stderr, /must name the same origin/)
+    // It got as far as reading the artifact directory, which is all this test needs to know.
+    assert.match(result.stderr, /ENOENT|artifacts-that-do-not-exist/)
+  } finally { await rm(workspace, { recursive: true, force: true }) }
+})
+
+test('CLI: a --reachable-url that is not a URL is refused', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'pkw-cli-'))
+  const root = join(workspace, 'installation')
+  try {
+    const result = await runCli(cliArgs({
+      root, artifactDir: join(workspace, 'none'),
+      extra: ['--reachable-url', 'not-a-url'],
+    }))
+    assert.equal(result.code, 2, `unexpected exit ${result.code}: ${result.stderr}`)
+    assert.match(result.stderr, /is not a URL this deployment can probe/)
     await assert.rejects(() => readdir(root), /ENOENT/)
   } finally { await rm(workspace, { recursive: true, force: true }) }
 })
@@ -122,7 +155,7 @@ async function fakeInstall({ profile }) {
  * The transaction driven by the stop evidence the CLI builds, with systemctl replaced by a table.
  * `members` is what the unit's cgroup is said to hold.
  */
-async function switchWithEvidence({ root, systemctl, members, isAlive }) {
+async function switchWithEvidence({ root, systemctl, members, alive = [] }) {
   let started = 0
   let stopped = 0
   const report = await switchRelease({
@@ -141,7 +174,13 @@ async function switchWithEvidence({ root, systemctl, members, isAlive }) {
         unit: UNIT,
         runCommand: async args => systemctl(args),
         readMembers: async () => ({ members, notes: [] }),
-        isAlive: isAlive ?? (() => false),
+        // The kernel's answer, stubbed: the listed pids exist, everything else is gone with ESRCH.
+        kill: (pid, signal) => {
+          if (alive.includes(pid)) return true
+          const error = new Error(`kill ESRCH ${pid}`)
+          error.code = 'ESRCH'
+          throw error
+        },
       }),
     },
   }).then(value => ({ ok: true, report: value }), error => ({ ok: false, error }))
@@ -160,6 +199,7 @@ test('CLI wiring: a unit that reports inactive with a clean identity lets the sw
       root,
       systemctl: async args => args[0] === 'is-active' ? { stdout: '', stderr: 'inactive\n', code: 3 } : showOk(),
       members: [],
+      alive: [],
     })
     assert.equal(result.ok, true, `the switch refused: ${result.error?.message}`)
     assert.equal(result.report.status, 'activated')
@@ -176,7 +216,7 @@ test('CLI wiring: a leftover process in the unit cgroup stops the deployment ins
       root,
       systemctl: async args => args[0] === 'is-active' ? { stdout: '', stderr: 'inactive\n', code: 3 } : showOk(),
       members: [424242],
-      isAlive: pid => pid === 424242,
+      alive: [424242],
     })
     assert.equal(result.ok, false, 'a live writer must refuse the deployment')
     // The stop hook itself succeeded; what failed is the evidence that no writer is alive, and the
@@ -201,6 +241,7 @@ test('CLI wiring: an unreadable unit identity stops the deployment as unknown', 
       root,
       systemctl: async () => ({ stdout: '', stderr: 'Failed to connect to bus: Permission denied', code: 1 }),
       members: [],
+      alive: [],
     })
     assert.equal(result.ok, false, 'an unknown stop state must refuse the deployment')
     assert.equal(result.error.report.status, 'failed-before-promotion')
@@ -220,12 +261,47 @@ test('CLI wiring: a unit that is still active stops the deployment', async () =>
       root,
       systemctl: async args => args[0] === 'is-active' ? { stdout: 'active\n', stderr: '', code: 0 } : showOk({ activeState: 'active', mainPid: '4242' }),
       members: [4242],
-      isAlive: pid => pid === 4242,
+      alive: [4242],
     })
     assert.equal(result.ok, false)
     assert.equal(result.error.report.stopState.stopped, false)
     assert.equal(result.error.report.stopState.probeOutcome, 'still-running')
     assert.match(result.error.report.stopState.reason, /is not stopped|still running|active/)
     assert.equal(result.started, 0)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('CLI wiring: a verifier that prints success and then exits non-zero is refused', async () => {
+  const { root } = await makeRoot()
+  let started = 0
+  try {
+    // The acceptance probe the CLI builds is given a verifier whose payload is perfect and whose
+    // process failed. This is the shape the reported defect had.
+    const { probeAcceptance } = await import('../../deploy/site/collaboration-acceptance.mjs')
+    const report = JSON.stringify({ ok: true, enforcing: true, checks: { authenticated: 'verified', servingVersion: VERSION, noteReadable: true } })
+    const acceptance = await probeAcceptance({
+      url: 'http://127.0.0.1:3081/pkw', hook: '/verifier', expectedVersion: VERSION,
+      fetchImpl: async () => ({ status: 200 }),
+      runVerifier: async () => ({ stdout: report, stderr: '', code: 1, error: null }),
+    })
+    assert.equal(acceptance.ok, false, 'a success payload from a failed process is not acceptance')
+    assert.equal(acceptance.run.failure, 'the verifier exited 1')
+    assert.throws(() => assertAcceptance(acceptance, { expectedVersion: VERSION, label: 'activation verification' }))
+
+    // And the transaction refuses the same result, so the deployment cannot be reported as
+    // activated on the strength of it.
+    const switched = await switchRelease({
+      root, version: VERSION, artifacts: [], registry: 'http://127.0.0.1:1',
+      snapshotDir: join(root, 'snapshots', VERSION), deps: { prepareInstall: fakeInstall },
+      hooks: {
+        stop: async () => {}, start: async () => { started += 1 },
+        verify: async () => acceptance,
+        isStopped: async () => ({ known: true, stopped: true, source: 'injected' }),
+        reachable: async () => ({ reachable: true, status: 200 }),
+      },
+    }).then(value => ({ ok: true, report: value }), error => ({ ok: false, error }))
+    assert.equal(switched.ok, false, 'the deployment must not activate on a failed verifier run')
+    assert.notEqual(switched.error.report.status, 'activated')
+    assert.equal(switched.error.report.verification, undefined)
   } finally { await rm(root, { recursive: true, force: true }) }
 })

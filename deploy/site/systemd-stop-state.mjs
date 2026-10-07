@@ -77,9 +77,12 @@ export function stopEvidence({ unit, show, isActive, members = [], memberNotes =
     unknown.push(`systemctl show exited ${show.code}${text(show.stderr).trim() ? `: ${text(show.stderr).trim()}` : ''}`)
   }
   // `is-active` reports a state through its exit code: 0 = active, 3 = inactive, 4 = no such unit.
-  // Anything else, or a command that did not run, is a failure to make the observation.
+  // Anything else — including a run that was killed on its deadline or never started — is a failure
+  // to make the observation, and a failure to observe is not an inactive unit.
   const IS_ACTIVE_STATES = new Set([0, 3, 4])
-  if (isActive && isActive.code !== null && isActive.code !== undefined && !IS_ACTIVE_STATES.has(isActive.code)) {
+  if (!isActive || isActive.code === null || isActive.code === undefined) {
+    unknown.push(`systemctl is-active did not run${isActive && text(isActive.stderr).trim() ? `: ${text(isActive.stderr).trim()}` : ''}`)
+  } else if (!IS_ACTIVE_STATES.has(isActive.code)) {
     unknown.push(`systemctl is-active exited ${isActive.code}${text(isActive.stderr).trim() ? `: ${text(isActive.stderr).trim()}` : ''}`)
   }
 
@@ -112,6 +115,15 @@ export function stopEvidence({ unit, show, isActive, members = [], memberNotes =
   if (activeState !== 'inactive' && activeState !== 'failed') {
     return { known: true, stopped: false, state: activeState, reason: `the unit is ${activeState}`, ...record }
   }
+  // The two observations must agree. `is-active` answering 0 while `show` reports an inactive unit
+  // is a contradiction, and a contradiction is not evidence that the service stopped: one of the
+  // two observations is wrong about a live writer, and this code cannot tell which.
+  if (isActive && typeof isActive.code === 'number') {
+    const isActiveSaysRunning = isActive.code === 0
+    if (isActiveSaysRunning) {
+      return { known: false, stopped: false, reason: `systemctl is-active reports the unit is active while systemctl show reports ${activeState}; the observations disagree`, ...record }
+    }
+  }
   // An identity that still points at a process is a writer, whether or not the unit is inactive.
   for (const [name, value] of [['MainPID', mainPid], ['ControlPID', controlPid]]) {
     if (value !== '0') {
@@ -132,7 +144,26 @@ export function stopEvidence({ unit, show, isActive, members = [], memberNotes =
  * `{ members, notes }` for the unit's cgroup. Both are injectable so the refusal paths can be
  * exercised without a live systemd.
  */
-export async function probeSystemdStopState({ unit, runCommand, readMembers, isAlive = pid => { try { process.kill(pid, 0); return true } catch { return false } } }) {
+export function processState(pid, { kill = process.kill.bind(process) } = {}) {
+  try {
+    kill(pid, 0)
+    return 'alive'
+  } catch (error) {
+    // Only ESRCH proves the process is gone. EPERM means a process with that pid exists and this
+    // process is not allowed to signal it; anything else (EINVAL, an unknown errno) means the
+    // question was not answered. None of those may be read as "not running", because the
+    // deployment uses that answer to decide whether it may start a second instance.
+    if (error?.code === 'ESRCH') return 'gone'
+    if (error?.code === 'EPERM') return 'unknown'
+    return 'unknown'
+  }
+}
+
+export async function probeSystemdStopState({
+  unit, runCommand, readMembers,
+  // The default asks the kernel; tests inject it so liveness never depends on which pids exist.
+  kill = process.kill.bind(process),
+}) {
   if (!unit) return { known: false, stopped: false, reason: 'no unit was named' }
   const show = await runCommand(['show', unit, '-p', 'ActiveState', '-p', 'MainPID', '-p', 'ControlPID', '-p', 'ControlGroup'])
   const isActive = await runCommand(['is-active', unit])
@@ -140,18 +171,23 @@ export async function probeSystemdStopState({ unit, runCommand, readMembers, isA
   const controlGroup = singleProperty(properties, 'ControlGroup')
   const observed = controlGroup === null ? { members: [], notes: [] } : await readMembers(controlGroup)
   const live = []
-  const unreadable = []
+  const memberNotes = [...observed.notes]
   for (const pid of observed.members) {
-    if (!Number.isInteger(pid) || pid <= 0) { unreadable.push(`cgroup.procs held ${JSON.stringify(pid)}`); continue }
-    if (isAlive(pid)) live.push(pid)
+    if (!Number.isInteger(pid) || pid <= 0) {
+      // An entry that cannot be interpreted might be a process. It is not evidence of an empty
+      // cgroup, so it is a note, and a note refuses the stop.
+      memberNotes.push(`cgroup.procs held an entry that is not a process id: ${JSON.stringify(pid)}`)
+      continue
+    }
+    const state = processState(pid, { kill })
+    if (state === 'alive') live.push(pid)
+    else if (state === 'unknown') memberNotes.push(`could not establish whether pid ${pid} is still running (EPERM or an unanswerable check)`)
   }
-  const evidence = stopEvidence({
-    unit, show, isActive,
-    members: observed.members, memberNotes: [...observed.notes, ...unreadable], live,
-  })
-  // A cgroup that could not be enumerated in full is not a unit whose members were ruled out.
-  if (evidence.known === true && evidence.stopped === true && observed.notes.length > 0) {
-    return { ...evidence, known: false, stopped: false, reason: `the cgroup of ${unit} could not be enumerated: ${observed.notes.join('; ')}` }
+  const evidence = stopEvidence({ unit, show, isActive, members: observed.members, memberNotes, live })
+  // A cgroup that could not be enumerated, or whose members could not be ruled out, is not a unit
+  // whose processes were ruled out.
+  if (evidence.known === true && evidence.stopped === true && memberNotes.length > 0) {
+    return { ...evidence, known: false, stopped: false, reason: `${unit} is reported ${evidence.activeState}, but the cgroup could not be ruled out: ${memberNotes.join('; ')}` }
   }
   return evidence
 }

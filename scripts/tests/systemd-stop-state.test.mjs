@@ -15,7 +15,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
-import { parseProperties, singleProperty, stopEvidence, probeSystemdStopState, readCgroupMembers } from '../../deploy/site/systemd-stop-state.mjs'
+import { parseProperties, singleProperty, stopEvidence, probeSystemdStopState, readCgroupMembers, processState } from '../../deploy/site/systemd-stop-state.mjs'
 
 const UNIT = 'synthetic-pkw.service'
 
@@ -28,6 +28,24 @@ const neverRan = message => ({ stdout: '', stderr: message, code: null })
 
 const showOutput = ({ activeState = 'inactive', mainPid = '0', controlPid = '0', controlGroup = '/system.slice/synthetic-pkw.service' } = {}) =>
   `ActiveState=${activeState}\nMainPID=${mainPid}\nControlPID=${controlPid}\nControlGroup=${controlGroup}\n`
+
+/**
+ * A `kill` stub standing in for the kernel's liveness answer. `alive` pids accept the signal;
+ * everything else is gone with ESRCH, which is the only error that proves a process is not there.
+ */
+const killFor = (alive = []) => (pid, signal) => {
+  if (alive.includes(pid)) return true
+  const error = new Error(`kill ESRCH ${pid}`)
+  error.code = 'ESRCH'
+  throw error
+}
+
+/** A `kill` stub that refuses to answer, as EPERM does for a process this user may not signal. */
+const killDenied = () => () => {
+  const error = new Error('kill EPERM')
+  error.code = 'EPERM'
+  throw error
+}
 
 /** A runner answering from a fixed table, recording what it was asked for. */
 function runnerFor(table) {
@@ -47,6 +65,7 @@ test('stop evidence: an inactive unit with no process attached is stopped', asyn
     unit: UNIT,
     runCommand: runnerFor({ show: ok(showOutput()), 'is-active': failed(3, 'inactive\n') }).runCommand,
     readMembers: async () => ({ members: [], notes: [] }),
+    kill: killFor(),
   })
   assert.equal(evidence.known, true)
   assert.equal(evidence.stopped, true)
@@ -66,7 +85,7 @@ test('stop evidence: a systemctl that could not be run never means stopped', asy
   })
   assert.equal(evidence.known, false)
   assert.equal(evidence.stopped, false)
-  assert.equal(evidence.reason, 'systemctl show did not run')
+  assert.equal(evidence.reason, 'systemctl show did not run; systemctl is-active did not run: spawn systemctl ENOENT')
   assert.match(evidence.systemctl.show.stderr, /ENOENT/)
 })
 
@@ -128,7 +147,7 @@ test('stop evidence: a leftover child in the cgroup is a writer even with a clea
     runCommand: runnerFor({ show: ok(showOutput()), 'is-active': failed(3, 'inactive\n') }).runCommand,
     // This process is alive and belongs to the unit's cgroup, which no property reveals.
     readMembers: async () => ({ members: [424242], notes: [] }),
-    isAlive: pid => pid === 424242,
+    kill: killFor([424242]),
   })
   assert.equal(evidence.known, true)
   assert.equal(evidence.stopped, false)
@@ -190,10 +209,11 @@ test('stop evidence: a cgroup that could not be enumerated is unknown', async ()
     unit: UNIT,
     runCommand: runnerFor({ show: ok(showOutput()), 'is-active': failed(3, 'inactive\n') }).runCommand,
     readMembers: async () => ({ members: [], notes: ['cannot read /sys/fs/cgroup/x: EACCES'] }),
+    kill: killFor(),
   })
   assert.equal(evidence.known, false)
   assert.equal(evidence.stopped, false)
-  assert.match(evidence.reason, /could not be enumerated/)
+  assert.match(evidence.reason, /could not be ruled out: cannot read/)
 })
 
 test('stop evidence: an unreadable cgroup.procs is not an empty cgroup', async () => {
@@ -220,10 +240,11 @@ test('stop evidence: an unreadable cgroup.procs is not an empty cgroup', async (
       unit: UNIT,
       runCommand: runnerFor({ show: ok(showOutput({ controlGroup: '/absent.service' })), 'is-active': failed(3, 'inactive\n') }).runCommand,
       readMembers: controlGroup => readCgroupMembers(controlGroup, { root }),
+      kill: killFor(),
     })
     assert.equal(evidence.known, false)
     assert.equal(evidence.stopped, false)
-    assert.match(evidence.reason, /could not be enumerated/)
+    assert.match(evidence.reason, /could not be ruled out: cannot read/)
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 
@@ -232,4 +253,84 @@ test('stop evidence: no unit named is unknown', async () => {
   assert.equal(evidence.known, false)
   assert.equal(evidence.stopped, false)
   assert.equal(evidence.reason, 'no unit was named')
+})
+
+// ── uncertainty is never "stopped" ───────────────────────────────────────────────────────────
+
+test('stop evidence: EPERM on a pid is unknown, never "the process is gone"', async () => {
+  // The cgroup holds a process this user may not signal. EPERM proves it exists; reading it as
+  // "gone" would let the transaction start a second instance beside a live writer.
+  const evidence = await probeSystemdStopState({
+    unit: UNIT,
+    runCommand: runnerFor({ show: ok(showOutput()), 'is-active': failed(3, 'inactive\n') }).runCommand,
+    readMembers: async () => ({ members: [424242], notes: [] }),
+    kill: killDenied(),
+  })
+  assert.equal(evidence.known, false, 'a denied liveness check is not evidence of a stop')
+  assert.equal(evidence.stopped, false)
+  assert.match(evidence.reason, /could not establish whether pid 424242 is still running/)
+  assert.deepEqual(evidence.cgroupMembers, [424242], 'the pid is still named in the record')
+  assert.deepEqual(evidence.leftoverPids, undefined)
+})
+
+test('stop evidence: only ESRCH counts as gone', () => {
+  const esrch = () => { const error = new Error('gone'); error.code = 'ESRCH'; throw error }
+  const eperm = () => { const error = new Error('denied'); error.code = 'EPERM'; throw error }
+  const einval = () => { const error = new Error('bad signal'); error.code = 'EINVAL'; throw error }
+  assert.equal(processState(1234, { kill: () => true }), 'alive')
+  assert.equal(processState(1234, { kill: esrch }), 'gone')
+  assert.equal(processState(1234, { kill: eperm }), 'unknown')
+  assert.equal(processState(1234, { kill: einval }), 'unknown')
+})
+
+test('stop evidence: an is-active run that was killed on its deadline is unknown', async () => {
+  // The probe timed out: the command produced no answer about the unit, so the unit's state is
+  // unknown even though `show` reported it inactive with a clean identity.
+  const evidence = await probeSystemdStopState({
+    unit: UNIT,
+    runCommand: runnerFor({
+      show: ok(showOutput()),
+      'is-active': { stdout: '', stderr: 'systemctl did not finish within 10000ms', code: null },
+    }).runCommand,
+    readMembers: async () => ({ members: [], notes: [] }),
+    kill: killFor(),
+  })
+  assert.equal(evidence.known, false)
+  assert.equal(evidence.stopped, false)
+  assert.match(evidence.reason, /systemctl is-active did not run: systemctl did not finish within 10000ms/)
+})
+
+test('stop evidence: is-active reporting active against an inactive show is a contradiction', async () => {
+  const evidence = await probeSystemdStopState({
+    unit: UNIT,
+    runCommand: runnerFor({ show: ok(showOutput()), 'is-active': ok('active\n') }).runCommand,
+    readMembers: async () => ({ members: [], notes: [] }),
+    kill: killFor(),
+  })
+  assert.equal(evidence.known, false, 'disagreeing observations may not be resolved in favour of "stopped"')
+  assert.equal(evidence.stopped, false)
+  assert.match(evidence.reason, /is-active reports the unit is active while systemctl show reports inactive/)
+})
+
+test('stop evidence: an unparsable cgroup entry refuses the stop', async () => {
+  const evidence = await probeSystemdStopState({
+    unit: UNIT,
+    runCommand: runnerFor({ show: ok(showOutput()), 'is-active': failed(3, 'inactive\n') }).runCommand,
+    readMembers: async () => ({ members: [Number.NaN], notes: [] }),
+    kill: killFor(),
+  })
+  assert.equal(evidence.known, false, 'an entry that cannot be read as a pid might be a process')
+  assert.equal(evidence.stopped, false)
+  assert.match(evidence.reason, /cgroup.procs held an entry that is not a process id/)
+})
+
+test('stop evidence: is-active exit 4 (no such unit) still requires a clean identity', async () => {
+  const evidence = await probeSystemdStopState({
+    unit: UNIT,
+    runCommand: runnerFor({ show: ok(showOutput({ controlPid: '4243' })), 'is-active': failed(4, 'unknown\n') }).runCommand,
+    readMembers: async () => ({ members: [], notes: [] }),
+    kill: killFor(),
+  })
+  assert.equal(evidence.stopped, false)
+  assert.match(evidence.reason, /ControlPID is still 4243/)
 })
