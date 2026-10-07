@@ -9,13 +9,14 @@
  */
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { mkdir, mkdtemp, readFile, readdir, readlink, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, readlink, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
 import { switchRelease, currentRelease, profileVersion, assertNewCandidate, assertNotInService, pointCurrentAtomically } from '../../deploy/switch-release.mjs'
+
 import { makeSyntheticProfile } from './helpers/synthetic.mjs'
 
 const OLD_VERSION = '0.1.2-pkw.4'
@@ -40,6 +41,84 @@ async function makeRoot() {
   await mkdir(join(root, 'releases'), { recursive: true })
   await symlink(join('releases', OLD_VERSION), join(root, 'current'))
   return { root, oldProfile }
+}
+
+/**
+ * A synthetic service that answers the one question the switch actually has to get right: which
+ * instance is alive right now.
+ *
+ * `stop` and `start` are the only ways the state changes, `isStopped` reports the state it can
+ * actually observe, and every hook call is appended to `log`. Tests therefore assert the full
+ * event order and the identity of the surviving release instead of counting calls. A deployment
+ * that starts a second instance beside a live writer shows up here as `running.length > 1`, which
+ * is exactly the outcome the transaction exists to prevent.
+ */
+function livenessService({ root, failStart = 0, stopFailure = () => null, verifyFails = () => false } = {}) {
+  const service = {
+    // The service observes the installation rather than remembering it: a promotion repoints
+    // `current`, so a stop issued afterwards targets the release that is actually serving.
+    servedVersion: async () => {
+      const serving = await currentRelease(root)
+      return serving ? (await profileVersion(join(serving, 'profile'))) ?? OLD_VERSION : OLD_VERSION
+    },
+    running: [OLD_VERSION],
+    log: [],
+    startCount: 0,
+    stopAttempts: [],
+    attemptedStops: [],
+    attemptedVerifications: [],
+    hooks: null,
+  }
+  service.hooks = {
+    stop: async () => {
+      service.current = await service.servedVersion()
+      service.log.push(`stop:${service.current}`)
+      service.stopAttempts.push(service.current)
+      // The attempt happened: if a version is named as the one this request targets, it is the
+      // instance the caller is trying to stop. Whether the request succeeded is a separate fact.
+      if (service.current && !service.attemptedStops.includes(service.current)) service.attemptedStops.push(service.current)
+      const failure = stopFailure({ version: service.current, attempt: service.stopAttempts.length })
+      if (failure) {
+        // A writer that exits while shutting down is still a writer that is no longer there.
+        if (failure.alreadyExited) service.running = []
+        throw new Error(failure.message)
+      }
+      service.running = []
+    },
+    start: async () => {
+      service.current = await service.servedVersion()
+      service.startCount += 1
+      service.log.push(`start:${service.current}`)
+      if (service.startCount <= failStart) {
+        service.running = []
+        throw new Error('synthetic start failure')
+      }
+      service.running = [...service.running, service.current]
+    },
+    isStopped: async () => {
+      const declared = []
+      for (const version of service.running) {
+        const serving = await profileVersion(join(root, 'releases', version, 'profile'))
+        if (!serving) return { known: false, source: 'synthetic-liveness', note: `cannot read the release ${version} is running` }
+        declared.push(serving)
+      }
+      service.log.push(`probe:${declared.join('+') || 'none'}`)
+      if (declared.length === 0) return { known: true, stopped: true, source: 'synthetic-liveness' }
+      if (declared.length === 1) return { known: true, stopped: false, source: 'synthetic-liveness', serving: declared[0] }
+      return { known: false, source: 'synthetic-liveness', serving: declared }
+    },
+    verify: async ({ expectedVersion, expectedRelease }) => {
+      service.log.push(`verify:${expectedVersion}`)
+      service.attemptedVerifications.push(expectedVersion)
+      const serving = await profileVersion(join(expectedRelease, 'profile'))
+      const failure = verifyFails({ version: expectedVersion, attempt: service.attemptedVerifications.filter(v => v === expectedVersion).length })
+      if (failure) throw new Error(failure.message ?? 'synthetic verification failure')
+      if (serving !== expectedVersion) throw new Error(`serving ${serving}, expected ${expectedVersion}`)
+      return { ok: true, enforcing: true, checks: { authenticated: 'verified', servingVersion: serving } }
+    },
+    reachable: async () => ({ reachable: true, status: 200 }),
+  }
+  return service
 }
 
 /** A fake install that writes the new version into the candidate, like pnpm would. */
@@ -92,6 +171,167 @@ test('switch: the release in service may not be the install target', async () =>
   const { root, oldProfile } = await makeRoot()
   try {
     await assert.rejects(() => assertNotInService(oldProfile, root), /release in service/)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('switch: a complete snapshot is never a substitute for stopping the live instance', async () => {
+  const { root } = await makeRoot()
+  // The acceptance run for the candidate fails; nothing else does.
+  const service = livenessService({ root, verifyFails: ({ version }) => version === NEW_VERSION ? { message: 'synthetic verification failure' } : null })
+  try {
+    await assert.rejects(() => switchRelease({
+      root, version: NEW_VERSION, artifacts: [], registry: 'http://127.0.0.1:1', hooks: service.hooks,
+      snapshotDir: join(root, 'snapshots', NEW_VERSION), deps: { prepareInstall: fakeInstall() },
+    }), error => {
+      assert.equal(error.code, 'PKW_DEPLOYMENT_ROLLED_BACK', `unexpected code ${error.code}: ${error.message}`)
+      assert.equal(error.report.status, 'rolled-back-unverified')
+      // The snapshot was complete, and that only decides whether inputs may be written back.
+      assert.equal(error.report.snapshot.complete, true)
+      assert.equal(error.report.snapshotWritten, join(root, 'snapshots', NEW_VERSION))
+      // The stop evidence decides whether anything may be written back, repointed or started, and
+      // it has to be gathered for the instance that is live now, after the promotion.
+      assert.equal(error.report.previousRestore.steps.stop, 'confirmed', `a fresh stop must be confirmed: ${JSON.stringify(error.report.previousRestore)}`)
+      assert.equal(error.report.previousRestore.steps.stopEvidence.stopped, true)
+      assert.equal(error.report.recoverySteps.started, true)
+      assert.equal(error.report.rollback.restoredVersion, OLD_VERSION)
+      return true
+    })
+    // Exactly one instance is left running, and it is the old release.
+    assert.deepEqual(service.running, [OLD_VERSION], `exactly the old release may be running, got ${JSON.stringify(service.running)}`)
+    assert.equal(await currentRelease(root), join(root, 'releases', OLD_VERSION))
+    // The candidate was stopped before the old release was started: the second stop request
+    // targets the promoted candidate, and it is confirmed before anything is restarted.
+    assert.deepEqual(service.stopAttempts, [OLD_VERSION, NEW_VERSION], `the live instance must be stopped again, got ${JSON.stringify(service.stopAttempts)}`)
+    assert.deepEqual(service.log, [
+      `stop:${OLD_VERSION}`, 'probe:none',           // the release in service is stopped first
+      `start:${NEW_VERSION}`, `verify:${NEW_VERSION}`, // the promoted candidate is started and fails acceptance
+      `stop:${NEW_VERSION}`, 'probe:none',           // the live candidate is stopped and that is confirmed
+      `start:${OLD_VERSION}`,                        // only then is the release in service started again
+    ])
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('switch: a stop that throws after the service stopped never yields an activated deployment', async () => {
+  const { root } = await makeRoot()
+  // The one service this deployment replaces reports that it exited, and the stop request still
+  // fails. The probe can see the truth: there is no writer.
+  const service = livenessService({
+    root,
+    stopFailure: ({ version, attempt }) => version === OLD_VERSION && attempt === 1
+      ? { message: 'synthetic stop failure', alreadyExited: true }
+      : null,
+  })
+  try {
+    await assert.rejects(() => switchRelease({
+      root, version: NEW_VERSION, artifacts: [], registry: 'http://127.0.0.1:1', hooks: service.hooks,
+      snapshotDir: join(root, 'snapshots', NEW_VERSION), deps: { prepareInstall: fakeInstall() },
+    }), error => {
+      // Stopping safely is not the same as stopping successfully. The stop error is a deployment
+      // failure even though the probe proves the service is down, and the candidate is never
+      // activated. The error must not be swallowed, and it must not be thrown so early that the
+      // stopped release is left down either.
+      assert.equal(error.code, 'PKW_DEPLOYMENT_ROLLED_BACK', `unexpected code ${error.code}: ${error.message}`)
+      assert.notEqual(error.report.status, 'activated', 'a stop that failed must never be reported as activated')
+      assert.equal(error.report.status, 'rolled-back-unverified')
+      assert.equal(error.cause.code, 'PKW_STOP_FAILED')
+      assert.equal(error.report.activationError.code, 'PKW_STOP_FAILED')
+      assert.match(error.cause.message, /The stop of the release in service failed/)
+      assert.match(error.cause.message, /the probe proves the service stopped/)
+      assert.equal(error.cause.stopError, 'synthetic stop failure')
+      // The first stop reported a failure although the probe proved the service was down; the
+      // recovery establishes its own evidence before it writes anything back or starts anything.
+      assert.equal(error.report.stopAttempts.length, 2)
+      assert.deepEqual(error.report.stopAttempts.map(attempt => attempt.stopSucceeded), [false, true])
+      assert.deepEqual(error.report.stopAttempts.map(attempt => attempt.stopError), ['synthetic stop failure', null])
+      assert.equal(error.report.stopAttempts[0].evidence.stopped, true, 'the probe still proved the service was down')
+      assert.equal(error.report.previousRestore.steps.stop, 'confirmed')
+      assert.equal(error.report.rollback.restoredVersion, OLD_VERSION)
+      return true
+    })
+    // The deployment failed, so what is running is the release that was in service, not the
+    // candidate. Only one instance is alive.
+    assert.deepEqual(service.running, [OLD_VERSION], `exactly the release in service may run, got ${JSON.stringify(service.running)}`)
+    assert.equal(service.attemptedVerifications.includes(NEW_VERSION), false, 'a refused deployment must not be verified')
+    assert.equal(service.startCount, 1, 'only the release in service is started, never the candidate')
+    assert.deepEqual(service.attemptedStops, [OLD_VERSION], 'the candidate is never started, so only the old release is stopped')
+    assert.equal(await currentRelease(root), join(root, 'releases', OLD_VERSION))
+    assert.deepEqual(service.log, [
+      `stop:${OLD_VERSION}`, 'probe:none',    // the stop hook fails although the probe proves the service is down
+      `stop:${OLD_VERSION}`, 'probe:none',    // the recovery establishes its own evidence
+      `start:${OLD_VERSION}`,                 // and only then brings the release in service back up
+    ])
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('switch: a symlinked declared input is refused instead of captured as a link', async () => {
+  const { root, oldProfile } = await makeRoot()
+  const service = livenessService({ root })
+  // The declared input is a link to a shared configuration outside the installation.
+  const externalTarget = join(root, 'shared-npmrc')
+  await writeFile(externalTarget, 'registry=https://registry.npmjs.org/\n')
+  await rm(join(oldProfile, '.npmrc'))
+  await symlink(externalTarget, join(oldProfile, '.npmrc'))
+  const snapshotDir = join(root, 'snapshots', NEW_VERSION)
+  try {
+    await assert.rejects(() => switchRelease({
+      root, version: NEW_VERSION, artifacts: [], registry: 'http://127.0.0.1:1', hooks: service.hooks,
+      snapshotDir, deps: { prepareInstall: fakeInstall() },
+    }), error => {
+      // A symlinked input cannot be captured faithfully: copying the link would make the snapshot
+      // follow the target afterwards, and copying the target would freeze content the release does
+      // not own. The refusal names the phase, and the code names the kind of refusal.
+      assert.equal(error.code, 'PKW_DEPLOYMENT_ROLLED_BACK', `unexpected code ${error.code}: ${error.message}`)
+      assert.equal(error.cause.code, 'PKW_UNSUPPORTED_INPUT')
+      assert.match(error.cause.message, /the declared input \.npmrc is a symlink/)
+      assert.match(error.cause.message, new RegExp(externalTarget.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+      assert.equal(error.report.snapshot.written.includes('.npmrc'), false, 'a refused input is never claimed as captured')
+      assert.equal(error.report.previousRestore.required, true)
+      assert.equal(error.report.previousRestore.steps.started, true, 'the stopped release is brought back up')
+      return true
+    })
+    // The link is exactly as it was, and the release in service is running again.
+    assert.equal(await readlink(join(oldProfile, '.npmrc')), externalTarget, 'the link must not be replaced by a copy')
+    assert.equal(await readFile(join(oldProfile, '.npmrc'), 'utf8'), 'registry=https://registry.npmjs.org/\n')
+    assert.equal(await currentRelease(root), join(root, 'releases', OLD_VERSION))
+    // The snapshot was never completed, so it carries no manifest and the refused input was not
+    // captured as a link either.
+    assert.equal(existsSync(join(snapshotDir, 'inputs.json')), false, 'an incomplete snapshot has no manifest')
+    assert.deepEqual((await readdir(snapshotDir)).sort(), ['package.json', 'pnpm-lock.yaml'], 'the inputs captured before the refusal are described as such')
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('switch: a permission change that keeps the bytes is still restored', async () => {
+  const { root, oldProfile } = await makeRoot()
+  const service = livenessService({ root })
+  const inputPath = join(oldProfile, 'package.json')
+  await chmod(inputPath, 0o600)
+  const before = await stat(inputPath)
+  try {
+    await assert.rejects(() => switchRelease({
+      root, version: NEW_VERSION, artifacts: [], registry: 'http://127.0.0.1:1', hooks: service.hooks,
+      snapshotDir: join(root, 'snapshots', NEW_VERSION),
+      deps: {
+        prepareInstall: fakeInstall(),
+        afterStopBeforeDriftCheck: async ({ candidate }) => {
+          // The bytes are untouched; only the permissions change, and the candidate drifts so the
+          // promotion is refused.
+          await chmod(inputPath, 0o644)
+          await writeFile(join(candidate, 'node_modules/@deepseek-ai/dsh-pkw-web/lib/index.js'), 'export const version = "tampered"\n')
+        },
+      },
+    }), error => {
+      assert.equal(error.code, 'PKW_DEPLOYMENT_ROLLED_BACK', `unexpected code ${error.code}: ${error.message}`)
+      assert.equal(error.cause.code, 'PKW_CANDIDATE_DRIFT')
+      // Bytes alone would have called this input unchanged; the capture records the permissions the
+      // release declared, so the change is detected and put back.
+      assert.equal(error.report.previousRestore.steps.inputsRestored, true, 'the permission change must be restored')
+      assert.equal(error.report.previousRestore.steps.inputsUnchanged, false)
+      return true
+    })
+    assert.equal((await stat(inputPath)).mode & 0o7777, before.mode & 0o7777, 'the declared permissions must come back')
+    assert.equal(await readFile(inputPath, 'utf8'), RELEASE_INPUTS['package.json'], 'and the bytes with them')
+    assert.equal(await currentRelease(root), join(root, 'releases', OLD_VERSION))
+    assert.equal(service.startCount, 1)
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 
@@ -207,7 +447,10 @@ test('switch: a failure inside the transaction restores the old release and repo
       return true
     })
     assert.equal(await currentRelease(root), join(root, 'releases', OLD_VERSION), 'current must point back at the old release')
-    assert.equal(service.calls.stop, 1, 'the stop runs once for the whole switch; recovery never repeats it')
+    // The stop is requested once for the release in service and once for the candidate that the
+    // deployment started and could not verify: the instance being replaced changes, so the
+    // evidence gathered before the promotion does not describe what is live now.
+    assert.equal(service.calls.stop, 2, 'the instance that is live at each stage is stopped')
     assert.equal(service.calls.start, 2, 'the recovery must start the restored release')
     assert.equal(await profileVersion(join(root, 'releases', OLD_VERSION, 'profile')), OLD_VERSION)
   } finally { await rm(root, { recursive: true, force: true }) }
@@ -393,6 +636,8 @@ test('switch: a stop that fails while the writer is still alive is refused, not 
       assert.equal(error.report.stopState.known, false)
       assert.equal(error.report.stopState.stopped, false)
       assert.equal(error.report.stopState.probeOutcome, 'still-running')
+      // The original stop failure is preserved where the caller can read it…
+      assert.equal(error.report.stopError, 'synthetic stop failure')
       assert.equal(error.stopError, 'synthetic stop failure')
       assert.match(error.message, /the probe reports the service is still running/)
       assert.match(error.message, /the stop hook also failed: synthetic stop failure/)
@@ -496,6 +741,7 @@ test('switch: a stop with no state callback is unknown, not stopped', async () =
         stage: 'before promotion',
       })
       assert.equal(error.report.previousRestore.required, false)
+      assert.equal(error.report.stopError, 'synthetic stop failure')
       assert.equal(error.stopError, 'synthetic stop failure')
       assert.match(error.message, /no stop state probe was supplied/)
       return true
@@ -592,19 +838,28 @@ test('switch: a failure after the stop restores the stopped release and leaves t
       assert.equal(error.report.status, 'rolled-back-unverified')
       assert.equal(error.report.promoted, undefined, 'nothing may be reported as promoted')
       // The snapshot is complete and is the thing the restore used.
-      assert.deepEqual(error.report.snapshot, {
-        dir: join(root, 'snapshots', NEW_VERSION),
-        expected: ['package.json', 'pnpm-lock.yaml', '.npmrc'],
-        written: ['package.json', 'pnpm-lock.yaml', '.npmrc'],
-        complete: true,
-      })
+      assert.equal(error.report.snapshot.dir, join(root, 'snapshots', NEW_VERSION))
+      assert.deepEqual(error.report.snapshot.expected, ['package.json', 'pnpm-lock.yaml', '.npmrc'])
+      assert.deepEqual(error.report.snapshot.written, ['package.json', 'pnpm-lock.yaml', '.npmrc'])
+      assert.equal(error.report.snapshot.complete, true)
+      // Each captured input is described by its bytes, its permissions and its kind, so a restore
+      // can tell "unchanged" from "same bytes, different permissions".
+      for (const name of ['package.json', 'pnpm-lock.yaml', '.npmrc']) {
+        const description = error.report.snapshot.inputs[name]
+        assert.equal(description.kind, 'file', `${name} must be captured as a regular file`)
+        assert.equal(typeof description.sha256, 'string')
+        assert.equal(typeof description.mode, 'number')
+        assert.equal(description.sha256, createHash('sha256').update(RELEASE_INPUTS[name]).digest('hex'))
+      }
       assert.equal(error.report.snapshotWritten, join(root, 'snapshots', NEW_VERSION))
       // The restore outcome is reported item by item, separately from the deployment failure.
       assert.equal(error.report.previousRestore.required, true)
       assert.deepEqual(error.report.previousRestore.steps, {
-        stop: 'already-confirmed-before-promotion', stopEvidence: null, inputsRestored: true,
-        inputsUnchanged: false, currentRepointed: true, started: true, versionConfirmed: true,
+        stop: 'confirmed', stopEvidence: error.report.previousRestore.steps.stopEvidence,
+        inputsRestored: true, inputsUnchanged: false, currentRepointed: true, started: true,
+        versionConfirmed: true,
       })
+      assert.equal(error.report.previousRestore.steps.stopEvidence.stopped, true, 'the restore is confirmed before it writes anything back')
       assert.equal(error.report.rollback.restoredRelease, join(root, 'releases', OLD_VERSION))
       assert.equal(error.report.rollback.restoredVersion, OLD_VERSION)
       assert.deepEqual(error.report.actions, {
@@ -628,14 +883,21 @@ test('switch: a failure after the stop restores the stopped release and leaves t
 test('switch: a failure inside the snapshot loop leaves the snapshot incomplete and unused', async () => {
   const { root, oldProfile } = await makeRoot()
   const service = serviceStub(verifyOk)
-  // The second staged input cannot be copied, so the snapshot directory ends up holding the first
-  // one and none of the others.
-  await rm(join(oldProfile, 'pnpm-lock.yaml'))
-  await mkdir(join(oldProfile, 'pnpm-lock.yaml'))
+  // Capturing the second input fails, so the snapshot directory ends up holding the first one and
+  // none of the others.
   try {
     await assert.rejects(() => switchRelease({
       root, version: NEW_VERSION, artifacts: [], registry: 'http://127.0.0.1:1', hooks: service.hooks,
-      snapshotDir: join(root, 'snapshots', NEW_VERSION), deps: { prepareInstall: fakeInstall() },
+      snapshotDir: join(root, 'snapshots', NEW_VERSION),
+      deps: {
+        prepareInstall: fakeInstall(),
+        captureInput: async ({ from, to, name, describe, copy }) => {
+          if (name === 'pnpm-lock.yaml') throw new Error('synthetic capture failure for pnpm-lock.yaml')
+          const description = await describe(from)
+          await copy(from, to)
+          return description
+        },
+      },
     }), error => {
       assert.equal(error.code, 'PKW_DEPLOYMENT_ROLLED_BACK', `unexpected code ${error.code}: ${error.message}`)
       assert.equal(error.cause.code, 'PKW_SNAPSHOT_INCOMPLETE', 'the phase that failed must be named')

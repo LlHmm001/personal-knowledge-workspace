@@ -34,7 +34,7 @@
  * release came back up; whether the deployment is acceptable is the verifier's decision.
  */
 import { createHash } from 'node:crypto'
-import { cp, mkdir, readFile, readdir, rename, rm, stat, symlink } from 'node:fs/promises'
+import { chmod, cp, lstat, mkdir, readFile, readdir, readlink, rename, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { dirname, join, resolve, sep } from 'node:path'
 import { spawn } from 'node:child_process'
@@ -120,21 +120,71 @@ export async function pointCurrentAtomically(root, releaseRelativePath, ops = {}
 }
 
 /**
- * Whether two trees hold identical regular files. Symlinks, directories and unreadable entries
- * are all "not identical", so the caller re-copies rather than keeping something it cannot
- * vouch for.
+ * Capture one declared input into `to`, and describe it by everything a restore has to put back.
+ * The copy is verified against its source description: a capture that does not reproduce what it
+ * read is not a capture of anything.
+ */
+async function captureInput({ from, to, name }) {
+  const description = await describeInput(from)
+  await cp(from, to)
+  if (!(await matchesInput(to, description))) throw new Error(`the snapshot of ${name} does not reproduce its source`)
+  return description
+}
+
+/**
+ * Describe one declared input by everything a restore has to put back: its bytes, its permissions,
+ * whether it is a symlink and where that symlink points.
+ *
+ * Content alone is not enough. An input whose bytes match but whose mode changed is not the input
+ * the release was built from, and a symlink whose target changed has different content even when
+ * the file it currently resolves to has not changed yet.
+ */
+export async function describeInput(path) {
+  const info = await lstat(path).catch(() => null)
+  if (!info) return null
+  if (info.isSymbolicLink()) return { kind: 'symlink', target: await readlink(path) }
+  if (!info.isFile()) return { kind: 'unsupported', note: info.isDirectory() ? 'a directory' : 'not a regular file' }
+  return { kind: 'file', mode: info.mode & 0o7777, sha256: sha256(await readFile(path)), size: info.size }
+}
+
+/** Whether a captured description still describes what is on disk at `path`. */
+export async function matchesInput(path, description) {
+  if (!description) return false
+  const current = await describeInput(path)
+  if (!current || current.kind !== description.kind) return false
+  if (current.kind !== 'file') return current.target === description.target
+  return current.sha256 === description.sha256 && current.mode === description.mode
+}
+
+/** Where the manifest of a snapshot lives, and what it records. */
+const SNAPSHOT_MANIFEST = 'inputs.json'
+
+/** Read the manifest of a snapshot, or null when the snapshot has none. */
+async function readSnapshotManifest(snapshotDir) {
+  try {
+    const parsed = JSON.parse(await readFile(join(snapshotDir, SNAPSHOT_MANIFEST), 'utf8'))
+    return parsed && typeof parsed === 'object' && parsed.inputs ? parsed : null
+  } catch { return null }
+}
+
+/**
+ * Whether two paths hold the same thing: the same bytes, the same permissions and the same kind.
+ *
+ * A symlink is never followed here. Symlinks are compared by the link itself, because following
+ * one would compare the target instead of the input, and an input whose target moved is not the
+ * input the release declared.
  */
 export async function sameTree(from, to) {
-  const FROM = await stat(from).catch(() => null)
-  const TO = await stat(to).catch(() => null)
-  if (!FROM || !TO || FROM.isDirectory() !== TO.isDirectory()) return false
-  if (!FROM.isDirectory()) return sha256(await readFile(from)) === sha256(await readFile(to))
-  const entries = (await readdir(from)).sort()
-  if (entries.join('\u0000') !== (await readdir(to)).sort().join('\u0000')) return false
-  for (const name of entries) {
-    if (!(await sameTree(join(from, name), join(to, name)))) return false
+  const FROM = await lstat(from).catch(() => null)
+  const TO = await lstat(to).catch(() => null)
+  if (!FROM || !TO) return false
+  if (FROM.isSymbolicLink() || TO.isSymbolicLink()) {
+    if (!FROM.isSymbolicLink() || !TO.isSymbolicLink()) return false
+    return (await readlink(from)) === (await readlink(to))
   }
-  return true
+  if (!FROM.isFile() || !TO.isFile()) return false
+  if ((FROM.mode & 0o7777) !== (TO.mode & 0o7777)) return false
+  return sha256(await readFile(from)) === sha256(await readFile(to))
 }
 
 /**
@@ -211,20 +261,42 @@ function currentLinkTarget(releasePath, root) {
  * "nothing usable was captured" from "a complete snapshot is available". The tree being
  * snapshotted is only read here, never written.
  */
-async function stageSnapshot({ snapshotDir, installed, staged }) {
+async function stageSnapshot({ snapshotDir, installed, staged, capture = captureInput }) {
   // The progress object is owned by the caller, so a failure halfway through still leaves a
   // faithful description of what was staged and what was not.
   staged.dir = snapshotDir
+  staged.inputs = {}
+  await rm(join(snapshotDir, SNAPSHOT_MANIFEST), { force: true })
   await mkdir(snapshotDir, { recursive: true, mode: 0o700 })
   for (const name of PROFILE_INPUTS) {
     const from = join(installed, 'profile', name)
     if (!existsSync(from)) continue
+    // The entry is recorded before it is captured, so a failure during the capture still names
+    // the input it was working on.
     staged.expected.push(name)
-    await cp(from, join(snapshotDir, name))
-    // A snapshot that does not match its source is not a snapshot of anything.
-    if (!(await sameTree(from, join(snapshotDir, name)))) throw new Error(`snapshot of ${name} does not match its source`)
+    const info = await lstat(from)
+    if (info.isSymbolicLink()) {
+      // A symlinked input cannot be captured faithfully: copying the link would make the snapshot
+      // follow whatever the target does afterwards, and copying the target would freeze content
+      // that the release does not actually own. This is refused before anything is captured,
+      // written back or started. Capturing the link target and the resolved content separately is
+      // a deliberate future extension, not something this snapshot pretends to do.
+      const refusal = new Error(`the declared input ${name} is a symlink (${await readlink(from)}); a rollback cannot capture a symlinked input faithfully`)
+      refusal.code = 'PKW_UNSUPPORTED_INPUT'
+      throw refusal
+    }
+    if (!info.isFile()) {
+      const refusal = new Error(`the declared input ${name} is not a regular file`)
+      refusal.code = 'PKW_UNSUPPORTED_INPUT'
+      throw refusal
+    }
+    const description = await capture({ from, to: join(snapshotDir, name), name })
+    staged.inputs[name] = description
     staged.written.push(name)
   }
+  // The manifest is what ties a staged copy to the exact bytes, permissions and link targets the
+  // release declared. A snapshot without it is not usable for a restore.
+  await writeFile(join(snapshotDir, SNAPSHOT_MANIFEST), JSON.stringify({ version: 1, inputs: staged.inputs }, null, 2) + '\n', { mode: 0o600 })
   staged.complete = true
   return staged
 }
@@ -235,8 +307,9 @@ async function stageSnapshot({ snapshotDir, installed, staged }) {
  * itself failed, or it did not establish that nothing is running any more.
  */
 function stopNotConfirmed(confirmation, label) {
-  const { reason, stopError } = confirmation
-  const failure = new Error(`${label}: ${reason}${stopError ? `; the stop hook also failed: ${stopError.message}` : ''}`)
+  const { reason, stopError, evidence } = confirmation
+  const detail = reason ?? `the probe proves the service stopped (${JSON.stringify(evidence)})`
+  const failure = new Error(`${label}: ${detail}${stopError ? `; the stop hook also failed: ${stopError.message}` : ''}`)
   failure.code = stopError ? 'PKW_STOP_FAILED' : 'PKW_STOP_NOT_CONFIRMED'
   failure.stopError = stopError ? stopError.message : null
   return failure
@@ -297,34 +370,38 @@ async function stopAndConfirm({ hooks, report, label }) {
 /**
  * Restore the release in service after a failure.
  *
- * Two modes, both of which end the same way: `current` is replaced by an atomic rename, the old
- * release is started again, and its version is read back rather than assumed.
+ * Two independent questions, never conflated:
  *
- *   snapshotDir given   the completed snapshot holds the inputs the old release was built from;
- *                       they are written back and nothing else in the tree is touched.
- *   snapshotDir null    nothing is written back at all, and a fresh stop must be confirmed first,
- *                       because starting the old release beside a possibly live writer would
- *                       create the second writer this whole transaction exists to prevent.
+ *   may the inputs be written back?   only when the snapshot is complete
+ *   may anything be touched at all?   only with fresh evidence that no writer is alive now
+ *
+ * Evidence gathered before the promotion describes the instance that was replaced, not the one
+ * that may be running after it. So a stop is requested again for whatever is live now, and it is
+ * confirmed before the inputs are written back, before `current` is repointed and before anything
+ * is started. A complete snapshot only decides whether the snapshot may be applied: without a
+ * confirmed stop, recovery refuses and reports why.
  */
 async function recoverPreviousRelease({ root, installed, snapshotDir, hooks, report }) {
   const applySnapshot = typeof snapshotDir === 'string'
   const steps = {
-    stop: applySnapshot ? 'already-confirmed-before-promotion' : 'refused-without-evidence',
-    stopEvidence: null, inputsRestored: false, inputsUnchanged: !applySnapshot,
+    stop: 'refused-without-evidence', stopEvidence: null,
+    inputsRestored: false, inputsUnchanged: false,
     currentRepointed: false, started: false, versionConfirmed: false,
   }
+  report.recoverySteps = steps
+  const confirmation = await stopAndConfirm({ hooks, report, label: 'before restoring the previous release' })
+  if (!confirmation.evidence) {
+    const failure = stopNotConfirmed(confirmation, 'before restoring the previous release')
+    steps.inputsUnchanged = true
+    report.status = 'recovery-blocked-unverified-stop'
+    return { recovered: false, failureReason: failure.message, error: { message: failure.message, code: failure.code, stopError: failure.stopError } }
+  }
+  steps.stop = 'confirmed'
+  steps.stopEvidence = confirmation.evidence
   if (!applySnapshot) {
-    // The instance to silence is whatever `current` leads to now, so the probe is asked again
-    // instead of trusting evidence gathered before the failure.
-    const confirmation = await stopAndConfirm({ hooks, report, label: 'before restoring the previous release' })
-    if (!confirmation.evidence) {
-      const failure = stopNotConfirmed(confirmation, 'before restoring the previous release')
-      report.recoverySteps = steps
-      report.status = 'recovery-blocked-unverified-stop'
-      return { recovered: false, failureReason: failure.message, error: { message: failure.message, code: failure.code, stopError: failure.stopError } }
-    }
-    steps.stop = 'confirmed'
-    steps.stopEvidence = confirmation.evidence
+    // No usable snapshot: nothing may be written back, but the release was stopped by this run and
+    // has to be brought back up.
+    steps.inputsUnchanged = true
   }
   const restored = await startPreviousReleaseSteps({ root, previousRelease: installed, snapshotDir, report, hooks, steps, applySnapshot })
   report.recoverySteps = steps
@@ -338,15 +415,29 @@ async function recoverPreviousRelease({ root, installed, snapshotDir, hooks, rep
 async function startPreviousReleaseSteps({ root, previousRelease, snapshotDir, report, hooks, steps, applySnapshot }) {
   try {
     if (applySnapshot) {
-      for (const name of PROFILE_INPUTS) {
+      const manifest = await readSnapshotManifest(snapshotDir)
+      if (!manifest) {
+        const broken = new Error(`the snapshot in ${snapshotDir} has no usable manifest, so nothing may be written back from it`)
+        broken.code = 'PKW_SNAPSHOT_UNUSABLE'
+        throw broken
+      }
+      for (const [name, description] of Object.entries(manifest.inputs)) {
         const from = join(snapshotDir, name)
         const to = join(previousRelease, 'profile', name)
         if (!existsSync(from)) continue
-        // Unchanged inputs are left alone: copying over a file that already matches its snapshot
-        // can only lose something, never restore anything.
-        if (await sameTree(from, to)) continue
+        // An input that still matches the capture — bytes, permissions and, for a link, the link
+        // itself — is left alone: rewriting it could only lose something.
+        if (await matchesInput(to, description)) continue
+        if (description.kind !== 'file') {
+          const refusal = new Error(`the captured input ${name} is a ${description.kind}, which this restore cannot put back`)
+          refusal.code = 'PKW_UNSUPPORTED_INPUT'
+          throw refusal
+        }
         await rm(to, { recursive: true, force: true })
         await cp(from, to)
+        // The permissions the release declared are part of the input, so they are restored too.
+        await chmod(to, description.mode)
+        if (!(await matchesInput(to, description))) throw new Error(`the restored input ${name} does not match the snapshot`)
         steps.inputsRestored = true
       }
       if (!steps.inputsRestored) steps.inputsUnchanged = true
@@ -452,35 +543,44 @@ export async function switchRelease({
   // writer may still be running is exactly the outcome this design prevents. A refusal here
   // leaves the release in service running and its entry point untouched, and the original stop
   // error is preserved in the report.
-  {
-    const firstStop = await stopAndConfirm({ hooks, report, label: 'before promotion' })
-    if (!firstStop.evidence) {
-      report.status = 'failed-before-promotion'
-      report.previousRestore = {
-        required: false,
-        reason: `the release in service was not stopped (${firstStop.probeOutcome ?? 'no evidence'}), so it was left running and its entry point was not touched`,
-      }
-      const failure = stopNotConfirmed(firstStop, 'Deployment refused before promoting the candidate')
-      failure.report = report
-      report.actions = { ...actions }
-      report.stopError = failure.stopError
-      throw failure
-    }
+  // The stop is confirmed inside the transaction, not before it. A stop that reports failure
+  // while the probe proves the service is down is a failed deployment that still has a stopped
+  // release to bring back: it must travel through the recovery path, not be thrown past it.
+  const firstStop = await stopAndConfirm({ hooks, report, label: 'before promotion' })
+  if (!firstStop.evidence) {
+    // Nothing is known to have stopped, so nothing is restored. The refusal is reported as such by
+    // the recovery decision below, which sees a run that confirmed no stop and changed no pointer.
+    report.status = 'failed-before-promotion'
+    report.stopError = firstStop.stopError ? firstStop.stopError.message : null
+  } else {
     actions.stopConfirmed = true
+    if (firstStop.stopError) {
+      // Stopping safely is not the same as stopping successfully: proceeding would activate the
+      // candidate on the strength of an operation that failed. The evidence that the service is
+      // down is still used to bring the release in service back up.
+      report.stopError = firstStop.stopError.message
+    }
   }
   try {
+    if (!firstStop.evidence) throw stopNotConfirmed(firstStop, 'Deployment refused before promoting the candidate')
+    if (firstStop.stopError) throw stopNotConfirmed(firstStop, 'The stop of the release in service failed')
     // The snapshot is taken first, immediately after the stop is confirmed. Every later failure in
     // this block has a complete rollback snapshot available to it, and no later check can fail
     // before the recovery material exists.
     report.snapshot = { dir: snapshotDir, expected: [], written: [], complete: false }
     try {
-      await stageSnapshot({ snapshotDir, installed, staged: report.snapshot })
+      await stageSnapshot({
+        snapshotDir, installed, staged: report.snapshot,
+        capture: deps.captureInput ? ({ from, to, name }) => deps.captureInput({ from, to, name, describe: describeInput, copy: cp }) : undefined,
+      })
       report.snapshotWritten = snapshotDir
     } catch (snapshotError) {
       // Nothing may be restored from a snapshot that was never completed: staging some of the
       // inputs and copying them back would replace a complete release with an incomplete one.
-      // The code names the phase that failed. The underlying errno stays in the message.
-      snapshotError.code = 'PKW_SNAPSHOT_INCOMPLETE'
+      // A refusal keeps its own code, because "this input cannot be captured" is a different
+      // finding from "the capture ran out of road"; every other failure is named as the phase it
+      // happened in, with the underlying errno left in the message.
+      snapshotError.code = snapshotError.code ?? 'PKW_SNAPSHOT_INCOMPLETE'
       throw snapshotError
     }
     // Only now is the snapshot complete enough to restore from.
@@ -533,8 +633,19 @@ export async function switchRelease({
       || actions.stopConfirmed
       || await pointerNeedsRestoring(root, installed)
     if (!needsRecovery) {
-      report.previousRestore = { required: false, reason: 'the release in service was never stopped and its entry point still points at it, so nothing was written back' }
-      throw refusedBeforePromotion(error, report)
+      const stopRefused = !actions.stopConfirmed
+      report.previousRestore = {
+        required: false,
+        reason: stopRefused
+          ? `the release in service was not stopped (${report.stopState?.probeOutcome ?? 'no evidence'}) and its entry point still leads to it, so nothing was written back`
+          : 'the release in service was never stopped and its entry point still points at it, so nothing was written back',
+        stopEvidenceAtFailure: actions.stopConfirmed,
+      }
+      const refusal = refusedBeforePromotion(error, report)
+      // The original stop failure stays on the error as well as on the report: a caller that only
+      // catches the error must still be able to see why the stop did not succeed.
+      refusal.stopError = error.stopError ?? null
+      throw refusal
     }
     report.previousRestore = { required: true, stopEvidenceAtFailure: actions.stopConfirmed }
 
