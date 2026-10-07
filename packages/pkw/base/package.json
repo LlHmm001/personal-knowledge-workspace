@@ -7,5 +7,14 @@
     "bundle": {
       "patch": "./cordis.patch.yml"
     }
+  },
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "files": [
+    "lib",
+    "cordis.patch.yml"
+  ],
+  "scripts": {
+    "build": "node ../../../scripts/build.mjs base"
   }
 }

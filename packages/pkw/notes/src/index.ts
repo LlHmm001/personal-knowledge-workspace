@@ -10,7 +10,7 @@
 import { Service, type Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, rename as renameFile, rm } from 'node:fs/promises'
+import { link, mkdir, rename as renameFile, rm, unlink } from 'node:fs/promises'
 import { dirname, posix } from 'node:path'
 import type { FsTarget } from '@deepseek-ai/dsh-fs'
 import {
@@ -25,6 +25,7 @@ import {
   NOTE_RESTORED,
   NOTE_UPDATED,
   NoteId,
+  NoteUpdateConflictError,
   OperationId,
   noteDomainSpec,
   type CreateNoteInput,
@@ -33,6 +34,7 @@ import {
   type NoteIdentityConflict,
   type NoteIndexRecord,
   type NoteListFilter,
+  type NoteUpdateOptions,
   type PkwNotesService,
   type ReconcileReport,
 } from '@deepseek-ai/dsh-pkw-domain'
@@ -101,6 +103,7 @@ export class NotesService extends Service {
   private order?: KvTable<string, OrderRecord>
   private folderTrash?: KvTable<string, FolderTrashEntry>
   private foldersCache?: string[]
+  private mutationTail: Promise<void> = Promise.resolve()
 
   constructor(ctx: Context, private readonly config: Config) {
     super(ctx, 'pkwNotes')
@@ -138,6 +141,16 @@ export class NotesService extends Service {
     return this.folderTrash
   }
 
+  /** One in-process writer per workspace, including folder/reconcile mutations.
+   * No remote request is made inside this queue. A rejected operation must not
+   * poison later saves. This is not a lock against external filesystem writers.
+   */
+  private withMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const running = this.mutationTail.then(operation)
+    this.mutationTail = running.then(() => undefined, () => undefined)
+    return running
+  }
+
   // ── workspace file mutations (the `ctx.fs` seam is read + text-write/edit
   // only; rename/delete go through `processPath` to the host filesystem,
   // matching the harness's own trusted storage backends) ──────────────────────
@@ -147,8 +160,23 @@ export class NotesService extends Service {
   }
 
   private async moveFile(src: FsTarget, dst: FsTarget): Promise<void> {
-    await mkdir(dirname(this.processPath(dst)), { recursive: true })
-    await renameFile(this.processPath(src), this.processPath(dst))
+    const source = this.processPath(src)
+    const destination = this.processPath(dst)
+    if (source === destination) return
+    await mkdir(dirname(destination), { recursive: true })
+    if (await this.ctx.fs.stat(dst) !== undefined) {
+      throw new Error('pkwNotes: move target already exists; move or rename it first')
+    }
+    if ((await this.ctx.fs.stat(src))?.type === 'file') {
+      // rename() replaces an existing file. Reserve the destination atomically
+      // instead: EEXIST leaves both Notes intact even when two moves overlap.
+      // A crash between link/unlink leaves two copies of the identity to
+      // reconcile, rather than losing either source or destination content.
+      await link(source, destination)
+      await unlink(source)
+    } else {
+      await renameFile(source, destination)
+    }
   }
 
   private async removeFile(target: FsTarget): Promise<void> {
@@ -157,6 +185,36 @@ export class NotesService extends Service {
 
   private async removeDir(target: FsTarget): Promise<void> {
     await rm(this.processPath(target), { recursive: true, force: true })
+  }
+
+  private async assertFileIdentity(target: FsTarget, noteId: NoteId): Promise<void> {
+    const { parseFrontmatter } = await import('./frontmatter.ts')
+    const markdown = await this.ctx.fs.readText(target)
+    if (parseFrontmatter(markdown).frontmatter.id !== String(noteId)) {
+      throw new Error(`pkwNotes: file identity does not match note '${noteId}'; reconcile before retrying`)
+    }
+  }
+
+  /** Locate a trashed Note by its embedded identity across individual/folder archives. */
+  private async archivedNoteTarget(record: NoteIndexRecord): Promise<FsTarget | undefined> {
+    const { parseFrontmatter } = await import('./frontmatter.ts')
+    const candidates = [record.relativePath]
+    for (const [, entry] of this.requireFolderTrash().entries()) {
+      const prefix = `${entry.originalPath}/`
+      if (record.relativePath.startsWith(prefix)) {
+        candidates.push(posix.join(entry.archivedPath, record.relativePath.slice(prefix.length)))
+      }
+    }
+    let found: FsTarget | undefined
+    for (const path of candidates) {
+      const target = await this.ctx.fs.resolve(this.handle.archivePath(path))
+      if ((await this.ctx.fs.stat(target))?.type !== 'file') continue
+      const id = parseFrontmatter(await this.ctx.fs.readText(target)).frontmatter.id
+      if (id !== String(record.noteId)) continue
+      if (found !== undefined) throw new Error(`pkwNotes: multiple archived files for note '${record.noteId}'; resolve the identity conflict first`)
+      found = target
+    }
+    return found
   }
 
   list(filter: NoteListFilter = {}): NoteIndexRecord[] {
@@ -174,19 +232,26 @@ export class NotesService extends Service {
   }
 
   async getDocument(noteId: NoteId): Promise<NoteDocument> {
+    return this.withMutation(() => this.getDocumentLocked(noteId))
+  }
+
+  private async getDocumentLocked(noteId: NoteId): Promise<NoteDocument> {
     const record = this.requireTable().get(noteId)
     if (record === undefined) throw new Error(`pkwNotes: unknown note '${noteId}'`)
+    if (record.deletedAt !== undefined) throw new Error(`pkwNotes: note '${noteId}' is trashed`)
     let markdown: string
     let rel = record.relativePath
     try {
       markdown = await this.ctx.fs.readText(await this.ctx.fs.resolve(this.handle.notePath(rel)))
+      const { parseFrontmatter } = await import('./frontmatter.ts')
+      if (parseFrontmatter(markdown).frontmatter.id !== String(noteId)) throw new Error('note path identity changed')
     } catch {
       // Canonical file missing at the recorded path. Attempt NoteId reconcile:
       // an external move/rename keeps the frontmatter id, so relocate by NoteId
       // (never mint a new NoteId).
       const relocated = await this.findNoteById(String(noteId))
       if (relocated !== undefined && relocated !== rel) {
-        await this.requirePaths().delete(rel)
+        if (this.requirePaths().get(rel) === noteId) await this.requirePaths().delete(rel)
         await this.putRecord({ ...record, relativePath: relocated, updatedAt: new Date().toISOString() }, relocated)
         rel = relocated
         markdown = await this.ctx.fs.readText(await this.ctx.fs.resolve(this.handle.notePath(relocated)))
@@ -195,7 +260,9 @@ export class NotesService extends Service {
       }
     }
     const attachments = collectManagedLinks(record.workspaceId, markdown)
-    return { note: { ...record, relativePath: rel }, markdown, attachments }
+    // A fresh snapshot must carry the hash of the bytes actually returned,
+    // including an external edit not yet observed by reconcile.
+    return { note: { ...record, relativePath: rel, contentHash: contentHash(markdown), fileSize: Buffer.byteLength(markdown, 'utf8') }, markdown, attachments }
   }
 
   /** Scan the workspace for a Markdown file whose frontmatter id equals `noteIdStr`. */
@@ -228,6 +295,10 @@ export class NotesService extends Service {
   }
 
   async create(input: CreateNoteInput): Promise<NoteIndexRecord> {
+    return this.withMutation(() => this.createLocked(input))
+  }
+
+  private async createLocked(input: CreateNoteInput): Promise<NoteIndexRecord> {
     const { parseFrontmatter, injectNoteId, replaceNoteId, deriveTitle } = await import('./frontmatter.ts')
     const parsed = parseFrontmatter(input.markdown)
     let markdown = input.markdown
@@ -239,6 +310,9 @@ export class NotesService extends Service {
       markdown = replaceNoteId(input.markdown, noteIdStr)
     }
     const noteId = NoteId(noteIdStr)
+    if (this.requireTable().get(noteId) !== undefined) {
+      throw new Error(`pkwNotes: note identity '${noteId}' already exists; create a copy without its id`)
+    }
     await this.ctx.fs.writeText(
       await this.ctx.fs.resolve(this.handle.notePath(input.relativePath)),
       markdown,
@@ -271,10 +345,15 @@ export class NotesService extends Service {
     return record
   }
 
-  async update(noteId: NoteId, markdown: string): Promise<NoteIndexRecord> {
+  async update(noteId: NoteId, markdown: string, options: NoteUpdateOptions = {}): Promise<NoteIndexRecord> {
+    return this.withMutation(() => this.updateLocked(noteId, markdown, options))
+  }
+
+  private async updateLocked(noteId: NoteId, markdown: string, options: NoteUpdateOptions = {}): Promise<NoteIndexRecord> {
     const { parseFrontmatter, injectNoteId, deriveTitle } = await import('./frontmatter.ts')
     const existing = this.requireTable().get(noteId)
     if (existing === undefined) throw new Error(`pkwNotes: unknown note '${noteId}'`)
+    if (existing.deletedAt !== undefined) throw new Error(`pkwNotes: note '${noteId}' is trashed`)
     const parsed = parseFrontmatter(markdown)
     let next = markdown
     if (parsed.frontmatter.id === undefined || parsed.frontmatter.id === '') {
@@ -284,7 +363,13 @@ export class NotesService extends Service {
       // frontmatter; reject a different id instead of silently re-identifying.
       throw new Error(`pkwNotes: cannot change note identity from '${noteId}' to '${parsed.frontmatter.id}'`)
     }
-    await this.ctx.fs.writeText(await this.ctx.fs.resolve(this.handle.notePath(existing.relativePath)), next)
+    const target = await this.ctx.fs.resolve(this.handle.notePath(existing.relativePath))
+    await this.assertFileIdentity(target, noteId)
+    if ((options.expectedRevision !== undefined && options.expectedRevision !== existing.observedRevision)
+      || (options.expectedContentHash !== undefined && options.expectedContentHash !== contentHash(await this.ctx.fs.readText(target)))) {
+      throw new NoteUpdateConflictError(noteId)
+    }
+    await this.ctx.fs.writeText(target, next)
     const hash = contentHash(next)
     if (hash === existing.contentHash) return existing
     const observedRevision = existing.observedRevision + 1
@@ -304,6 +389,10 @@ export class NotesService extends Service {
 
   /** Toggle the attachment-backed flag (Companion Note remote-uniqueness policy). */
   async setAttachmentBacked(noteId: NoteId, flag: boolean): Promise<NoteIndexRecord> {
+    return this.withMutation(() => this.setAttachmentBackedLocked(noteId, flag))
+  }
+
+  private async setAttachmentBackedLocked(noteId: NoteId, flag: boolean): Promise<NoteIndexRecord> {
     const existing = this.requireTable().get(noteId)
     if (existing === undefined) throw new Error(`pkwNotes: unknown note '${noteId}'`)
     const record = { ...existing, attachmentBacked: flag ? true : undefined }
@@ -312,9 +401,16 @@ export class NotesService extends Service {
   }
 
   async move(noteId: NoteId, newRelativePath: string): Promise<NoteIndexRecord> {
+    return this.withMutation(() => this.moveLocked(noteId, newRelativePath))
+  }
+
+  private async moveLocked(noteId: NoteId, newRelativePath: string): Promise<NoteIndexRecord> {
     const existing = this.requireTable().get(noteId)
     if (existing === undefined) throw new Error(`pkwNotes: unknown note '${noteId}'`)
+    if (existing.deletedAt !== undefined) throw new Error(`pkwNotes: note '${noteId}' is trashed`)
+    if (existing.relativePath === newRelativePath) return existing
     const newTarget = await this.ctx.fs.resolve(this.handle.notePath(newRelativePath))
+    await this.assertFileIdentity(await this.ctx.fs.resolve(this.handle.notePath(existing.relativePath)), noteId)
     await this.moveFile(
       await this.ctx.fs.resolve(this.handle.notePath(existing.relativePath)),
       newTarget,
@@ -341,6 +437,10 @@ export class NotesService extends Service {
   }
 
   async delete(noteId: NoteId): Promise<void> {
+    return this.withMutation(() => this.deleteLocked(noteId))
+  }
+
+  private async deleteLocked(noteId: NoteId): Promise<void> {
     const existing = this.requireTable().get(noteId)
     if (existing === undefined || existing.deletedAt !== undefined) return
     // Idempotent for a canonical file that is already absent: skip the rename
@@ -348,6 +448,7 @@ export class NotesService extends Service {
     const src = await this.ctx.fs.resolve(this.handle.notePath(existing.relativePath))
     const canonicalMissing = await this.ctx.fs.stat(src) === undefined
     if (!canonicalMissing) {
+      await this.assertFileIdentity(src, noteId)
       await this.moveFile(src, await this.ctx.fs.resolve(this.handle.archivePath(existing.relativePath)))
     }
     const payload: NoteEventPayload = {
@@ -364,12 +465,18 @@ export class NotesService extends Service {
 
   /** Restore a trashed (archived) note; NoteId is preserved. */
   async restore(noteId: NoteId): Promise<NoteIndexRecord> {
+    return this.withMutation(() => this.restoreLocked(noteId))
+  }
+
+  private async restoreLocked(noteId: NoteId): Promise<NoteIndexRecord> {
     const existing = this.requireTable().get(noteId)
     if (existing === undefined || existing.deletedAt === undefined) {
       throw new Error(`pkwNotes: note '${noteId}' is not trashed`)
     }
+    const archived = await this.archivedNoteTarget(existing)
+    if (archived === undefined) throw new Error(`pkwNotes: archived file for note '${noteId}' is missing`)
     await this.moveFile(
-      await this.ctx.fs.resolve(this.handle.archivePath(existing.relativePath)),
+      archived,
       await this.ctx.fs.resolve(this.handle.notePath(existing.relativePath)),
     )
     const observedRevision = existing.observedRevision + 1
@@ -389,10 +496,15 @@ export class NotesService extends Service {
 
   /** Permanently purge a trashed note (and its archived file). */
   async purge(noteId: NoteId): Promise<void> {
+    return this.withMutation(() => this.purgeLocked(noteId))
+  }
+
+  private async purgeLocked(noteId: NoteId): Promise<void> {
     const existing = this.requireTable().get(noteId)
     if (existing === undefined) return
-    await this.removeFile(await this.ctx.fs.resolve(this.handle.archivePath(existing.relativePath)))
-    await this.removeFile(await this.ctx.fs.resolve(this.handle.notePath(existing.relativePath)))
+    if (existing.deletedAt === undefined) throw new Error(`pkwNotes: note '${noteId}' is not trashed`)
+    const archived = await this.archivedNoteTarget(existing)
+    if (archived !== undefined) await this.removeFile(archived)
     await this.commitEvent(NOTE_PURGED, String(noteId), {
       noteId: String(noteId),
       relativePath: existing.relativePath,
@@ -401,11 +513,15 @@ export class NotesService extends Service {
       afterStateFingerprint: noteFingerprint(this.config.workspaceId, String(noteId), existing.relativePath, existing.contentHash, true),
     })
     await this.requireTable().delete(noteId)
-    await this.requirePaths().delete(existing.relativePath)
+    if (this.requirePaths().get(existing.relativePath) === noteId) await this.requirePaths().delete(existing.relativePath)
     await this.removeChildFromOrder(parentOf(existing.relativePath), 'note', String(noteId))
   }
 
   async reconcile(): Promise<ReconcileReport> {
+    return this.withMutation(() => this.reconcileLocked())
+  }
+
+  private async reconcileLocked(): Promise<ReconcileReport> {
     this.invalidateFoldersCache()
     const { parseFrontmatter, injectNoteId, deriveTitle } = await import('./frontmatter.ts')
     const report: ReconcileReport = { decisions: [], repairedProjections: 0 }
@@ -472,16 +588,17 @@ export class NotesService extends Service {
     // 3. Compare durable observation + projection for each observed identity/path.
     for (const [relativePath, obs] of observed) {
       const idStr = parseFrontmatter(obs.markdown).frontmatter.id ?? ''
-      const indexed = this.resolveByPath(relativePath)
+      const indexed = this.requireTable().get(NoteId(idStr))
       if (idStr === '') continue
       const latest = await this.latestDurableFingerprint(idStr)
       const fingerprint = noteFingerprint(this.config.workspaceId, idStr, relativePath, obs.hash, false)
       if (latest === fingerprint) {
-        if (indexed === undefined || indexed.contentHash !== obs.hash || indexed.relativePath !== relativePath) {
+        if (indexed === undefined || indexed.contentHash !== obs.hash || indexed.relativePath !== relativePath || indexed.deletedAt !== undefined) {
           // Projection repair: rebuild from authoritative filesystem + durable history (no fabricated fields).
           const latestPayload = await this.latestDurablePayload(idStr)
           const fm = parseFrontmatter(obs.markdown).frontmatter
           const record: NoteIndexRecord = {
+            ...indexed,
             noteId: NoteId(idStr),
             workspaceId: WorkspaceId(this.config.workspaceId),
             relativePath,
@@ -490,8 +607,13 @@ export class NotesService extends Service {
             contentHash: obs.hash,
             observedRevision: latestPayload?.observedRevision ?? 1,
             fileSize: Buffer.byteLength(obs.markdown, 'utf8'),
-            createdAt: new Date().toISOString(),
+            createdAt: indexed?.createdAt ?? new Date().toISOString(),
             updatedAt: new Date().toISOString(),
+            deletedAt: undefined,
+            canonicalMissing: undefined,
+          }
+          if (indexed !== undefined && indexed.relativePath !== relativePath && this.requirePaths().get(indexed.relativePath) === indexed.noteId) {
+            await this.requirePaths().delete(indexed.relativePath)
           }
           await this.putRecord(record, relativePath)
           report.repairedProjections += 1
@@ -499,48 +621,55 @@ export class NotesService extends Service {
         continue
       }
       // New durable observation.
-      const kind = indexed === undefined ? NOTE_DISCOVERED : (indexed.contentHash !== obs.hash ? NOTE_UPDATED : NOTE_MOVED)
+      const kind = indexed === undefined ? NOTE_DISCOVERED
+        : indexed.deletedAt !== undefined ? NOTE_RESTORED
+        : indexed.contentHash !== obs.hash ? NOTE_UPDATED : NOTE_MOVED
+      const observedRevision = indexed === undefined ? 1
+        : indexed.observedRevision + (kind === NOTE_MOVED ? 0 : 1)
       const prevFingerprint = indexed === undefined
         ? undefined
-        : noteFingerprint(this.config.workspaceId, idStr, indexed.relativePath, indexed.contentHash, false)
+        : noteFingerprint(this.config.workspaceId, idStr, indexed.relativePath, indexed.contentHash, indexed.deletedAt !== undefined)
       const payload: NoteEventPayload = {
         noteId: idStr,
         relativePath,
         contentHash: obs.hash,
-        observedRevision: (indexed?.observedRevision ?? 0) + 1,
+        observedRevision,
         afterStateFingerprint: fingerprint,
         ...(prevFingerprint !== undefined ? { beforeStateFingerprint: prevFingerprint } : {}),
         ...(kind === NOTE_MOVED && indexed !== undefined ? { fromPath: indexed.relativePath, toPath: relativePath } : {}),
       }
       await this.commitEvent(kind, idStr, payload)
       const record: NoteIndexRecord = {
+        ...indexed,
         noteId: NoteId(idStr),
         workspaceId: WorkspaceId(this.config.workspaceId),
         relativePath,
         title: deriveTitle(obs.markdown, parseFrontmatter(obs.markdown).frontmatter.title, posix.basename(relativePath)),
         tags: parseFrontmatter(obs.markdown).frontmatter.tags ?? [],
         contentHash: obs.hash,
-        observedRevision: (indexed?.observedRevision ?? 0) + 1,
+        observedRevision,
         fileSize: Buffer.byteLength(obs.markdown, 'utf8'),
         createdAt: indexed?.createdAt ?? new Date().toISOString(),
         updatedAt: new Date().toISOString(),
+        deletedAt: undefined,
+        canonicalMissing: undefined,
       }
       await this.putRecord(record, relativePath)
-      if (indexed !== undefined && indexed.relativePath !== relativePath) await this.requirePaths().delete(indexed.relativePath)
+      if (indexed !== undefined && indexed.relativePath !== relativePath && this.requirePaths().get(indexed.relativePath) === indexed.noteId
+        && (seenIds.get(idStr)?.length ?? 0) === 1) await this.requirePaths().delete(indexed.relativePath)
       report.decisions.push({ changeKind: kind, noteId: NoteId(idStr), operationId: OperationId(`reconcile:${fingerprint}`) })
     }
 
     // 4. External delete: indexed note whose file is gone.
-    for (const [relativePath, id] of [...this.requirePaths().entries()]) {
-      if (observed.has(relativePath)) continue
-      const record = this.requireTable().get(id)
-      if (record === undefined || record.deletedAt !== undefined) continue
+    for (const [id, record] of [...this.requireTable().entries()]) {
+      if (seenIds.has(String(id)) || record.deletedAt !== undefined) continue
+      const relativePath = record.relativePath
       const fingerprint = noteFingerprint(this.config.workspaceId, String(id), relativePath, record.contentHash, true)
       const latest = await this.latestDurableFingerprint(String(id))
-      if (latest === fingerprint) { if (record.deletedAt === undefined) { await this.putRecord({ ...record, deletedAt: new Date().toISOString() }, relativePath); report.repairedProjections += 1 } ; continue }
+      if (latest === fingerprint) { await this.requireTable().put(id, { ...record, deletedAt: new Date().toISOString() }); report.repairedProjections += 1; continue }
       const payload: NoteEventPayload = { noteId: String(id), relativePath, contentHash: record.contentHash, observedRevision: record.observedRevision, afterStateFingerprint: fingerprint }
       await this.commitEvent(NOTE_DELETED, String(id), payload)
-      await this.putRecord({ ...record, deletedAt: new Date().toISOString() }, relativePath)
+      await this.requireTable().put(id, { ...record, deletedAt: new Date().toISOString() })
       report.decisions.push({ changeKind: NOTE_DELETED, noteId: id, operationId: OperationId(`reconcile:${fingerprint}`) })
     }
 
@@ -595,6 +724,10 @@ export class NotesService extends Service {
 
   /** Create an empty folder by writing a hidden marker (parent dirs are auto-created). */
   async createFolder(relativePath: string): Promise<void> {
+    return this.withMutation(() => this.createFolderLocked(relativePath))
+  }
+
+  private async createFolderLocked(relativePath: string): Promise<void> {
     this.assertFolderPath(relativePath)
     this.invalidateFoldersCache()
     const marker = await this.ctx.fs.resolve(this.handle.notePath(posix.join(relativePath, FOLDER_MARKER)))
@@ -603,6 +736,10 @@ export class NotesService extends Service {
 
   /** Rename/move a folder; every note under it keeps its NoteId and gains the new path. */
   async renameFolder(oldPath: string, newPath: string): Promise<void> {
+    return this.withMutation(() => this.renameFolderLocked(oldPath, newPath))
+  }
+
+  private async renameFolderLocked(oldPath: string, newPath: string): Promise<void> {
     this.assertFolderPath(oldPath)
     this.assertFolderPath(newPath)
     this.invalidateFoldersCache()
@@ -620,8 +757,35 @@ export class NotesService extends Service {
     await this.trashFolder(relativePath)
   }
 
+  /** Read membership from the archived canonical files, never from reused live paths. */
+  private async archivedFolderNotes(entry: FolderTrashEntry): Promise<NoteIndexRecord[]> {
+    const { parseFrontmatter } = await import('./frontmatter.ts')
+    const records: NoteIndexRecord[] = []
+    const visit = async (target: FsTarget, prefix: string): Promise<void> => {
+      const info = await this.ctx.fs.stat(target)
+      if (info === undefined) return
+      if (info.type !== 'directory') throw new Error('pkwNotes: folder archive is not a directory')
+      for (const child of await this.ctx.fs.listDir(target)) {
+        const path = posix.join(prefix, child.name)
+        if (child.type === 'directory') await visit(child.target, path)
+        else if (child.type === 'file' && child.name.endsWith('.md')) {
+          const id = parseFrontmatter(await this.ctx.fs.readText(child.target)).frontmatter.id
+          if (id === undefined) continue
+          const record = this.requireTable().get(NoteId(id))
+          if (record?.deletedAt !== undefined && record.relativePath === posix.join(entry.originalPath, path)) records.push(record)
+        }
+      }
+    }
+    await visit(await this.ctx.fs.resolve(this.handle.archivePath(entry.archivedPath)), '')
+    return records
+  }
+
   /** Restore a trashed folder to its original path and un-delete descendant notes. */
   async restoreFolder(trashEntryId: FolderTrashEntryId): Promise<void> {
+    return this.withMutation(() => this.restoreFolderLocked(trashEntryId))
+  }
+
+  private async restoreFolderLocked(trashEntryId: FolderTrashEntryId): Promise<void> {
     this.invalidateFoldersCache()
     const entry = this.requireFolderTrash().get(String(trashEntryId))
     if (entry === undefined) throw new Error(`pkwNotes: unknown folder trash entry '${trashEntryId}'`)
@@ -629,15 +793,13 @@ export class NotesService extends Service {
     if (await this.ctx.fs.stat(target) !== undefined) {
       throw new Error(`pkwNotes: cannot restore folder '${entry.originalPath}' — target already exists`)
     }
+    const archivedNotes = await this.archivedFolderNotes(entry)
     await this.moveFile(
       await this.ctx.fs.resolve(this.handle.archivePath(entry.archivedPath)),
       target,
     )
-    const prefix = `${entry.originalPath}/`
-    for (const [path, id] of [...this.requirePaths().entries()]) {
-      if (path !== entry.originalPath && !path.startsWith(prefix)) continue
-      const record = this.requireTable().get(id)
-      if (record === undefined || record.deletedAt === undefined) continue
+    for (const record of archivedNotes) {
+      const { noteId: id, relativePath: path } = record
       await this.commitEvent(NOTE_RESTORED, String(id), {
         noteId: String(id),
         relativePath: path,
@@ -652,25 +814,26 @@ export class NotesService extends Service {
 
   /** Permanently purge a trashed folder by its stable trash entry id. */
   async purgeFolder(trashEntryId: FolderTrashEntryId): Promise<void> {
+    return this.withMutation(() => this.purgeFolderLocked(trashEntryId))
+  }
+
+  private async purgeFolderLocked(trashEntryId: FolderTrashEntryId): Promise<void> {
     this.invalidateFoldersCache()
     const entry = this.requireFolderTrash().get(String(trashEntryId))
     if (entry === undefined) return
+    const archivedNotes = await this.archivedFolderNotes(entry)
     await this.removeDir(await this.ctx.fs.resolve(this.handle.archivePath(entry.archivedPath)))
-    const prefix = `${entry.originalPath}/`
-    for (const [path, id] of [...this.requirePaths().entries()]) {
-      if (path !== entry.originalPath && !path.startsWith(prefix)) continue
-      const record = this.requireTable().get(id)
-      if (record !== undefined) {
-        await this.commitEvent(NOTE_PURGED, String(id), {
-          noteId: String(id),
-          relativePath: path,
-          contentHash: record.contentHash,
-          observedRevision: record.observedRevision,
-          afterStateFingerprint: noteFingerprint(this.config.workspaceId, String(id), path, record.contentHash, true),
-        })
-        await this.requireTable().delete(id)
-      }
-      await this.requirePaths().delete(path)
+    for (const record of archivedNotes) {
+      const { noteId: id, relativePath: path } = record
+      await this.commitEvent(NOTE_PURGED, String(id), {
+        noteId: String(id),
+        relativePath: path,
+        contentHash: record.contentHash,
+        observedRevision: record.observedRevision,
+        afterStateFingerprint: noteFingerprint(this.config.workspaceId, String(id), path, record.contentHash, true),
+      })
+      await this.requireTable().delete(id)
+      if (this.requirePaths().get(path) === id) await this.requirePaths().delete(path)
       await this.removeChildFromOrder(parentOf(path), 'note', String(id))
     }
     await this.requireFolderTrash().delete(String(trashEntryId))
@@ -678,11 +841,47 @@ export class NotesService extends Service {
 
   /** Trash a whole folder (even non-empty) into a stable-identity archive entry. */
   async trashFolder(relativePath: string): Promise<FolderTrashEntry> {
+    return this.withMutation(() => this.trashFolderLocked(relativePath))
+  }
+
+  private async trashFolderLocked(relativePath: string): Promise<FolderTrashEntry> {
     this.assertFolderPath(relativePath)
     this.invalidateFoldersCache()
+    const source = await this.ctx.fs.resolve(this.handle.notePath(relativePath))
+    if ((await this.ctx.fs.stat(source))?.type !== 'directory') {
+      throw new Error(`pkwNotes: folder '${relativePath}' is missing or is not a directory`)
+    }
     const trashEntryId = FolderTrashEntryId(`ftrash_${randomUUID().replaceAll('-', '').slice(0, 12)}`)
     const archivedRel = `folders/${trashEntryId}`
+    const destination = await this.ctx.fs.resolve(this.handle.archivePath(archivedRel))
     const now = new Date().toISOString()
+    // Persist the trash entry BEFORE the physical rename so a crash leaves a
+    // recoverable conflict (metadata present, source/destination in flux).
+    const entry: FolderTrashEntry = {
+      trashEntryId,
+      workspaceId: WorkspaceId(this.config.workspaceId),
+      originalPath: relativePath,
+      archivedPath: archivedRel,
+      deletedAt: now,
+    }
+    await this.requireFolderTrash().put(String(trashEntryId), entry)
+    try {
+      await this.moveFile(source, destination)
+    } catch (error) {
+      try {
+        // Only undo the recovery marker when the source is still present and
+        // nothing reached the archive. An ambiguous outcome retains the marker.
+        if (await this.ctx.fs.stat(source) !== undefined && await this.ctx.fs.stat(destination) === undefined) {
+          await this.requireFolderTrash().delete(String(trashEntryId))
+        }
+      } catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], 'pkwNotes: folder move failed and its recovery entry could not be cleared')
+      }
+      throw error
+    }
+    // No deletion event or Note projection may precede the physical move. If a
+    // following commit fails, the archive plus entry above remains recoverable
+    // through restoreFolder; fs and the event store are not one transaction.
     const prefix = `${relativePath}/`
     for (const [path, id] of [...this.requirePaths().entries()]) {
       if (path !== relativePath && !path.startsWith(prefix)) continue
@@ -698,20 +897,6 @@ export class NotesService extends Service {
       await this.commitEvent(NOTE_DELETED, String(id), payload)
       await this.putRecord({ ...record, deletedAt: now }, path)
     }
-    // Persist the trash entry BEFORE the physical rename so a crash leaves a
-    // recoverable conflict (metadata present, source/destination in flux).
-    const entry: FolderTrashEntry = {
-      trashEntryId,
-      workspaceId: WorkspaceId(this.config.workspaceId),
-      originalPath: relativePath,
-      archivedPath: archivedRel,
-      deletedAt: now,
-    }
-    await this.requireFolderTrash().put(String(trashEntryId), entry)
-    await this.moveFile(
-      await this.ctx.fs.resolve(this.handle.notePath(relativePath)),
-      await this.ctx.fs.resolve(this.handle.archivePath(archivedRel)),
-    )
     await this.requireOrder().delete(this.orderKey(relativePath))
     await this.removeChildFromOrder(parentOf(relativePath), 'folder', posix.basename(relativePath))
     return entry

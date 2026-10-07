@@ -28,9 +28,11 @@ const contexts: Context[] = []
 const servers: Server[] = []
 
 afterEach(async () => {
-  await Promise.all(contexts.splice(0).map(c => c.fiber.dispose().catch(() => {})))
-  await Promise.all(servers.splice(0).map(s => new Promise<void>(resolve => s.close(() => resolve()))))
-  await Promise.all(dirs.splice(0).map(d => rm(d, { recursive: true, force: true })))
+  try {
+    await Promise.all(contexts.splice(0).map(c => c.fiber.dispose().catch(() => {})))
+    await Promise.all(servers.splice(0).map(s => new Promise<void>(resolve => s.close(() => resolve()))))
+    await Promise.all(dirs.splice(0).map(d => rm(d, { recursive: true, force: true })))
+  } finally { vi.useRealTimers() }
 })
 
 function sha256Hex(s: string): string {
@@ -43,7 +45,7 @@ function md5Hex(b: Uint8Array): string {
 // ── stateful fake WeKnora ─────────────────────────────────────────────────────
 
 interface ManualRec { id: string; title: string; content: string; parseStatus: string }
-interface FileRec { id: string; title: string; filename: string; fileHash: string; parseStatus: string; content: Buffer; summary?: string; summaryStatus?: string }
+interface FileRec { id: string; title: string; filename: string; fileHash: string; parseStatus: string; content: Buffer; summary?: string; summaryStatus?: string; omitFileHash?: boolean }
 
 interface FakeWeKnora {
   baseUrl: string
@@ -51,11 +53,17 @@ interface FakeWeKnora {
   files: Map<string, FileRec>
   listPageSize: number
   hidden: Set<string>
+  manualUpdateApplications: number
+  manualContentReads: number
+  manualListReads: number
+  /** One-shot request barrier, before the PUT is applied or its response lost. */
+  manualUpdateGate?: { entered: () => void; release: Promise<void> }
   /** One-shot failure behaviors, cleared after the matching request. */
   next: {
     commitThenDrop?: 'create-manual' | 'update-manual' | 'upload'
     dropBeforeRead?: 'create-manual' | 'upload'
     respond?: { status: number; body: unknown }
+    rejectManualBeforeCommit?: boolean
   }
 }
 
@@ -99,6 +107,9 @@ function startFakeServer(): Promise<FakeWeKnora> {
     files: new Map(),
     listPageSize: 1,
     hidden: new Set(),
+    manualUpdateApplications: 0,
+    manualContentReads: 0,
+    manualListReads: 0,
     next: {},
   }
   let counter = 0
@@ -130,6 +141,11 @@ function startFakeServer(): Promise<FakeWeKnora> {
       // Manual create.
       if (req.method === 'POST' && /\/knowledge-bases\/[^/]+\/knowledge\/manual$/.test(url.pathname)) {
         const body = JSON.parse((await readBody()).toString('utf8')) as { title: string; content: string }
+        if (fake.next.rejectManualBeforeCommit) {
+          fake.next.rejectManualBeforeCommit = false
+          send(429, { code: 'rate_limited' })
+          return
+        }
         const id = `kn-${++counter}`
         fake.manuals.set(id, { id, title: body.title, content: body.content, parseStatus: 'pending' })
         if (fake.next.respond !== undefined) {
@@ -152,6 +168,10 @@ function startFakeServer(): Promise<FakeWeKnora> {
         const body = JSON.parse((await readBody()).toString('utf8')) as { title: string; content: string }
         const existing = fake.manuals.get(up[1]!)
         if (existing === undefined) { res.writeHead(404); res.end('{}'); return }
+        const gate = fake.manualUpdateGate
+        fake.manualUpdateGate = undefined
+        if (gate) { gate.entered(); await gate.release }
+        fake.manualUpdateApplications++
         existing.content = body.content; existing.title = body.title
         if (fake.next.respond !== undefined) {
           const r = fake.next.respond; fake.next.respond = undefined
@@ -199,7 +219,7 @@ function startFakeServer(): Promise<FakeWeKnora> {
       const dl = /\/knowledge\/([^/]+)\/download$/.exec(url.pathname)
       if (req.method === 'GET' && dl) {
         const m = fake.manuals.get(dl[1]!)
-        if (m !== undefined) { res.writeHead(200, { 'Content-Type': 'text/markdown' }); res.end(m.content); return }
+        if (m !== undefined) { fake.manualContentReads++; res.writeHead(200, { 'Content-Type': 'text/markdown' }); res.end(m.content); return }
         const f = fake.files.get(dl[1]!)
         if (f !== undefined) { res.writeHead(200, { 'Content-Type': 'application/octet-stream' }); res.end(f.content); return }
         res.writeHead(404); res.end('{}'); return
@@ -207,6 +227,7 @@ function startFakeServer(): Promise<FakeWeKnora> {
 
       // List (paginated).
       if (req.method === 'GET' && /\/knowledge-bases\/[^/]+\/knowledge$/.test(url.pathname)) {
+        fake.manualListReads++
         const page = Number(url.searchParams.get('page') ?? '1')
         const all = [
           ...[...fake.manuals.values()].filter(m => !fake.hidden.has(m.id)).map(m => ({ id: m.id, title: m.title, parse_status: m.parseStatus })),
@@ -219,11 +240,17 @@ function startFakeServer(): Promise<FakeWeKnora> {
 
       // Get knowledge.
       const get = /\/knowledge\/([^/]+)$/.exec(url.pathname)
+      if (req.method === 'DELETE' && get) {
+        fake.manuals.delete(get[1]!)
+        fake.files.delete(get[1]!)
+        send(200, { success: true })
+        return
+      }
       if (req.method === 'GET' && get) {
         const m = fake.manuals.get(get[1]!)
         if (m !== undefined) { send(200, { data: { id: m.id, title: m.title, parse_status: m.parseStatus, channel: 'pkw' } }); return }
         const f = fake.files.get(get[1]!)
-        if (f !== undefined) { send(200, { data: { id: f.id, title: f.title, file_name: f.filename, file_hash: f.fileHash, parse_status: f.parseStatus, description: f.summary, summary_status: f.summaryStatus } }); return }
+        if (f !== undefined) { send(200, { data: { id: f.id, title: f.title, file_name: f.filename, file_hash: f.omitFileHash ? undefined : f.fileHash, parse_status: f.parseStatus, description: f.summary, summary_status: f.summaryStatus } }); return }
         res.writeHead(404); res.end('{}'); return
       }
 
@@ -273,9 +300,16 @@ interface BootOptions {
   /** In-memory credential provider values (only when apiKeyRef is used). */
   credentials?: Record<string, string>
   pollMs?: number
+  /** Hold periodic ticks; tests drive the real durable worker through drain(). */
+  manualWorker?: boolean
+  /** Control retry deadlines without faking HTTP/filesystem timeout callbacks. */
+  controlledClock?: boolean
 }
 
 async function boot(opts: BootOptions = {}) {
+  // Control periodic scheduling and optionally Date (retry deadlines). HTTP,
+  // SQLite, filesystem and timeout callbacks stay real; sync/storage are not mocked.
+  if (opts.manualWorker) vi.useFakeTimers({ toFake: opts.controlledClock ? ['Date', 'setInterval', 'clearInterval'] : ['setInterval', 'clearInterval'] })
   const fake = await startFakeServer()
   const dir = await mkdtemp(join(tmpdir(), 'pkw-'))
   dirs.push(dir)
@@ -311,8 +345,10 @@ async function boot(opts: BootOptions = {}) {
   await ctx.plugin(NotesService, { workspaceId: ws.id })
   await ctx.plugin(AttachmentsService, { workspaceId: ws.id })
   await ctx.plugin(WeKnoraClient, { baseUrl: fake.baseUrl, apiKey: opts.apiKey ?? 'test-key', apiKeyRef: opts.apiKeyRef ?? '' })
-  await ctx.plugin(WeKnoraSyncService, { kbId: 'kb-1', workspaceId: ws.id, pollMs: opts.pollMs ?? 25, retryBaseMs: 5, retryMaxMs: 10, recoveryGraceAttempts: 2 })
-  return { ctx, dir, workspaceId: ws.id, notes: ctx.pkwNotes, attachments: ctx.pkwAttachments, adapter: ctx.pkwWeKnora, sync: ctx.pkwWeKnoraSync, fake }
+  const syncFork = await ctx.plugin(WeKnoraSyncService, { kbId: 'kb-1', workspaceId: ws.id, pollMs: opts.pollMs ?? 25, retryBaseMs: 5, retryMaxMs: 10, recoveryGraceAttempts: 2 })
+  // Let the startup resume pass finish on an empty workspace before test events.
+  if (opts.manualWorker) await ctx.pkwWeKnoraSync.drain()
+  return { ctx, dir, workspaceId: ws.id, notes: ctx.pkwNotes, attachments: ctx.pkwAttachments, adapter: ctx.pkwWeKnora, sync: ctx.pkwWeKnoraSync, syncFork, fake }
 }
 
 // ── outcome model ─────────────────────────────────────────────────────────────
@@ -500,22 +536,26 @@ describe('manual create distributed failures', () => {
     expect(fake.manuals.size).toBe(1)
   })
 
-  it('request never reached server → 0-candidate grace → safe re-create', async () => {
-    const { notes, sync, fake } = await boot()
+  it('a disconnect before server commit remains ambiguous to the client after grace', async () => {
+    const { notes, sync, fake } = await boot({ manualWorker: true, controlledClock: true })
     const note = await notes.create({ relativePath: 'a.md', markdown: '# v1\n\nunreached\n' })
     fake.next.dropBeforeRead = 'create-manual'
     await expect(sync.syncNote(note.noteId)).rejects.toThrow()
     expect(fake.manuals.size).toBe(0)
 
-    // Grace elapses (recoveryGraceAttempts=2) and the worker re-creates.
-    await vi.waitFor(() => {
-      expect(fake.manuals.size).toBe(1)
-    }, { timeout: 2000 })
-    expect(sync.getMapping(note.noteId)?.knowledgeId).toBeDefined()
+    // The client cannot distinguish this socket loss from commit-then-drop.
+    for (let i = 0; i < 5; i++) {
+      vi.setSystemTime(Date.now() + 1000)
+      await sync.drain()
+    }
+    expect(fake.manuals.size).toBe(0)
+    expect(sync.getMapping(note.noteId)).toBeUndefined()
+    expect(sync.listIntents()).toHaveLength(1)
+    expect(sync.listIntents()[0]?.state).toBe('unknown')
   })
 
-  it('delayed visibility: grace re-polls until the committed object appears', async () => {
-    const { notes, sync, fake } = await boot()
+  it('delayed visibility beyond grace never permits a duplicate create', async () => {
+    const { notes, sync, fake } = await boot({ manualWorker: true, controlledClock: true })
     const note = await notes.create({ relativePath: 'a.md', markdown: '# v1\n\ndelayed\n' })
     fake.next.commitThenDrop = 'create-manual'
     await expect(sync.syncNote(note.noteId)).rejects.toThrow()
@@ -523,16 +563,104 @@ describe('manual create distributed failures', () => {
     const committed = [...fake.manuals.keys()][0]!
     fake.hidden.add(committed)
 
-    // Let at least one grace attempt observe 0 candidates.
+    // Deliberately keep visibility closed BEYOND the configured grace of two.
+    // No scheduler race or sleep determines when the remote object appears.
+    for (let i = 0; i < 5; i++) {
+      vi.setSystemTime(Date.now() + 1000)
+      await sync.drain()
+    }
+    expect(fake.manuals.size).toBe(1)
+    expect(sync.getMapping(note.noteId)).toBeUndefined()
+    expect(sync.listIntents()).toHaveLength(1)
+    expect(sync.listIntents()[0]?.recoveryAttempts).toBe(5)
+
+    // Become visible → recovery should claim the original, not re-create.
+    fake.hidden.delete(committed)
+    vi.setSystemTime(Date.now() + 1000)
+    await sync.drain()
+    expect(sync.getMapping(note.noteId)?.knowledgeId).toBe(committed)
+    expect(fake.manuals.size).toBe(1)
+  })
+
+  it('delayed visibility: grace re-polls until the committed object appears', async () => {
+    const { notes, sync, fake } = await boot()
+    const note = await notes.create({ relativePath: 'a.md', markdown: '# v1\n\ndelayed\n' })
+    fake.next.commitThenDrop = 'create-manual'
+    await expect(sync.syncNote(note.noteId)).rejects.toThrow()
+    const committed = [...fake.manuals.keys()][0]!
+    fake.hidden.add(committed)
     await vi.waitFor(() => {
       expect(sync.listIntents().some(i => i.recoveryAttempts >= 1)).toBe(true)
     }, { timeout: 2000 })
-
-    // Become visible → recovery should claim the original, not re-create.
     fake.hidden.delete(committed)
     await vi.waitFor(() => {
       expect(sync.getMapping(note.noteId)?.knowledgeId).toBe(committed)
     }, { timeout: 2000 })
+    expect(fake.manuals.size).toBe(1)
+  })
+
+  it('unknown create obeys its retry deadline instead of consuming grace on every tick', async () => {
+    const { notes, sync, fake } = await boot({ manualWorker: true, controlledClock: true })
+    const note = await notes.create({ relativePath: 'a.md', markdown: '# backoff\n' })
+    fake.next.commitThenDrop = 'create-manual'
+    await expect(sync.syncNote(note.noteId)).rejects.toThrow()
+    fake.hidden.add([...fake.manuals.keys()][0]!)
+    const reads = fake.manualListReads
+    const intent = sync.listIntents()[0]!
+    vi.setSystemTime(new Date(intent.nextRetryAt!).getTime() - 1)
+    await sync.drain()
+    await sync.drain()
+    expect(fake.manualListReads).toBe(reads)
+    expect(sync.listIntents()[0]?.recoveryAttempts).toBe(0)
+    vi.setSystemTime(new Date(intent.nextRetryAt!))
+    await sync.drain()
+    expect(fake.manualListReads).toBe(reads + 1)
+    expect(sync.listIntents()[0]?.recoveryAttempts).toBe(1)
+  })
+
+  it('an explicit rejection before commit can still create after backoff and grace', async () => {
+    const { notes, sync, fake } = await boot({ manualWorker: true, controlledClock: true })
+    const note = await notes.create({ relativePath: 'a.md', markdown: '# rejected\n' })
+    fake.next.rejectManualBeforeCommit = true
+    await expect(sync.syncNote(note.noteId)).rejects.toThrow()
+    expect(fake.manuals.size).toBe(0)
+    expect(sync.listIntents()[0]?.errorCertainty).toBe('known')
+    for (let i = 0; i < 3; i++) {
+      vi.setSystemTime(Date.now() + 1000)
+      await sync.drain()
+    }
+    expect(fake.manuals.size).toBe(1)
+    expect(sync.getMapping(note.noteId)?.knowledgeId).toBe('kn-1')
+  })
+
+  it('restart and local edits preserve the original ambiguous create identity', async () => {
+    const { ctx, workspaceId, notes, sync, syncFork, fake } = await boot({ manualWorker: true, controlledClock: true })
+    const note = await notes.create({ relativePath: 'a.md', markdown: '# original\n' })
+    fake.next.commitThenDrop = 'create-manual'
+    await expect(sync.syncNote(note.noteId)).rejects.toThrow()
+    const committed = [...fake.manuals.keys()][0]!
+    const operationId = sync.listIntents()[0]!.operationId
+    fake.hidden.add(committed)
+    for (let i = 0; i < 4; i++) {
+      vi.setSystemTime(Date.now() + 1000)
+      await sync.drain()
+    }
+    await notes.update(note.noteId, `---\nid: ${note.noteId}\n---\n\n# edited while invisible\n`)
+    await syncFork.dispose()
+    await ctx.plugin(WeKnoraSyncService, { kbId: 'kb-1', workspaceId, pollMs: 25, retryBaseMs: 5, retryMaxMs: 10, recoveryGraceAttempts: 2 })
+    const restarted = ctx.pkwWeKnoraSync
+    vi.setSystemTime(Date.now() + 1000)
+    await restarted.drain()
+    expect(restarted.listIntents()).toHaveLength(1)
+    expect(restarted.listIntents()[0]?.operationId).toBe(operationId)
+    expect(fake.manuals.size).toBe(1)
+    fake.hidden.delete(committed)
+    vi.setSystemTime(Date.now() + 1000)
+    // Direct recovery and the background worker share the same durable intent.
+    expect(await restarted.recoverNote(note.noteId)).toBe(committed)
+    await restarted.drain()
+    expect(restarted.getMapping(note.noteId)?.knowledgeId).toBe(committed)
+    expect(fake.manuals.get(committed)?.content).toContain('# edited while invisible')
     expect(fake.manuals.size).toBe(1)
   })
 
@@ -561,17 +689,62 @@ describe('manual create distributed failures', () => {
 
 describe('manual update distributed failures', () => {
   it('applied + lost response → recovery reads remote content and converges without re-apply', async () => {
-    const { notes, sync, fake } = await boot()
+    const { notes, sync, fake } = await boot({ manualWorker: true })
     const note = await notes.create({ relativePath: 'a.md', markdown: '# v1\n' })
     const knowledgeId = await sync.syncNote(note.noteId)
+    const previousFingerprint = sync.getMapping(note.noteId)!.remoteFingerprint
     await notes.update(note.noteId, `---\nid: ${note.noteId}\n---\n\n# v2\n`)
     fake.next.commitThenDrop = 'update-manual'
     await expect(sync.syncNote(note.noteId)).rejects.toThrow()
 
-    await vi.waitFor(() => {
-      const mapping = sync.getMapping(note.noteId)
-      expect(mapping?.remoteFingerprint).toBe(sha256Hex((fake.manuals.get(knowledgeId)!.content)))
-    }, { timeout: 2000 })
+    expect(fake.next.commitThenDrop).toBeUndefined()
+    expect(fake.manuals.get(knowledgeId)!.content).toContain('# v2')
+    expect(fake.manualUpdateApplications).toBe(1)
+    expect(fake.manualContentReads).toBe(0)
+    expect(sync.getMapping(note.noteId)!.remoteFingerprint).toBe(previousFingerprint)
+    const intent = sync.listIntents().find(i => i.operationKind === 'update')!
+    expect(intent).toMatchObject({ state: 'unknown', errorCertainty: 'unknown' })
+    expect(sync.listDirty().find(i => i.entityId === note.noteId)).toMatchObject({ dirty: true, pendingOperationId: intent.operationId })
+
+    await sync.drain()
+    expect(sync.getMapping(note.noteId)).toMatchObject({ knowledgeId, remoteFingerprint: sha256Hex(fake.manuals.get(knowledgeId)!.content) })
+    expect(sync.listIntents().find(i => i.operationId === intent.operationId)!.state).toBe('completed')
+    expect(sync.listDirty().find(i => i.entityId === note.noteId)!.dirty).toBe(false)
+    expect(fake.manualContentReads).toBe(1)
+    // Repeated worker passes must not replay an already-applied PUT.
+    await sync.drain()
+    await sync.drain()
+    expect(fake.manualUpdateApplications).toBe(1)
+    expect(fake.manuals.size).toBe(1)
+  })
+
+  it('worker consumes a lost update response before a queued explicit sync, which recovers without re-apply', async () => {
+    const { notes, sync, fake } = await boot({ manualWorker: true })
+    const note = await notes.create({ relativePath: 'worker-first.md', markdown: '# v1\n' })
+    const knowledgeId = await sync.syncNote(note.noteId)
+    await notes.update(note.noteId, `---\nid: ${note.noteId}\n---\n\n# v2\n`)
+    expect(sync.listDirty().find(i => i.entityId === note.noteId)!.dirty).toBe(true)
+    const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+    fake.manualUpdateGate = { entered: entered.resolve, release: release.promise }
+    fake.next.commitThenDrop = 'update-manual'
+    const worker = sync.drain()
+    await entered.promise // Worker now owns the entity lock and the in-flight PUT.
+    const explicit = sync.syncNote(note.noteId)
+    release.resolve()
+    await worker
+    // The worker records its unknown outcome; the queued caller observes the
+    // resulting durable intent and legitimately returns the recovered identity.
+    await expect(explicit).resolves.toBe(knowledgeId)
+    expect(fake.next.commitThenDrop).toBeUndefined()
+    expect(fake.manualUpdateApplications).toBe(1)
+    expect(fake.manualContentReads).toBe(1)
+    expect(fake.manuals.get(knowledgeId)!.content).toContain('# v2')
+    const intent = sync.listIntents().find(i => i.operationKind === 'update')!
+    expect(intent).toMatchObject({ state: 'completed', errorCertainty: 'unknown' })
+    expect(sync.getMapping(note.noteId)).toMatchObject({ knowledgeId, remoteFingerprint: sha256Hex(fake.manuals.get(knowledgeId)!.content) })
+    expect(sync.listDirty().find(i => i.entityId === note.noteId)!.dirty).toBe(false)
+    await sync.drain()
+    expect(fake.manualUpdateApplications).toBe(1)
     expect(fake.manuals.size).toBe(1)
   })
 
@@ -586,7 +759,7 @@ describe('manual update distributed failures', () => {
   })
 
   it('third-state drift: intent B unknown while local already C → converge to C (no replay)', async () => {
-    const { notes, sync, fake } = await boot()
+    const { notes, sync, fake } = await boot({ pollMs: 3_600_000 })
     const note = await notes.create({ relativePath: 'a.md', markdown: '# A\n' })
     const knowledgeId = await sync.syncNote(note.noteId)
 
@@ -598,7 +771,8 @@ describe('manual update distributed failures', () => {
     // Local drifts to C before the unknown B intent is recovered.
     await notes.update(note.noteId, `---\nid: ${note.noteId}\n---\n\n# C\n`)
 
-    await vi.waitFor(() => {
+    await vi.waitFor(async () => {
+      await sync.drain()
       expect(fake.manuals.get(knowledgeId)!.content).toContain('# C')
     }, { timeout: 2000 })
     expect(fake.manuals.size).toBe(1)
@@ -608,6 +782,165 @@ describe('manual update distributed failures', () => {
 // ── worker ────────────────────────────────────────────────────────────────────
 
 describe('worker: durable dirty, coalescing, retry, resume', () => {
+  it.each(['before-clear', 'during-clear'] as const)('keeps a deletion arriving %s in an older sync pass', async (when) => {
+    const { attachments, sync, fake } = await boot({ manualWorker: true })
+    const rec = await attachments.importFile({ content: Buffer.from('delete-race'), filename: 'race.txt', mimeType: 'text/plain' })
+    await sync.syncAttachment(rec.id)
+    const entered = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    const dirty = (sync as any).reqDirty()
+    const originalPut = dirty.put.bind(dirty)
+    const originalOpen = attachments.open.bind(attachments)
+    let held = false
+    const gate = when === 'during-clear'
+      ? vi.spyOn(dirty, 'put').mockImplementation(async (key: any, value: any) => {
+          if (!held && value.dirty === false) { held = true; entered.resolve(); await release.promise }
+          return originalPut(key, value)
+        })
+      : vi.spyOn(attachments, 'open').mockImplementation(async (id) => {
+          const bytes = await originalOpen(id)
+          if (!held) { held = true; entered.resolve(); await release.promise }
+          return bytes
+        })
+    const oldPass = sync.syncAttachment(rec.id)
+    try {
+      await entered.promise
+      await attachments.remove(rec.id)
+    } finally { release.resolve() }
+    await oldPass
+    gate.mockRestore()
+    // No full reconcile or new event: the existing hint must drive deletion.
+    await sync.drain()
+    await sync.drain()
+    expect(sync.getAttachmentMapping(rec.id)?.syncState).toBe('deleted')
+    expect(sync.listIntents().filter(i => i.entityId === rec.id && i.operationKind === 'delete')).toHaveLength(1)
+    expect(sync.listIntents().find(i => i.entityId === rec.id && i.operationKind === 'delete')?.state).toBe('completed')
+    expect(fake.files.size).toBe(0)
+  })
+
+  it('re-arms a deletion when the catalog becomes visible after the event hint was consumed', async () => {
+    const { attachments, sync } = await boot({ manualWorker: true })
+    const rec = await attachments.importFile({ content: Buffer.from('projection-race'), filename: 'race.txt', mimeType: 'text/plain' })
+    await sync.syncAttachment(rec.id)
+    const entered = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    const table = (attachments as any).requireTable()
+    const original = table.put.bind(table)
+    const put = vi.spyOn(table, 'put').mockImplementation(async (key: any, value: any) => {
+      if (key === rec.id && value.deletedAt !== undefined) { entered.resolve(); await release.promise }
+      return original(key, value)
+    })
+    const removing = attachments.remove(rec.id)
+    try {
+      await entered.promise
+      // The committed deletion is visible, but the catalog still says active.
+      // Supply the old bytes to force the no-op path instead of a file-not-found retry.
+      const open = vi.spyOn(attachments, 'open').mockResolvedValue(Buffer.from('projection-race'))
+      try { await sync.drain() } finally { open.mockRestore() }
+      expect(sync.listDirty().find(i => i.entityId === rec.id)?.dirty).toBe(false)
+    } finally { release.resolve() }
+    await removing
+    put.mockRestore()
+    await sync.drain()
+    await sync.drain()
+    expect(sync.getAttachmentMapping(rec.id)?.syncState).toBe('deleted')
+    expect(sync.listIntents().find(i => i.entityId === rec.id && i.operationKind === 'delete')?.state).toBe('completed')
+  })
+
+  it('preserves a revision-zero derived-content hint received during a no-op pass', async () => {
+    const { attachments, sync } = await boot({ manualWorker: true })
+    const rec = await attachments.importFile({ content: Buffer.from('derived'), filename: 'derived.txt', mimeType: 'text/plain' })
+    await sync.syncAttachment(rec.id)
+    const entered = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    const original = attachments.open.bind(attachments)
+    const open = vi.spyOn(attachments, 'open').mockImplementationOnce(async (id) => {
+      const bytes = await original(id)
+      entered.resolve()
+      await release.promise
+      return bytes
+    })
+    const oldPass = sync.syncAttachment(rec.id)
+    try {
+      await entered.promise
+      await sync.markDirty('attachment', String(rec.id), 0)
+      expect(sync.listDirty().find(i => i.entityId === rec.id)?.dirty).toBe(true)
+    } finally { release.resolve() }
+    await oldPass
+    open.mockRestore()
+    expect(sync.listDirty().find(i => i.entityId === rec.id)?.dirty).toBe(true)
+    await sync.drain()
+    expect(sync.listDirty().find(i => i.entityId === rec.id)?.dirty).toBe(false)
+  })
+
+  it('recovers an unknown update even when local content returns to the previous fingerprint', async () => {
+    const { notes, sync, fake } = await boot({ manualWorker: true })
+    const note = await notes.create({ relativePath: 'revert.md', markdown: '# A\n' })
+    const original = (await notes.getDocument(note.noteId)).markdown
+    const knowledgeId = await sync.syncNote(note.noteId)
+    await notes.update(note.noteId, `---\nid: ${note.noteId}\n---\n\n# B\n`)
+    fake.next.commitThenDrop = 'update-manual'
+    await expect(sync.syncNote(note.noteId)).rejects.toThrow()
+    expect(fake.manuals.get(knowledgeId)?.content).toContain('# B')
+    await notes.update(note.noteId, original)
+    await sync.drain()
+    expect(fake.manuals.get(knowledgeId)?.content).toContain('# A')
+    expect(sync.listDirty().find(i => i.entityId === note.noteId)?.dirty).toBe(false)
+  })
+
+  it('full reconcile re-arms a lost deletion hint and completes the remote deletion only once', async () => {
+    const { attachments, sync, fake } = await boot({ manualWorker: true })
+    const rec = await attachments.importFile({ content: Buffer.from('backstop'), filename: 'backstop.txt', mimeType: 'text/plain' })
+    await sync.syncAttachment(rec.id)
+    await attachments.remove(rec.id)
+    await sync.markDirty('attachment', String(rec.id)) // settle all earlier hint writes
+    const dirty = (sync as any).reqDirty()
+    const [key, value] = [...dirty.entries()][0] as [string, any]
+    await dirty.put(key, { ...value, dirty: false, pendingOperationId: undefined })
+    await sync.reconcile()
+    await sync.drain()
+    await sync.drain()
+    expect(fake.files.size).toBe(0)
+    expect(sync.listIntents().filter(i => i.operationKind === 'delete' && i.state === 'completed')).toHaveLength(1)
+    await sync.reconcile()
+    await sync.drain()
+    expect(sync.listIntents().filter(i => i.operationKind === 'delete')).toHaveLength(1)
+  })
+
+  it('timer worker propagates each deletion without a full reconcile', async () => {
+    const { attachments, sync, fake } = await boot()
+    for (let n = 0; n < 15; n++) {
+      const rec = await attachments.importFile({ content: Buffer.from(`timer-${n}`), filename: 'timer.txt', mimeType: 'text/plain' })
+      const knowledgeId = await sync.syncAttachment(rec.id)
+      await attachments.remove(rec.id)
+      await vi.waitFor(() => {
+        expect(sync.getAttachmentMapping(rec.id)?.syncState).toBe('deleted')
+        expect(fake.files.has(knowledgeId)).toBe(false)
+        expect(sync.listIntents().find(i => i.entityId === rec.id && i.operationKind === 'delete')?.state).toBe('completed')
+      }, { timeout: 2000 })
+    }
+  })
+
+  it('service restart re-arms a deleted catalog record whose durable dirty hint was lost', async () => {
+    const { ctx, workspaceId, attachments, sync, syncFork, fake } = await boot({ manualWorker: true })
+    const rec = await attachments.importFile({ content: Buffer.from('restart-delete'), filename: 'restart.txt', mimeType: 'text/plain' })
+    await sync.syncAttachment(rec.id)
+    await attachments.remove(rec.id)
+    await sync.markDirty('attachment', String(rec.id))
+    const dirty = (sync as any).reqDirty()
+    const [key, value] = [...dirty.entries()][0] as [string, any]
+    await dirty.put(key, { ...value, dirty: false, pendingOperationId: undefined })
+    await syncFork.dispose()
+    await ctx.plugin(WeKnoraSyncService, { kbId: 'kb-1', workspaceId, pollMs: 25, retryBaseMs: 5, retryMaxMs: 10, recoveryGraceAttempts: 2 })
+    const restarted = ctx.pkwWeKnoraSync
+    // No new event and no full reconcile. Startup repairs the lost hint.
+    await vi.waitFor(async () => {
+      await restarted.drain()
+      expect(fake.files.size).toBe(0)
+      expect(restarted.listIntents().find(i => i.entityId === rec.id && i.operationKind === 'delete')?.state).toBe('completed')
+    }, { timeout: 2000 })
+  })
+
   it('coalesces A→B→C→D: worker converges remote to the current state, not replay', async () => {
     const { notes, sync, fake } = await boot()
     const note = await notes.create({ relativePath: 'a.md', markdown: '# A\n' })
@@ -622,19 +955,20 @@ describe('worker: durable dirty, coalescing, retry, resume', () => {
   })
 
   it('event-independent backstop: reconcile re-derives dirty from canonical entities', async () => {
-    const { notes, sync } = await boot()
+    const { notes, sync } = await boot({ pollMs: 3_600_000 })
     // Reconcile is the event-loss backstop: it enumerates local canonical entities
     // directly (not the live event stream) and marks never-synced ones dirty.
     const note = await notes.create({ relativePath: 'a.md', markdown: '# v1\n' })
     const report = await sync.reconcile()
     expect(report.markedDirty).toBeGreaterThanOrEqual(1)
-    await vi.waitFor(() => {
+    await vi.waitFor(async () => {
+      await sync.drain()
       expect(sync.getMapping(note.noteId)?.knowledgeId).toBeDefined()
     }, { timeout: 2000 })
   })
 
   it('restart resume: unknown intent is recovered by a later drain (no new event)', async () => {
-    const { notes, sync, fake } = await boot()
+    const { notes, sync, fake } = await boot({ pollMs: 3_600_000 })
     const note = await notes.create({ relativePath: 'a.md', markdown: '# v1\n\nresume\n' })
     fake.next.commitThenDrop = 'create-manual'
     await expect(sync.syncNote(note.noteId)).rejects.toThrow()
@@ -642,7 +976,8 @@ describe('worker: durable dirty, coalescing, retry, resume', () => {
 
     // A fresh drain (equivalent to init-time resume) must recover the durable intent.
     await sync.drain()
-    await vi.waitFor(() => {
+    await vi.waitFor(async () => {
+      await sync.drain()
       expect(sync.getMapping(note.noteId)?.knowledgeId).toBeDefined()
     }, { timeout: 2000 })
     expect(fake.manuals.size).toBe(1)
@@ -753,12 +1088,13 @@ describe('attachment sync', () => {
 
 describe('full reconcile', () => {
   it('marks never-synced entities dirty and converges', async () => {
-    const { notes, attachments, sync } = await boot()
+    const { notes, attachments, sync } = await boot({ pollMs: 3_600_000 })
     const note = await notes.create({ relativePath: 'a.md', markdown: '# v1\n' })
     await attachments.importFile({ content: Buffer.from('x'), filename: 'x.txt', mimeType: 'text/plain' })
     const report = await sync.reconcile()
     expect(report.markedDirty).toBe(2)
-    await vi.waitFor(() => {
+    await vi.waitFor(async () => {
+      await sync.drain()
       expect(sync.getMapping(note.noteId)?.knowledgeId).toBeDefined()
     }, { timeout: 2000 })
   })
@@ -781,6 +1117,26 @@ describe('full reconcile', () => {
 // ── retrieval + source ref ────────────────────────────────────────────────────
 
 describe('retrieval + SourceRef', () => {
+  it('distinguishes unavailable attachment processing from a healthy empty search', async () => {
+    const { sync, adapter, notes } = await boot()
+    const note = await notes.create({ relativePath: 'partial-search.md', markdown: '# searchable\n' })
+    await sync.syncNote(note.noteId)
+    const healthy = await sync.searchWithTrace('searchable')
+    expect(healthy.trace.processingUnavailable).toBeUndefined()
+    const original = adapter.hybridSearch.bind(adapter)
+    const kb = vi.spyOn(sync as any, 'reqProcessingKb').mockReturnValue({ get: () => ({ processingKbId: 'processing-offline' }) })
+    const remote = vi.spyOn(adapter, 'hybridSearch').mockImplementation((id, input) => {
+      if (id === 'processing-offline') return Promise.reject(new Error('processing unavailable'))
+      return original(id, input)
+    })
+    try {
+      const partial = await sync.searchWithTrace('searchable')
+      expect(partial.trace.processingUnavailable).toBe(true)
+      expect(partial.trace.processingRaw).toBe(0)
+      expect(partial.results.map(r => r.local?.entityId)).toContain(String(note.noteId))
+    } finally { kb.mockRestore(); remote.mockRestore() }
+  })
+
   it('attaches workspace-correct local SourceRef for mapped PKW knowledge', async () => {
     const { notes, sync, workspaceId } = await boot()
     const note = await notes.create({ relativePath: 'a.md', markdown: '# searchable\n' })
@@ -841,8 +1197,61 @@ describe('secret redaction', () => {
 // ── Companion Note summary materialization ────────────────────────────────────
 
 describe('companion summary materialization', () => {
+  it('does not overwrite a user save made after the summary reads its note snapshot', async () => {
+    const { attachments, notes, sync, fake } = await boot({ pollMs: 3_600_000 })
+    const note = await notes.create({ relativePath: 'user-edit.md', markdown: '# Original\n' })
+    const attachment = await attachments.importFile({ content: Buffer.from('SUMMARY'), filename: 'summary.txt', mimeType: 'text/plain' })
+    await attachments.setCompanionNote(attachment.id, note.noteId)
+    const knowledgeId = await sync.syncAttachment(attachment.id)
+    fake.files.get(knowledgeId)!.summary = 'Derived summary'
+    fake.files.get(knowledgeId)!.summaryStatus = 'completed'
+    const captured = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    const readDocument = notes.getDocument.bind(notes)
+    const spy = vi.spyOn(notes, 'getDocument').mockImplementationOnce(async id => {
+      const snapshot = await readDocument(id)
+      captured.resolve()
+      await release.promise
+      return snapshot
+    })
+    try {
+      const pending = sync.materializeCompanionSummary(attachment.id)
+      await captured.promise
+      await notes.update(note.noteId, '# User saved newer work\n')
+      release.resolve()
+      const changed = await pending
+      expect((await readDocument(note.noteId)).markdown).toContain('# User saved newer work')
+      expect(changed).toBe(false)
+      expect(await sync.materializeCompanionSummary(attachment.id)).toBe(true)
+      const after = await readDocument(note.noteId)
+      expect(after.markdown).toContain('# User saved newer work')
+      expect(after.markdown).toContain('Derived summary')
+    } finally {
+      release.resolve()
+      spy.mockRestore()
+    }
+  })
+
+  it('serializes overlapping summary materializations and writes the canonical note once', async () => {
+    const { attachments, notes, sync, fake } = await boot({ pollMs: 3_600_000 })
+    const note = await notes.create({ relativePath: 'concurrent.md', markdown: '# Original\n' })
+    const attachment = await attachments.importFile({ content: Buffer.from('SUMMARY'), filename: 'summary.txt', mimeType: 'text/plain' })
+    await attachments.setCompanionNote(attachment.id, note.noteId)
+    const knowledgeId = await sync.syncAttachment(attachment.id)
+    const remote = fake.files.get(knowledgeId)!
+    remote.summary = 'One derived summary'
+    remote.summaryStatus = 'completed'
+    const before = notes.get(note.noteId)!.observedRevision
+    const outcomes = await Promise.all(Array.from({ length: 12 }, () => sync.materializeCompanionSummary(attachment.id)))
+    expect(outcomes.filter(Boolean)).toHaveLength(1)
+    expect(notes.get(note.noteId)!.observedRevision).toBe(before + 1)
+    const doc = await notes.getDocument(note.noteId)
+    expect(doc.markdown).toContain('# Original')
+    expect(doc.markdown.split('pkw:attachment-summary:start')).toHaveLength(2)
+  })
+
   it('materializes the Attachment Knowledge summary into the Companion Note (upsert, reuse KnowledgeId)', async () => {
-    const { attachments, notes, sync, fake } = await boot()
+    const { attachments, notes, sync, fake } = await boot({ pollMs: 3_600_000 })
     const note = await notes.create({ relativePath: '海报3.md', markdown: '# 海报3\n\n![](attachments/att_x/海报3.png)\n' })
     const rec = await attachments.importFile({ content: Buffer.from('PNG'), filename: '海报3.png', mimeType: 'image/png' })
     await attachments.setCompanionNote(rec.id, note.noteId)
@@ -886,19 +1295,19 @@ describe('companion summary materialization', () => {
 
 describe('attachment restore + replacement crash recovery', () => {
   it('restore: deleted attachment reappearing with same bytes reactivates (no new id)', async () => {
-    const { attachments, sync, fake, dir } = await boot()
+    const { attachments, sync, fake, dir } = await boot({ manualWorker: true })
     const rec = await attachments.importFile({ content: Buffer.from('RESTORE'), filename: 'restore.txt', mimeType: 'text/plain' })
     const knowledgeId = await sync.syncAttachment(rec.id)
 
     await attachments.remove(rec.id)
-    await vi.waitFor(() => {
-      expect(sync.getAttachmentMapping(rec.id)?.syncState).toBe('deleted')
-    }, { timeout: 2000 })
+    await sync.drain() // tombstone + arm DELETE; restore before it executes
+    expect(sync.getAttachmentMapping(rec.id)?.syncState).toBe('deleted')
 
     // Same AttachmentId + same bytes reappear (restore, not a new id).
     const fs = await import('node:fs/promises')
     await fs.writeFile(join(dir, 'attachments', String(rec.id), rec.filename), Buffer.from('RESTORE'))
     await attachments.reconcile()
+    await sync.drain()
 
     await vi.waitFor(() => {
       const m = sync.getAttachmentMapping(rec.id)
@@ -906,6 +1315,31 @@ describe('attachment restore + replacement crash recovery', () => {
       expect(m?.knowledgeId).toBe(knowledgeId)
     }, { timeout: 2000 })
     expect(fake.files.size).toBe(1) // reactivated, not replaced
+  })
+
+  it.each(['note', 'attachment'] as const)('restores a %s after remote DELETE completed, with a new remote id', async (kind) => {
+    const { attachments, notes, sync, fake, adapter } = await boot({ manualWorker: true })
+    const note = kind === 'note' ? await notes.create({ relativePath: 'restore.md', markdown: '# restore\n' }) : undefined
+    const att = kind === 'attachment' ? await attachments.importFile({ content: Buffer.from('restore'), filename: 'restore.txt', mimeType: 'text/plain' }) : undefined
+    const id = note?.noteId ?? att!.id
+    const oldId = note ? await sync.syncNote(note.noteId) : await sync.syncAttachment(att!.id)
+    if (note) await notes.delete(note.noteId)
+    else await attachments.remove(att!.id)
+    await sync.drain()
+    await sync.drain()
+    expect(fake.manuals.has(oldId) || fake.files.has(oldId)).toBe(false)
+    if (note) await notes.restore(note.noteId)
+    else await attachments.restore(att!.id)
+    // A failed existence check must neither claim success nor lose the retry.
+    const get = vi.spyOn(adapter, 'getKnowledge').mockRejectedValueOnce(new Error('offline'))
+    await sync.drain()
+    get.mockRestore()
+    expect(sync.listDirty().find(i => i.entityId === id)?.dirty).toBe(true)
+    await sync.drain()
+    const mapping = note ? sync.getMapping(note.noteId) : sync.getAttachmentMapping(att!.id)
+    expect(mapping?.syncState).toBe('synced')
+    expect(mapping?.knowledgeId).not.toBe(oldId)
+    expect(fake.manuals.has(mapping!.knowledgeId) || fake.files.has(mapping!.knowledgeId)).toBe(true)
   })
 
   it('replacement crash recovery: B durably recorded while A active, then resumed and switched', { timeout: 20000 }, async () => {
@@ -934,6 +1368,94 @@ describe('attachment restore + replacement crash recovery', () => {
       expect(sync.getAttachmentMapping(rec.id)?.knowledgeId).toBe(bId)
     }, { timeout: 15000 })
     expect(sync.getAttachmentMapping(rec.id)!.supersededKnowledgeIds).toContain(oldId)
+  })
+
+  it('retains replacement B after a complete pending pass and service restart without re-uploading', async () => {
+    const { ctx, workspaceId, attachments, sync, syncFork, fake, dir, adapter } = await boot({ manualWorker: true })
+    const rec = await attachments.importFile({ content: Buffer.from('durable A'), filename: 'durable.txt', mimeType: 'text/plain' })
+    const oldId = await sync.syncAttachment(rec.id)
+    const upload = vi.spyOn(adapter, 'uploadFile') // observe real HTTP, including duplicate requests
+    const bytes = Buffer.from('durable B')
+    const fs = await import('node:fs/promises')
+    await fs.writeFile(join(dir, 'attachments', String(rec.id), rec.filename), bytes)
+    const reconciled = await attachments.reconcile()
+    expect(reconciled.decisions).toHaveLength(1)
+    expect(attachments.get(rec.id)?.sha256).toBe(sha256Hex('durable B'))
+
+    // Await the whole pass, including the first GET reporting B=pending. A
+    // transient marker between upload and GET is not durable recovery evidence.
+    await sync.drain()
+    const b = [...fake.files.values()].find(file => file.fileHash === md5Hex(bytes))!
+    expect(b).toBeDefined()
+    const pending = sync.getAttachmentMapping(rec.id)!
+    expect(pending).toMatchObject({ knowledgeId: oldId, replacementKnowledgeId: b.id, replacementFingerprint: sha256Hex('durable B'), replacementState: 'parsing' })
+    const replacement = sync.listIntents().filter(intent => intent.entityId === rec.id && intent.operationKind === 'replacement')
+    expect(replacement).toHaveLength(1)
+    expect(replacement[0]).toMatchObject({ state: 'running', replacementKnowledgeId: b.id })
+
+    await sync.drain()
+    expect(sync.getAttachmentMapping(rec.id)?.replacementKnowledgeId).toBe(b.id)
+    expect(upload).toHaveBeenCalledTimes(1)
+    expect(sync.listIntents().filter(intent => intent.entityId === rec.id && intent.operationKind === 'replacement')).toHaveLength(1)
+
+    // Reopen the actual service/domain against the same SQLite state. No event,
+    // reconcile, mock outcome, or additional upload may be needed to resume B.
+    await syncFork.dispose()
+    await ctx.plugin(WeKnoraSyncService, { kbId: 'kb-1', workspaceId, pollMs: 25, retryBaseMs: 5, retryMaxMs: 10, recoveryGraceAttempts: 2 })
+    const restarted = ctx.pkwWeKnoraSync
+    await restarted.drain()
+    expect(restarted.getAttachmentMapping(rec.id)).toMatchObject({ knowledgeId: oldId, replacementKnowledgeId: b.id })
+    expect(upload).toHaveBeenCalledTimes(1)
+
+    b.parseStatus = 'completed'
+    await restarted.drain()
+    expect(restarted.getAttachmentMapping(rec.id)).toMatchObject({ knowledgeId: b.id, remoteFingerprint: sha256Hex('durable B'), replacementState: 'completed', supersededKnowledgeIds: [oldId] })
+    expect(restarted.getAttachmentMapping(rec.id)?.replacementKnowledgeId).toBeUndefined()
+    expect(restarted.listIntents().filter(intent => intent.entityId === rec.id && intent.operationKind === 'replacement')).toEqual([expect.objectContaining({ operationId: replacement[0]!.operationId, state: 'completed', knowledgeId: b.id })])
+    expect(restarted.listDirty().find(record => record.entityId === rec.id)?.dirty).toBe(false)
+    expect(upload).toHaveBeenCalledTimes(1)
+    expect(fake.files.size).toBe(2)
+    expect(fake.files.has(oldId)).toBe(true)
+  })
+
+  it.each([['completed', true], ['completed', false], ['failed', true], ['cancelled', true]] as const)('does not acknowledge newer local C when B finishes with %s and remote hash present=%s', async (status, hasRemoteHash) => {
+    const { attachments, sync, fake, dir, adapter } = await boot({ manualWorker: true })
+    const rec = await attachments.importFile({ content: Buffer.from('A'), filename: 'changed-again.txt', mimeType: 'text/plain' })
+    const oldId = await sync.syncAttachment(rec.id)
+    const upload = vi.spyOn(adapter, 'uploadFile')
+    const fs = await import('node:fs/promises')
+    const path = join(dir, 'attachments', String(rec.id), rec.filename)
+    await fs.writeFile(path, Buffer.from('B'))
+    await attachments.reconcile()
+    await sync.drain()
+    const b = [...fake.files.values()].find(file => file.fileHash === md5Hex(Buffer.from('B')))!
+    expect(sync.getAttachmentMapping(rec.id)?.replacementKnowledgeId).toBe(b.id)
+
+    // B is still processing when the local canonical bytes become C. Finishing
+    // B must publish B's identity/fingerprint, leaving C queued for a later pass.
+    await fs.writeFile(path, Buffer.from('C'))
+    await attachments.reconcile()
+    b.parseStatus = status
+    b.omitFileHash = !hasRemoteHash
+    await sync.drain()
+    const activeId = status === 'completed' ? b.id : oldId
+    const activeContent = status === 'completed' ? 'B' : 'A'
+    expect(sync.getAttachmentMapping(rec.id)).toMatchObject({ knowledgeId: activeId, remoteFingerprint: sha256Hex(activeContent) })
+    // An absent remote B hash must stay absent; C's local MD5 is not evidence
+    // about the bytes stored remotely. The failed path still retains A's hash.
+    expect(sync.getAttachmentMapping(rec.id)?.remoteFileHash).toBe(status === 'completed' && !hasRemoteHash ? undefined : md5Hex(Buffer.from(activeContent)))
+    expect(sync.listDirty().find(record => record.entityId === rec.id)?.dirty).toBe(true)
+    expect(upload).toHaveBeenCalledTimes(1)
+
+    await sync.drain()
+    const c = [...fake.files.values()].find(file => file.fileHash === md5Hex(Buffer.from('C')))!
+    expect(sync.getAttachmentMapping(rec.id)).toMatchObject({ knowledgeId: activeId, replacementKnowledgeId: c.id, replacementFingerprint: sha256Hex('C') })
+    c.parseStatus = 'completed'
+    await sync.drain()
+    expect(sync.getAttachmentMapping(rec.id)).toMatchObject({ knowledgeId: c.id, remoteFingerprint: sha256Hex('C'), supersededKnowledgeIds: status === 'completed' ? [oldId, b.id] : [oldId] })
+    expect(sync.listDirty().find(record => record.entityId === rec.id)?.dirty).toBe(false)
+    expect(upload).toHaveBeenCalledTimes(2)
+    expect(fake.files.size).toBe(3)
   })
 })
 

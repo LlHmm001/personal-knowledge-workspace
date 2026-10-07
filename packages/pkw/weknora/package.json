@@ -3,7 +3,18 @@
   "version": "0.1.0",
   "description": "PKW WeKnora REST Adapter (ctx.pkwWeKnora): Manual Knowledge + file ingestion + retrieval, over the real 0.7.1 API.",
   "type": "module",
-  "main": "src/index.ts",
-  "types": "src/index.ts",
-  "dependencies": {}
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "dependencies": {},
+  "files": [
+    "lib"
+  ],
+  "scripts": {
+    "build": "node ../../../scripts/build.mjs weknora"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-credentials": "*",
+    "@deepseek-ai/schemastery": "*"
+  }
 }

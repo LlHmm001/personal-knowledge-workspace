@@ -1,35 +1,24 @@
 /**
- * pkw_notes v1 → v2 migration tests: a v1 JSON fixture opens under the v2 spec,
- * preserving note_index + note_paths and adding an empty note_order; restart is
- * idempotent; a failing migration leaves the old file intact.
- *
- * ⚠️ DISABLED — DO NOT DELETE. This spec was carried over from the old
- * `portable` branch and targets a harness storage API that no longer exists:
- * `defineDomain({ migrations })` is not part of the current spec (the harness
- * storage backends reject a version-mismatched medium outright — see
- * `packages/storage/storage-json/src/format.ts` and
- * `packages/storage/storage-sqlite/src/index.ts`), and the JSON backend no
- * longer matches the `openUnit` shape used below.
- *
- * The subject matter is still important: PKW's domain specs are stamped at
- * version 3 with no migration path, so a medium written by an older PKW build
- * would be rejected at open. Rewrite these cases against the current harness
- * storage API before re-enabling. See docs/HANDOVER.md §8.2.
+ * Current Harness storage contract, not an automatic migration promise.
+ * Whole-unit v1/v2 media must reject without rewriting user state. The former
+ * tests assumed an unsupported migrations hook; a real upgrade remains an
+ * explicit, backed-up offline operation (see docs/DELIVERY_STATUS.md).
  */
 import { afterEach, describe, expect, it } from 'vitest'
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import Storage from '@deepseek-ai/dsh-storage'
-import { DomainFacility, defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
+import { DomainFacility, descriptorOf } from '@deepseek-ai/dsh-storage-domain'
 import { JsonStorageBackend } from '@deepseek-ai/dsh-storage-json'
-import { noteDomainSpec, operationCommitRecord } from '@deepseek-ai/dsh-pkw-domain'
-import type { OperationCommitRecord } from '@deepseek-ai/dsh-pkw-domain'
+import { SqliteStorageBackend } from '@deepseek-ai/dsh-storage-sqlite'
+import { noteDomainSpec } from '@deepseek-ai/dsh-pkw-domain'
 
 const dirs: string[] = []
-
+const cleanup: Array<() => Promise<void>> = []
 afterEach(async () => {
+  for (const close of cleanup.splice(0).reverse()) await close()
   await Promise.all(dirs.splice(0).map(d => rm(d, { recursive: true, force: true })))
 })
 
@@ -70,82 +59,74 @@ async function bootJson(root: string) {
   const ctx = new Context()
   await ctx.plugin(Storage)
   const backend = new JsonStorageBackend(root)
+  cleanup.push(async () => { await backend.close(); await ctx.fiber.dispose() })
   ctx.storage.backend.register('json', backend)
   const facility = new DomainFacility(ctx, { backend: 'json', routes: {} })
   ctx.storage.mount('domain', facility)
   ctx.provide('storageDomain', facility)
-  return { ctx, facility }
+  return facility
 }
 
-describe.skip('pkw_notes v1 → v3 migration', () => {
-  it('preserves note_index/note_paths and adds empty note_order + folder_trash', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'pkw-mig-'))
-    dirs.push(root)
-    await writeFile(join(root, 'pkw_notes.json'), JSON.stringify(v1Fixture()))
+async function fixtureFile(version: number) {
+  const root = await mkdtemp(join(tmpdir(), 'pkw-mig-'))
+  dirs.push(root)
+  const fixture = { ...v1Fixture(), unit: { name: 'pkw_notes', version } }
+  const path = join(root, 'pkw_notes.json')
+  const bytes = JSON.stringify(fixture)
+  await writeFile(path, bytes)
+  return { root, path, bytes }
+}
 
-    const { facility } = await bootJson(root)
-    const domain = await facility.open(noteDomainSpec)
-
-    const notes = domain.table('note_index')
-    expect(notes.get('note_root' as never)?.relativePath).toBe('root.md')
-    expect(notes.get('note_nested' as never)?.relativePath).toBe('工作/项目A.md')
-    expect(notes.get('note_deleted' as never)?.deletedAt).toBeDefined()
-
-    const paths = domain.table('note_paths')
-    expect(paths.get('工作/项目A.md')).toBe('note_nested')
-
-    const order = domain.table('note_order')
-    expect([...order.entries()]).toHaveLength(0)
-
-    const trash = domain.table('folder_trash')
-    expect([...trash.entries()]).toHaveLength(0)
-
-    // The file header is bumped to version 3 (migration materialized).
-    const onDisk = JSON.parse(await readFile(join(root, 'pkw_notes.json'), 'utf8')) as { unit: { version: number } }
-    expect(onDisk.unit.version).toBe(3)
-
-    await domain.close()
+describe('pkw_notes storage version and data preservation contract', () => {
+  it.each([1, 2])('rejects JSON v%s without rewriting it, including after retry', async version => {
+    const { root, path, bytes } = await fixtureFile(version)
+    const facility = await bootJson(root)
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await expect(facility.open(noteDomainSpec)).rejects.toMatchObject({ code: 'version-mismatch' })
+      expect(await readFile(path, 'utf8')).toBe(bytes)
+    }
   })
 
-  it('is idempotent on restart (no version mismatch, data intact)', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'pkw-mig-'))
-    dirs.push(root)
-    await writeFile(join(root, 'pkw_notes.json'), JSON.stringify(v1Fixture()))
-
-    const first = await bootJson(root)
-    const d1 = await first.facility.open(noteDomainSpec)
-    await d1.close()
-
-    const second = await bootJson(root)
-    const d2 = await second.facility.open(noteDomainSpec)
-    expect(d2.table('note_index').get('note_root' as never)?.title).toBe('Root')
-    expect([...d2.table('note_order').entries()]).toHaveLength(0)
-    await d2.close()
+  it('opens v3, preserves identities/paths/trash and empty added tables across restart', async () => {
+    const { root } = await fixtureFile(3)
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const facility = await bootJson(root)
+      const domain = await facility.open(noteDomainSpec)
+      expect(domain.table('note_index').get('note_root' as never)?.relativePath).toBe('root.md')
+      expect(domain.table('note_index').get('note_nested' as never)?.title).toBe('Nested')
+      expect(domain.table('note_index').get('note_deleted' as never)?.deletedAt).toBeDefined()
+      expect(domain.table('note_paths').get('工作/项目A.md')).toBe('note_nested')
+      expect([...domain.table('note_index').entries()]).toHaveLength(3)
+      expect([...domain.table('note_order').entries()]).toHaveLength(0)
+      expect([...domain.table('folder_trash').entries()]).toHaveLength(0)
+      await domain.close()
+    }
   })
 
-  it('a failing migration leaves the old file intact for a clean retry', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'pkw-mig-'))
+  it('schema validation failure leaves the v3 JSON medium byte-for-byte intact', async () => {
+    const { root, path } = await fixtureFile(3)
+    const broken = JSON.stringify({ unit: { name: 'pkw_notes', version: 3 }, global: null, tables: { note_index: { note_broken: { noteId: 'note_broken', title: 'keep me' } } } })
+    await writeFile(path, broken)
+    const facility = await bootJson(root)
+    await expect(facility.open(noteDomainSpec)).rejects.toMatchObject({ code: 'invalid-record' })
+    expect(await readFile(path, 'utf8')).toBe(broken)
+  })
+
+  it('SQLite rejects an older domain and its original version remains readable', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pkw-mig-sqlite-'))
     dirs.push(root)
-    const failingSpec = defineDomain({
-      name: 'pkw_failing',
-      version: 2,
-      migrations: {
-        1: { upgrade: () => { throw new Error('boom') } },
-      },
-      tables: { t: domainTable<string, OperationCommitRecord>(operationCommitRecord) },
-    })
-    await writeFile(join(root, 'pkw_failing.json'), JSON.stringify({
-      unit: { name: 'pkw_failing', version: 1 },
-      global: null,
-      tables: { t: { a: { x: 'keep' } } },
-    }))
-
-    const { facility } = await bootJson(root)
-    await expect(facility.open(failingSpec)).rejects.toThrow('boom')
-
-    // The file is still v1 with the original record.
-    const onDisk = JSON.parse(await readFile(join(root, 'pkw_failing.json'), 'utf8')) as { unit: { version: number }; tables: { t: Record<string, unknown> } }
-    expect(onDisk.unit.version).toBe(1)
-    expect(onDisk.tables.t.a).toEqual({ x: 'keep' })
+    const backend = new SqliteStorageBackend({ path: join(root, 'pkw.sqlite'), journalMode: 'wal' })
+    cleanup.push(() => backend.close())
+    const oldDescriptor = { ...descriptorOf(noteDomainSpec), version: 1, tables: ['note_index', 'note_paths'] }
+    const old = await backend.kv.open(oldDescriptor)
+    const fixture = v1Fixture() as { tables: Record<string, Record<string, unknown>> }
+    for (const [table, rows] of Object.entries(fixture.tables)) {
+      for (const [key, value] of Object.entries(rows)) await old.putRecord(table, key, value)
+    }
+    await old.close()
+    await expect(backend.kv.open(descriptorOf(noteDomainSpec))).rejects.toMatchObject({ code: 'version-mismatch' })
+    const reopened = await backend.kv.open(oldDescriptor)
+    expect((await reopened.loadAll()).tables).toEqual(fixture.tables)
+    await reopened.close()
   })
 })
