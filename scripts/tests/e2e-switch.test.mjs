@@ -58,8 +58,13 @@ async function copyResolving(from, to) {
 const LIVE_PROFILE = process.env.PKW_E2E_LIVE_PROFILE ?? '/root/.dsh/profiles/web'
 const PKW_SCOPE = 'node_modules/@deepseek-ai'
 
-const canRun = existsSync(join(LIVE_PROFILE, PKW_SCOPE, 'dsh-pkw-web/package.json'))
-const skip = canRun ? false : `no installed PKW profile at ${LIVE_PROFILE} to use as the old release`
+// The test needs three things and declares which one is missing, so a skip never hides a
+// half-configured run: real old artifacts, a support closure, and a store.
+const missing = []
+if (!existsSync(join(LIVE_PROFILE, PKW_SCOPE, 'dsh-pkw-web/package.json'))) missing.push(`no installed PKW profile at ${LIVE_PROFILE}`)
+if (!process.env.PKW_E2E_OLD_ARTIFACTS || !existsSync(process.env.PKW_E2E_OLD_ARTIFACTS)) missing.push('PKW_E2E_OLD_ARTIFACTS must name a staged artifact directory')
+if (!process.env.PKW_E2E_STORE) missing.push('PKW_E2E_STORE must name a pnpm store')
+const skip = missing.length ? `e2e requires: ${missing.join('; ')}` : false
 
 function freePort() {
   return new Promise(resolvePromise => {
