@@ -22,7 +22,7 @@ import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import { spawn } from 'node:child_process'
 import { switchRelease, profileVersion, currentRelease, checkReachable } from './switch-release.mjs'
-import { copyDataRoot } from '../scripts/copy-data-root.mjs'
+import { copyDataRoot, isNotIsolated } from '../scripts/copy-data-root.mjs'
 import { startLoopbackRegistry } from './site/loopback-registry.mjs'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -67,20 +67,33 @@ if (!existsSync(join(oldRelease, 'package.json'))) {
   report.phases.seedRelease = { from: resolve(values['profile-source']), to: oldRelease, oldVersion }
 }
 
-// ── the data copy: the shared copier writes straight to the final destination
+// ── the data copy: the shared copier writes straight to the final destination, and the library
+// itself refuses a copy that is not isolated from its source. The refusal is reported here with
+// the findings the library attached, and the rehearsal stops: nothing is configured and no
+// listener is started on a copy that failed the gate. The copy is left in place for inspection.
 const dataRoot = join(workDir, 'data')
 if (!existsSync(join(dataRoot, 'identity.sqlite'))) {
-  const copy = await copyDataRoot(resolve(values['data-source']), dataRoot)
+  let copy
+  try {
+    copy = await copyDataRoot(resolve(values['data-source']), dataRoot)
+  } catch (error) {
+    if (!isNotIsolated(error)) throw error
+    report.status = 'copy-not-self-contained'
+    report.phases.copyData = {
+      to: dataRoot, preserved: true,
+      leaks: error.leaks, writableProblems: error.writableProblems,
+      databases: error.databases, rewritten: error.rewritten,
+    }
+    await writeFile(join(workDir, 'report.json'), JSON.stringify(report, null, 2) + '\n', { mode: 0o600 })
+    console.error(JSON.stringify({
+      status: report.status, message: error.message, target: error.targetRoot, preserved: true,
+      leaks: error.leaks.slice(0, 3), writableProblems: error.writableProblems.slice(0, 3),
+    }, null, 2))
+    process.exit(1)
+  }
   report.phases.copyData = {
     to: dataRoot, databases: copy.databases.length, rewritten: copy.rewritten.length,
-    leaks: copy.leaks.length, writableProblems: copy.writableProblems.length,
-  }
-  if (copy.leaks.length || copy.writableProblems.length) {
-    // A copy that still names its source can write the source's files.
-    report.status = 'copy-not-self-contained'
-    await writeFile(join(workDir, 'report.json'), JSON.stringify(report, null, 2) + '\n', { mode: 0o600 })
-    console.error(JSON.stringify({ status: report.status, leaks: copy.leaks.slice(0, 3), writableProblems: copy.writableProblems.slice(0, 3) }, null, 2))
-    process.exit(1)
+    leaks: 0, writableProblems: 0,
   }
 }
 

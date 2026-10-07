@@ -23,6 +23,7 @@ import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
+import { assertTraceResult } from './trace-result.mjs'
 
 const { values } = parseArgs({ options: {
   profile: { type: 'string' },
@@ -117,21 +118,17 @@ if (values['trace-imports']) {
     child.once('error', error => resolvePromise({ code: -1, stdout, stderr: `${stderr}${error.message}` }))
     child.once('exit', code => resolvePromise({ code, stdout, stderr }))
   })
-  if (traced.code !== 0 && traced.code !== 5) {
-    violations.push(`the import tracer exited ${traced.code}: ${traced.stderr.trim().split('\n').slice(-3).join(' | ').slice(0, 300)}`)
+  // The tracer's own exit status is part of the evidence. A tracer that failed to run, or that
+  // reported a violation, is not a tracer that verified anything, whatever its stdout claims.
+  const tracedFailure = assertTraceResult({ exitCode: traced.code, stdout: traced.stdout, stderr: traced.stderr })
+  if (tracedFailure) {
+    violations.push(tracedFailure)
   } else {
-    let parsed = null
-    try { parsed = JSON.parse(traced.stdout.trim()) } catch (error) {
-      violations.push(`the import tracer produced no parseable result: ${error.message}`)
-    }
-    if (parsed) {
-      if (typeof parsed.loaded !== 'number' || !Array.isArray(parsed.outside)) {
-        violations.push(`the import tracer result is missing required fields: ${JSON.stringify(Object.keys(parsed))}`)
-      }
-      if (parsed.importError) violations.push(`the entry point could not be imported: ${parsed.importError}`)
-      for (const file of parsed.outside ?? []) violations.push(`the runtime loaded a file from outside the profile -> ${file}`)
-      tracedImports = { loaded: parsed.loaded ?? null, outside: parsed.outside ?? [], exitCode: traced.code, stderr: traced.stderr.trim().slice(0, 200) }
-    }
+    const parsed = JSON.parse(traced.stdout.trim())
+    // `assertTraceResult` has already refused anything malformed, so this list is the finding.
+    for (const file of parsed.outside) violations.push(`the runtime loaded a file from outside the profile -> ${file}`)
+    if (parsed.importError) violations.push(`the entry point could not be imported: ${parsed.importError}`)
+    tracedImports = { loaded: parsed.loaded, outside: parsed.outside, exitCode: traced.code, stderr: traced.stderr.trim().slice(0, 200) }
   }
 }
 

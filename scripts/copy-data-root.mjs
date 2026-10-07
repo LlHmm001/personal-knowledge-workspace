@@ -134,12 +134,15 @@ export async function copyDataRoot(sourceRootInput, targetRootInput, options = {
   // so a symlinked source or target must not change the answer.
   const { realpath } = await import('node:fs/promises')
   const sourceRoot = await realpath(resolve(sourceRootInput)).catch(() => resolve(sourceRootInput))
-  const targetRoot = resolve(targetRootInput)
-  if (existsSync(targetRoot)) {
-    const entries = await readdir(targetRoot)
-    if (entries.length > 0) throw new Error(`target directory is not empty (${entries.length} entries): ${targetRoot}`)
+  if (existsSync(targetRootInput)) {
+    const entries = await readdir(resolve(targetRootInput))
+    if (entries.length > 0) throw new Error(`target directory is not empty (${entries.length} entries): ${resolve(targetRootInput)}`)
   }
-  await mkdir(targetRoot, { recursive: true, mode: 0o700 })
+  await mkdir(resolve(targetRootInput), { recursive: true, mode: 0o700 })
+  // The target is normalised through the filesystem as well, so that the real roots returned here
+  // are the same ones every decision below was made with. A caller that configures a runtime with
+  // a different spelling of the same directory would otherwise be configuring a different answer.
+  const targetRoot = await realpath(resolve(targetRootInput)).catch(() => resolve(targetRootInput))
 
   const snapshot = async (from, to) => {
     await mkdir(join(to, '..'), { recursive: true, mode: 0o700 })
@@ -235,7 +238,31 @@ export async function copyDataRoot(sourceRootInput, targetRootInput, options = {
   }
 
   const leaks = await findLeaks(sourceRoot, targetRoot)
-  return { targetRoot, rewritten, leaks, databases, writableProblems }
+  const result = { sourceRoot, targetRoot, rewritten, leaks, databases, writableProblems }
+
+  // ── the isolation gate, decided here rather than by each caller ────────────────
+  // Every caller of this function needs the same answer: a copy that still names the source, or
+  // whose declared write paths reach outside itself, may never be served. Deciding it inside the
+  // library means a caller cannot forget to ask, and cannot start a runtime on a copy that failed
+  // the check. The scene is preserved: the copy stays on disk exactly as it was produced, with the
+  // findings attached to the error, and nothing is cleaned up.
+  if (leaks.length > 0 || writableProblems.length > 0) {
+    const failure = new Error(`the copy in ${targetRoot} is not isolated from ${sourceRoot}: ${leaks.length} leak(s), ${writableProblems.length} writable path problem(s)`)
+    failure.code = 'PKW_COPY_NOT_ISOLATED'
+    failure.sourceRoot = sourceRoot
+    failure.targetRoot = targetRoot
+    failure.leaks = leaks
+    failure.writableProblems = writableProblems
+    failure.databases = databases
+    failure.rewritten = rewritten
+    throw failure
+  }
+  return result
+}
+
+/** True when a thrown copy failure is the library's own isolation refusal. */
+export function isNotIsolated(error) {
+  return Boolean(error) && error.code === 'PKW_COPY_NOT_ISOLATED'
 }
 
 /**
@@ -297,7 +324,16 @@ export async function findLeaks(sourceRoot, targetRoot) {
 if (process.argv[1] && import.meta.url === (await import('node:url')).pathToFileURL(resolve(process.argv[1])).href) {
   const [source, target] = process.argv.slice(2)
   if (!source || !target) { process.stderr.write('Usage: node scripts/copy-data-root.mjs SOURCE TARGET\n'); process.exit(2) }
-  const result = await copyDataRoot(resolve(source), resolve(target))
-  console.log(JSON.stringify({ target: result.targetRoot, databases: result.databases.length, rewritten: result.rewritten.length, leaks: result.leaks.length }, null, 2))
-  if (result.leaks.length) { console.error('copy is not self-contained'); process.exit(1) }
+  try {
+    const result = await copyDataRoot(resolve(source), resolve(target))
+    console.log(JSON.stringify({ target: result.targetRoot, databases: result.databases.length, rewritten: result.rewritten.length, leaks: 0 }, null, 2))
+  } catch (error) {
+    // The copy is left in place for inspection; only the verdict is reported.
+    console.error(JSON.stringify({
+      status: error.code ?? 'failed', message: error.message,
+      target: error.targetRoot ?? resolve(target), preserved: true,
+      leaks: (error.leaks ?? []).slice(0, 3), writableProblems: (error.writableProblems ?? []).slice(0, 3),
+    }, null, 2))
+    process.exit(1)
+  }
 }

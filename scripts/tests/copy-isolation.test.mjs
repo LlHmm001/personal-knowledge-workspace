@@ -8,7 +8,7 @@
  *     consistent (and deleting the WAL after copying does not fix).
  */
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -169,5 +169,137 @@ test('copy: writing the copy does not change the source', async () => {
   } finally {
     await rm(parent, { recursive: true, force: true })
     await rm(source.root, { recursive: true, force: true })
+  }
+})
+
+// ── the isolation gate lives in the library, so no caller can skip it ─────────────────────────
+
+test('copy: a copy that leaks is refused by the library itself, and the scene is kept', async () => {
+  const source = await makeSyntheticDataRoot()
+  const outside = await mkdtemp(join(tmpdir(), 'pkw-outside-'))
+  const target = join(await mkdtemp(join(tmpdir(), 'pkw-copy-')), 'data')
+  try {
+    // A link inside the space points outside the tree being copied. Whatever a runtime does with
+    // it, a write through it lands outside the copy, so the copy is not isolated from its source.
+    await symlink(outside, join(source.root, 'spaces', source.spaceId, 'link-to-outside'))
+    let thrown = null
+    try {
+      await copyDataRoot(source.root, target)
+    } catch (error) { thrown = error }
+    assert.ok(thrown, 'the library must refuse a copy that is not isolated from its source')
+    assert.equal(thrown.code, 'PKW_COPY_NOT_ISOLATED')
+    assert.match(thrown.message, /is not isolated from/)
+    // The findings are on the error, so a caller reports them instead of re-deriving them.
+    assert.equal(thrown.leaks.length, 1)
+    assert.equal(thrown.leaks[0].reason, 'escapes-the-copy')
+    assert.equal(thrown.leaks[0].resolved, await realpath(outside))
+    assert.equal(thrown.writableProblems.length, 0)
+    assert.equal(thrown.targetRoot, await realpath(target))
+    // The scene is preserved: the copy and the link in it are still on disk for inspection.
+    assert.equal(await realpath(join(target, 'spaces', source.spaceId, 'link-to-outside')), await realpath(outside))
+  } finally {
+    await rm(source.root, { recursive: true, force: true })
+    await rm(outside, { recursive: true, force: true })
+    await rm(dirname(target), { recursive: true, force: true })
+  }
+})
+
+test('copy: a declared write path that escapes the copy is refused by the library', async () => {
+  const source = await makeSyntheticDataRoot()
+  const outside = await mkdtemp(join(tmpdir(), 'pkw-outside-'))
+  const target = join(await mkdtemp(join(tmpdir(), 'pkw-copy-')), 'data')
+  try {
+    // The workspace path names a directory outside the tree, reached through a link that is itself
+    // inside the copy. A literal check cannot see it; resolving the deepest existing ancestor can.
+    const workspacePath = join(outside, 'workspace')
+    await mkdir(workspacePath, { recursive: true })
+    await pointWorkspaceAt(join(source.root, 'spaces', source.spaceId, 'state.sqlite'), workspacePath)
+    await symlink(outside, join(source.root, 'spaces', source.spaceId, 'alias-to-outside'))
+
+    let thrown = null
+    try {
+      await copyDataRoot(source.root, target)
+    } catch (error) { thrown = error }
+    assert.ok(thrown, 'a declared write path outside the copy must be refused')
+    assert.equal(thrown.code, 'PKW_COPY_NOT_ISOLATED')
+    // Both findings are reported: the escaping link and the field that still names it.
+    assert.ok(thrown.leaks.some(leak => leak.reason === 'escapes-the-copy'), `expected an escaping leak: ${JSON.stringify(thrown.leaks)}`)
+    assert.ok(thrown.writableProblems.length >= 1, `expected writable problems: ${JSON.stringify({ writable: thrown.writableProblems, leaks: thrown.leaks })}`)
+    // The copy is left exactly as it was produced, including the field that caused the refusal.
+    const held = JSON.parse(new DatabaseSync(join(target, 'spaces', source.spaceId, 'state.sqlite'), { readOnly: true }).prepare('SELECT value FROM u_workspace_workspaces').get().value)
+    assert.ok(held.path === workspacePath || held.path.startsWith(await realpath(source.root)), `the recorded path must be reported as it is: ${held.path}`)
+  } finally {
+    await rm(source.root, { recursive: true, force: true })
+    await rm(outside, { recursive: true, force: true })
+    await rm(dirname(target), { recursive: true, force: true })
+  }
+})
+
+/** Point the synthetic workspace record at another directory, as a misconfigured copy would. */
+async function pointWorkspaceAt(statePath, workspacePath) {
+  const db = new DatabaseSync(statePath)
+  try {
+    const row = db.prepare('SELECT key, value FROM u_workspace_workspaces').get()
+    const doc = JSON.parse(row.value)
+    doc.path = workspacePath
+    db.prepare('UPDATE u_workspace_workspaces SET value=? WHERE key=?').run(JSON.stringify(doc), row.key)
+  } finally { db.close() }
+}
+
+test('copy: the roots it reports are the real ones, so a runtime configured from them agrees', async () => {
+  const source = await makeSyntheticDataRoot()
+  const parent = await mkdtemp(join(tmpdir(), 'pkw-copy-'))
+  const realParent = await mkdtemp(join(tmpdir(), 'pkw-copy-real-'))
+  try {
+    // The source is reached through a symlink, and the target's parent is a symlink too: this is
+    // how a data disk is usually mounted, and both spellings must lead to one answer.
+    const linkedSource = join(parent, 'source-link')
+    await symlink(source.root, linkedSource)
+    const linkedTargetDir = join(parent, 'data-link')
+    await symlink(realParent, linkedTargetDir)
+    const target = join(linkedTargetDir, 'data')
+
+    const copy = await copyDataRoot(linkedSource, target)
+    // What the caller is told is what the isolation decisions were made with, so a runtime
+    // configured from `targetRoot` is configured with the directory the gate actually checked.
+    assert.equal(copy.sourceRoot, await realpath(source.root))
+    assert.equal(copy.targetRoot, await realpath(target))
+    assert.ok(copy.targetRoot.startsWith(await realpath(realParent)), `${copy.targetRoot} must be inside ${await realpath(realParent)}`)
+    assert.ok(!copy.targetRoot.includes('data-link'), 'the reported target must be the real path, not the link')
+    const { findLeaks } = await import('../../scripts/copy-data-root.mjs')
+    assert.deepEqual(await findLeaks(copy.sourceRoot, copy.targetRoot), [])
+  } finally {
+    await rm(source.root, { recursive: true, force: true })
+    await rm(parent, { recursive: true, force: true })
+    await rm(realParent, { recursive: true, force: true })
+  }
+})
+
+test('copy: a failed copy cannot be turned into a running service by the caller', async () => {
+  const source = await makeSyntheticDataRoot()
+  const outside = await mkdtemp(join(tmpdir(), 'pkw-outside-'))
+  const target = join(await mkdtemp(join(tmpdir(), 'pkw-copy-')), 'data')
+  try {
+    await symlink(outside, join(source.root, 'spaces', source.spaceId, 'link-to-outside'))
+    // A caller that forgets to check the result gets a thrown refusal, not a copy value it can
+    // start a runtime on. `isNotIsolated` is how a caller recognises its own failure to report.
+    const { isNotIsolated } = await import('../../scripts/copy-data-root.mjs')
+    let started = false
+    let copy = null
+    try {
+      copy = await copyDataRoot(source.root, target)
+      started = true
+    } catch (error) {
+      assert.equal(isNotIsolated(error), true)
+    }
+    assert.equal(started, false, 'no copy value may be produced for a copy that failed the gate')
+    assert.equal(copy, null)
+    // The refusal happened before anything could be configured against the copy, so no runtime
+    // configuration naming it exists.
+    assert.equal(existsSync(join(target, 'collaboration.json')), false, 'nothing may be configured on a refused copy')
+  } finally {
+    await rm(source.root, { recursive: true, force: true })
+    await rm(outside, { recursive: true, force: true })
+    await rm(dirname(target), { recursive: true, force: true })
   }
 })

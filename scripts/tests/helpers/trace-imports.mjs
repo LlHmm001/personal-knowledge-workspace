@@ -45,5 +45,5 @@ let importError = null
 try { await import(pathToFileURL(entry).href) } catch (error) { importError = error.message }
 
 const outside = loaded.filter(file => !file.startsWith(profile + sep))
-console.log(JSON.stringify({ profile, entry, loaded: loaded.length, outside, importError }, null, 2))
+console.log(JSON.stringify({ ok: outside.length === 0 && !importError, profile, entry, loaded: loaded.length, outside, importError }, null, 2))
 process.exit(outside.length === 0 && !importError ? 0 : 5)

@@ -17,6 +17,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
+import { trackLifetime, describeOutcome } from './child-lifetime.mjs'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 const { values } = parseArgs({ options: {
@@ -57,22 +58,28 @@ const child = spawn(process.execPath, [
   join(repoRoot, 'scripts/serve-collaboration.mjs'), '--profile', resolve(values.profile),
   '--config', configPath, '--port', String(port),
 ], { env: { ...process.env, PKW_FIXTURE_BOOTSTRAP: password }, stdio: ['ignore', 'pipe', 'pipe'] })
-let log = ''
-child.stdout.on('data', c => { log += c })
-child.stderr.on('data', c => { log += c })
+const lifetime = trackLifetime(child)
+const log = lifetime.log
 
 const stop = async () => {
-  if (child.exitCode === null) {
-    child.kill('SIGTERM')
-    for (let i = 0; i < 120; i++) { if (child.exitCode !== null) break; await new Promise(r => setTimeout(r, 100)) }
-    if (child.exitCode === null) {
-      child.kill('SIGKILL')
-      // Wait for the exit event, not for a timeout: reporting "generated" while the writer
-      // is still running would leave a second writer on the fixture.
-      await new Promise(resolvePromise => child.once('exit', resolvePromise))
-    }
+  if (lifetime.settled) return lifetime.outcome
+  child.kill('SIGTERM')
+  // Wait for the exit event that was registered when the child was spawned, rather than polling
+  // `exitCode` and racing a listener that may already have fired. A timeout here is not an answer:
+  // it means the child ignored SIGTERM, so it is killed and the same promise is awaited again.
+  let outcome = await lifetime.race(12000)
+  if (outcome === null) {
+    child.kill('SIGKILL')
+    outcome = await lifetime.race(10000)
   }
-  return { exitCode: child.exitCode, signal: child.signalCode }
+  if (outcome === null) {
+    // The child could not be observed to exit. Reporting "generated" here would leave a second
+    // writer on the fixture, so this is a failure of the run, not a detail.
+    const stuck = new Error('the listener did not exit after SIGTERM and SIGKILL')
+    stuck.code = 'PKW_FIXTURE_LISTENER_STUCK'
+    throw stuck
+  }
+  return outcome
 }
 
 const jar = new Map()
@@ -100,8 +107,8 @@ try {
   let listening = false
   let healthOk = false
   for (let i = 0; i < 150; i++) {
-    if (child.exitCode !== null) {
-      throw new Error(`the listener exited with ${child.exitCode} before binding the port: ${log.slice(-400)}`)
+    if (lifetime.settled) {
+      throw new Error(`the listener ${describeOutcome(lifetime.outcome)} before binding the port: ${log.slice(-400)}`)
     }
     if (!listening && log.includes('"status":"listening"')) listening = true
     if (listening && !healthOk) {
@@ -142,11 +149,15 @@ try {
     attachment: uploaded.body?.value ?? null, noteBody: body, attachmentBytes: bytes.length,
   }, null, 2))
 } catch (error) {
-  const stopped = await stop()
+  // A stop failure must not replace the error that caused it: the original reason is what the
+  // caller needs, and the stop outcome is reported beside it.
+  let stopped = null
+  let stopError = null
+  try { stopped = await stop() } catch (failure) { stopError = { message: failure.message, code: failure.code ?? null } }
   // The scene is preserved: only a directory this run created is removed, and even then
   // only when asked, so a failure can be inspected.
   console.error(JSON.stringify({
-    error: error.message, stopped, target, createdTarget,
+    error: error.message, stopped, stopError, target, createdTarget,
     preserved: true, log: log.slice(-400),
   }, null, 2))
   if (values['remove-on-failure'] && createdTarget) await rm(target, { recursive: true, force: true })
