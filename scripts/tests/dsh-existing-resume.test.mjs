@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { isAbsolute, join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
-import { inspectStartupFile, parseResumeOptions, recognizedStartHooks, snapshotHostBundles,
+import { inspectStartupFile, observeResumeReadiness, parseResumeOptions, recognizedStartHooks, snapshotHostBundles,
   snapshotHostPatches, snapshotWorkspace, startupAction, verifyResumeConfiguration, writerProcessName } from '../resume-dsh-existing-install.mjs';
 
 const exe = '/example/bin/node', script = '/example/ops/session-check.mjs';
@@ -59,6 +59,95 @@ test('active or activating services are observed without a second start request'
   for (const state of ['inactive', 'failed']) assert.equal(startupAction(state), 'start');
   for (const state of ['active', 'activating']) assert.equal(startupAction(state), 'observe');
   for (const state of ['deactivating', 'reloading', 'unknown']) assert.equal(startupAction(state), 'stop');
+});
+
+function readinessFixture({ states = ['active'], responses = ['401'], requestMs = 0 } = {}) {
+  let time = 0, reads = 0, requests = 0;
+  const budgets = [], sleeps = [];
+  const hooks = {
+    now: () => time,
+    sleep: async ms => { sleeps.push(ms); time += ms; },
+    readState: async budget => {
+      assert.ok(budget > 0);
+      return states[Math.min(reads++, states.length - 1)];
+    },
+    probeHttp: async budget => {
+      budgets.push(budget);
+      time += Math.min(requestMs, budget);
+      const response = responses[Math.min(requests++, responses.length - 1)];
+      if (response instanceof Error) throw response;
+      return response;
+    },
+  };
+  return { hooks, budgets, sleeps, time: () => time, reads: () => reads };
+}
+
+test('a listening HTTP server returning 404 waits for two consecutive active accepted homepage responses', async () => {
+  const f = readinessFixture({ responses: ['404', '401', '401'] });
+  const result = await observeResumeReadiness(f.hooks);
+  assert.deepEqual(result, { ready: true, reason: 'READY', state: 'active', http: '401', attempts: 3, elapsedMs: 2000 });
+  assert.equal(f.reads(), 6, 'each HTTP response is followed by an active-state check');
+});
+
+test('persistent 404 or unavailable transport exhausts one budget without declaring success', async () => {
+  for (const response of ['404', '000', new Error('transport unavailable')]) {
+    const f = readinessFixture({ responses: [response] });
+    const result = await observeResumeReadiness(f.hooks, { timeoutMs: 2500, intervalMs: 1000 });
+    assert.equal(result.ready, false);
+    assert.equal(result.reason, 'READINESS_TIMEOUT');
+    assert.equal(result.attempts, 3);
+    assert.equal(f.time(), 2500);
+    assert.deepEqual(f.sleeps, [1000, 1000, 500]);
+  }
+});
+
+test('a process exiting during HTTP cannot be ready and stable stopped states end observation early', async () => {
+  const f = readinessFixture({ states: ['active', 'failed', 'inactive'], responses: ['401'] });
+  const result = await observeResumeReadiness(f.hooks);
+  assert.deepEqual(result, { ready: false, reason: 'SERVICE_STOPPED', state: 'inactive', http: '000', attempts: 1, elapsedMs: 1000 });
+});
+
+test('slow HTTP requests receive the remaining budget and late success cannot pass', async () => {
+  const f = readinessFixture({ responses: ['401'], requestMs: 1000 });
+  const result = await observeResumeReadiness(f.hooks, { timeoutMs: 2200, intervalMs: 500, probeTimeoutMs: 1000 });
+  assert.equal(result.ready, false);
+  assert.equal(result.reason, 'READINESS_TIMEOUT');
+  assert.deepEqual(f.budgets, [1000, 700]);
+  assert.equal(f.time(), 2200);
+  assert.equal(f.reads(), 3, 'no extra state request is issued after the deadline');
+});
+
+test('crossing a millisecond deadline cannot pass a zero command timeout that would disable the limit', async () => {
+  let clockReads = 0;
+  const commands = [];
+  const result = await observeResumeReadiness({
+    now: () => clockReads++ < 2 ? 0 : 1,
+    sleep: async () => assert.fail('no time remains for sleeping'),
+    readState: async budget => { commands.push(['state', budget]); assert.ok(budget > 0); return 'active'; },
+    probeHttp: async budget => { commands.push(['http', budget]); assert.ok(budget > 0); return '401'; },
+  }, { timeoutMs: 1 });
+  assert.equal(result.reason, 'READINESS_TIMEOUT');
+  assert.deepEqual(commands, [['state', 1]]);
+
+  for (let timeoutMs = 1; timeoutMs <= 10; timeoutMs++) {
+    let ticks = 0;
+    const assertBudget = budget => assert.ok(budget >= 1 && budget <= timeoutMs);
+    await observeResumeReadiness({
+      now: () => ticks++,
+      sleep: async ms => { ticks += ms; },
+      readState: async budget => { assertBudget(budget); return 'active'; },
+      probeHttp: async budget => { assertBudget(budget); return '401'; },
+    }, { timeoutMs, intervalMs: 1, probeTimeoutMs: 1 });
+  }
+});
+
+test('transient startup states and a failed HTTP round reset readiness', async () => {
+  const f = readinessFixture({ states: ['inactive', 'activating', 'active'], responses: ['401', '404', '401', '401'] });
+  const result = await observeResumeReadiness(f.hooks, { timeoutMs: 10000 });
+  assert.equal(result.ready, true);
+  assert.equal(result.attempts, 4);
+  assert.equal(result.elapsedMs, 5000);
+  assert.equal(result.http, '401');
 });
 
 test('package managers are checked even when Linux comm includes their action', () => {

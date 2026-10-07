@@ -61,6 +61,47 @@ export function startupAction(state) {
   return 'stop';
 }
 
+const readyHttpStatuses = new Set(['200', '301', '302', '303', '307', '308', '401', '403']);
+
+/** Observe only: a listening socket can still answer 404 before routes mount. */
+export async function observeResumeReadiness({ readState, probeHttp, now = () => performance.now(),
+  sleep = ms => new Promise(resolve => setTimeout(resolve, ms)) },
+{ timeoutMs = 30000, intervalMs = 1000, probeTimeoutMs = 5000 } = {}) {
+  if (![timeoutMs, intervalMs, probeTimeoutMs].every(value => Number.isFinite(value) && value >= 1)) {
+    throw Object.assign(new Error('Invalid readiness observation budget'), { code: 'INVALID_READINESS_OPTIONS' });
+  }
+  const started = now(), deadline = started + timeoutMs;
+  const remaining = () => Math.max(0, Math.floor(deadline - now()));
+  let state = 'unknown', http = '000', attempts = 0, readyRounds = 0, stoppedRounds = 0;
+  const result = reason => ({ ready: reason === 'READY', reason, state, http, attempts,
+    elapsedMs: Math.max(0, Math.round(now() - started)) });
+  while (true) {
+    const stateBudget = remaining();
+    if (stateBudget === 0) break;
+    state = await readState(Math.min(probeTimeoutMs, stateBudget));
+    if (state === 'active') {
+      const httpBudget = remaining();
+      if (httpBudget === 0) break;
+      attempts++;
+      try { http = await probeHttp(Math.min(probeTimeoutMs, httpBudget)); }
+      catch { http = '000'; }
+      const postStateBudget = remaining();
+      if (postStateBudget === 0) break;
+      // A response from a process that exited during the request is not ready.
+      state = await readState(Math.min(probeTimeoutMs, postStateBudget));
+    } else { http = '000'; }
+    if (remaining() === 0) break;
+    readyRounds = state === 'active' && readyHttpStatuses.has(http) ? readyRounds + 1 : 0;
+    stoppedRounds = ['failed', 'inactive'].includes(state) ? stoppedRounds + 1 : 0;
+    if (readyRounds >= 2) return result('READY');
+    if (stoppedRounds >= 2) return result('SERVICE_STOPPED');
+    if (!['active', 'activating', 'failed', 'inactive'].includes(state)) return result('SERVICE_STATE_CHANGED');
+    const sleepBudget = remaining();
+    if (sleepBudget > 0) await sleep(Math.min(intervalMs, sleepBudget));
+  }
+  return result('READINESS_TIMEOUT');
+}
+
 export function writerProcessName(comm) {
   return /^(?:node|cp|rsync|rm|mv|tar|bash|sh|python3?)$|^(?:npm|pnpm)(?:\s|$)/.test(comm);
 }
@@ -301,13 +342,16 @@ async function resume(options) {
   const snapshot = options['profile-snapshot'];
   const host = options['trusted-host'];
   const unit = 'deepseek-harness.service', pkwUnit = 'pkw-collaboration.service';
-  let preflightPassed = false;
+  let preflightPassed = false, readiness;
 let check = 'identity', target = '/', evidence;
 const fail = code => { const e = new Error(code); e.code = code; throw e; };
 const need = (ok, code) => { if (!ok) fail(code); };
 const sha = b => createHash('sha256').update(b).digest('hex');
-const run = (cmd, args) => execFileSync(cmd, args, { encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'] });
+const run = (cmd, args, limits = {}) => execFileSync(cmd, args, { encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'], ...limits });
 const prop = (name, service = unit) => run('systemctl', ['show', service, '--property=' + name, '--value']).trim();
+const probeHttp = timeout => run('/usr/bin/curl', ['-q', '-sS', '--noproxy', '*',
+  '--connect-timeout', String(Math.min(3000, timeout) / 1000), '--max-time', String(timeout / 1000),
+  '-H', 'Host: ' + host, '-o', '/dev/null', '-w', '%{http_code}', 'http://127.0.0.1:3080/'], { timeout }).trim();
 const present = path => { try { fs.lstatSync(path); return true; } catch (e) { if (e.code === 'ENOENT') return false; throw e; } };
 const snapshotIdentity = paths => paths.map(path => {
   const info = fs.lstatSync(path), directory = path === snapshot;
@@ -475,11 +519,12 @@ try {
       } else if (action === 'observe') {
         console.log('DSH_ALREADY_STARTING_OR_RUNNING; observing only.');
       } else { fail('SERVICE_STATE_CHANGED'); }
-      for (let round = 0; round < 25; round++) {
-        if (run('ss', ['-ltnH', 'sport = :3080']).trim()) break;
-        if (round >= 2 && ['failed', 'inactive'].includes(prop('ActiveState'))) break;
-        await new Promise(r => setTimeout(r, 1000));
-      }
+      readiness = await observeResumeReadiness({
+        readState: timeout => run('systemctl', ['show', unit, '--property=ActiveState', '--value'], { timeout }).trim(),
+        probeHttp,
+      });
+      console.log(JSON.stringify({ status: readiness.ready ? 'DSH_HTTP_READY' : 'DSH_NOT_READY', ...readiness }));
+      if (!readiness.ready) process.exitCode = 1;
     } catch (e) {
       console.error(JSON.stringify({ status: 'START_OR_OBSERVE_FAILED', code: e.code ?? 'CHECK_FAILED' }));
       process.exitCode = 1;
@@ -488,14 +533,15 @@ try {
   try {
     console.log(run('systemctl', ['show', unit, pkwUnit, '--property=Id', '--property=ActiveState', '--property=SubState', '--property=MainPID', '--property=ExecMainStatus']).trim());
     console.log(run('ss', ['-ltnH', '( sport = :3080 or sport = :3081 )']).trim());
-    let http = '000';
-    try {
-      http = run('/usr/bin/curl', ['-q', '-sS', '--noproxy', '*', '--connect-timeout', '3', '--max-time', '5', '-H', 'Host: ' + host, '-o', '/dev/null', '-w', '%{http_code}', 'http://127.0.0.1:3080/']).trim();
-    } catch { /* No raw curl errors or unrelated credentials are printed. */ }
+    let http = readiness?.http ?? '000';
+    if (!readiness) {
+      try { http = probeHttp(5000); }
+      catch { /* No raw curl errors or unrelated credentials are printed. */ }
+    }
     console.log('DSH HTTP=' + http);
     const state = prop('ActiveState');
     if (state === 'activating') console.log('DSH_STILL_STARTING; do not repeat the command or resume deployment.');
-    if (state !== 'active' || !['200', '301', '302', '303', '307', '308', '401', '403'].includes(http)) process.exitCode = 1;
+    if (state !== 'active' || !readyHttpStatuses.has(http)) process.exitCode = 1;
   } catch (e) {
     console.error(JSON.stringify({ status: 'OBSERVATION_FAILED', code: e.code ?? 'CHECK_FAILED' }));
     process.exitCode = 1;
