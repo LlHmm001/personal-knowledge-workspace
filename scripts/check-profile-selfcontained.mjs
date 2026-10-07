@@ -101,55 +101,31 @@ if (values['require-runtime-import']) {
 }
 
 // ── optional: follow what the runtime actually loads ────────────────────────────
-const loadedOutside = []
+// Done in a fresh subprocess: hooks registered after an import in this process would miss
+// every module that import already cached.
+let tracedImports = null
 if (values['trace-imports']) {
-  const { registerHooks } = await import('node:module')
-  let register
-  try { ({ register } = await import('node:module')) } catch { register = null }
-  const profileReal = await realpath(profile)
-  const allowed = [profileReal]
-  const record = url => {
-    if (typeof url !== 'string' || !url.startsWith('file:')) return
-    // fileURLToPath, not string surgery: `file:///x` would otherwise keep extra slashes
-    // and every path would look like it was outside the profile.
-    let file
-    try { file = fileURLToPath(url) } catch { return }
-    if (!file.startsWith(profileReal + sep) && !allowed.some(root => file.startsWith(root + sep))) {
-      if (!loadedOutside.includes(file)) loadedOutside.push(file)
-    }
-  }
-  const hooks = {
-    resolve(specifier, context, nextResolve) {
-      const result = nextResolve(specifier, context)
-      if (result?.url?.startsWith('file:')) record(result.url)
-      return result
-    },
-    load(url, context, nextLoad) {
-      record(url)
-      return nextLoad(url, context)
-    },
-  }
-  if (typeof registerHooks === 'function') registerHooks(hooks)
-  else if (register) register('./scripts/tests/helpers/noop-loader-hooks.mjs', import.meta.url, { data: { profile: profileReal } })
-  try {
-    await import(pathToFileURL(webEntry).href)
-    const renderModule = await import(pathToFileURL(await realpath(require.resolve('@deepseek-ai/dsh-pkw-web/lib/lute.js'))).href)
-    void renderModule
-  } catch (error) {
-    violations.push(`the entry point could not be imported with tracing enabled: ${error.message}`)
-  }
-  for (const file of loadedOutside) {
-    violations.push(`the runtime loaded a file from outside the profile -> ${file}`)
-  }
+  const { spawn } = await import('node:child_process')
+  const traceScript = join(dirname(fileURLToPath(import.meta.url)), 'tests/helpers/trace-imports.mjs')
+  const output = await new Promise(resolvePromise => {
+    const child = spawn(process.execPath, [traceScript, '--profile', profile], { stdio: ['ignore', 'pipe', 'pipe'] })
+    let out = ''
+    child.stdout.on('data', c => { out += c })
+    child.stderr.on('data', c => { out += c })
+    child.once('exit', () => resolvePromise(out))
+  })
+  try { tracedImports = JSON.parse(output.trim().split('\n').filter(Boolean).slice(-1)[0]) } catch { tracedImports = { error: output.slice(-300) } }
+  if (tracedImports?.importError) violations.push(`the entry point could not be imported: ${tracedImports.importError}`)
+  for (const file of tracedImports?.outside ?? []) violations.push(`the runtime loaded a file from outside the profile -> ${file}`)
 }
 
 const result = {
   profile, packages: checked, expected: names.length,
   outsideProfile: outside, violations,
   entryPoint: webEntry, declaredVersion: declared, runtimeEntry,
-  tracedImports: values['trace-imports'] ? { loadedOutside } : null,
+  tracedImports: tracedImports ? { loaded: tracedImports.loaded ?? null, outside: tracedImports.outside ?? [], error: tracedImports.error ?? null } : null,
   forbiddenRoots: forbidden,
 }
 console.log(JSON.stringify(result, null, 2))
 if (violations.length || outside.length) process.exit(5)
-console.log(`OK: ${checked} packages resolve inside the profile; entry point declares ${declared}; runtime entry ${runtimeEntry}${values['trace-imports'] ? `; traced imports outside the profile: ${loadedOutside.length}` : ''}`)
+console.log(`OK: ${checked} packages resolve inside the profile; entry point declares ${declared}; runtime entry ${runtimeEntry}${tracedImports ? `; traced imports outside the profile: ${(tracedImports.outside ?? []).length}` : ''}`)

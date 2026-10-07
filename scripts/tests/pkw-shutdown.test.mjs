@@ -90,6 +90,40 @@ async function makeDataRoot({ stubUrl, spaceId }) {
   return { root, configPath, rewritten: copy.rewritten }
 }
 
+/**
+ * Run the listener as a child process and hand the caller control over its life.
+ *
+ * The port is passed explicitly: the listener's default is a production port, and a test
+ * must never depend on — or collide with — whatever is running there.
+ */
+function startGateway({ profile, configPath, port, drainTimeoutMs }) {
+  const child = spawn(process.execPath, [
+    join(scriptsDir, 'serve-collaboration.mjs'), '--profile', profile, '--config', configPath, '--port', String(port),
+    ...(drainTimeoutMs === undefined ? [] : ['--drain-timeout-ms', String(drainTimeoutMs)]),
+  ], {
+    env: { ...process.env, PW: TEST_PASSWORD, PKW_TEST_WEKNORA_KEY: 'stub-key' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  const lines = []
+  let stdout = '', stderr = ''
+  child.stdout.on('data', chunk => { stdout += chunk; lines.push(...String(chunk).split('\n').filter(Boolean)) })
+  child.stderr.on('data', chunk => { stderr += chunk })
+  const exited = new Promise(resolvePromise => child.once('exit', (code, signal) => resolvePromise({ code, signal })))
+  return {
+    child, lines, exited,
+    get stdout() { return stdout }, get stderr() { return stderr },
+    async ready(timeoutMs = 30_000) {
+      const deadline = Date.now() + timeoutMs
+      while (Date.now() < deadline) {
+        if (lines.some(l => l.includes('"status":"listening"'))) return true
+        if (child.exitCode !== null) throw new Error(`listener exited with ${child.exitCode}: ${stderr.trim().split('\n').slice(-4).join(' | ')}`)
+        await new Promise(r => setTimeout(r, 100))
+      }
+      throw new Error(`gateway did not report listening; stdout=${stdout.slice(-200)} stderr=${stderr.slice(-300)}`)
+    },
+  }
+}
+
 /** The first space id in the source data, so tests follow the data, not a fixture. */
 async function firstSpaceId() {
   const identity = new DatabaseSync(join(sourceDataRoot(), 'identity.sqlite'), { readOnly: true })

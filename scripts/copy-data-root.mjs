@@ -23,6 +23,45 @@ import { join, resolve, sep } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
 /**
+ * Resolve a declared writable path field and confirm it lands inside the copy.
+ *
+ * A field can be remapped and still point outside — through a symlink, or because the
+ * value was an alias of the source rather than the literal source path. Remapping alone is
+ * therefore not enough: the *final target* has to be checked.
+ */
+export async function assertWritablePathInsideCopy(value, targetRoot, sourceRoot) {
+  const { realpath } = await import('node:fs/promises')
+  const problems = []
+  const targetReal = await realpath(targetRoot).catch(() => targetRoot)
+  if (typeof value !== 'string' || value === '') return { ok: true, problems }
+  if (value.includes(sourceRoot)) problems.push({ value, reason: 'names-the-source' })
+  if (!value.startsWith(targetRoot) && !value.startsWith(targetReal)) problems.push({ value, reason: 'outside-the-copy' })
+  // Resolve the deepest existing ancestor: a write path may not exist yet.
+  let probe = value
+  let real = null
+  for (let depth = 0; depth < 12; depth += 1) {
+    real = await realpath(probe).catch(() => null)
+    if (real) break
+    const parent = join(probe, '..')
+    if (parent === probe) break
+    probe = parent
+  }
+  if (real && !(real === targetReal || real.startsWith(targetReal + sep))) {
+    problems.push({ value, resolved: real, reason: 'resolves-outside-the-copy' })
+  }
+  if (real && real !== value) {
+    // The value resolves somewhere other than itself. That is only acceptable when the
+    // resolved location is still inside the copy; a link inside the copy that points back
+    // at the source would otherwise be invisible to a literal prefix comparison.
+    const sourceReal = await realpath(sourceRoot).catch(() => sourceRoot)
+    if (real === sourceReal || real.startsWith(sourceReal + sep)) {
+      problems.push({ value, resolved: real, reason: 'alias-resolves-into-the-source' })
+    }
+  }
+  return { ok: problems.length === 0, problems, resolved: real }
+}
+
+/**
  * Path-valued columns/keys that must be remapped.
  * Keys are matched inside JSON values; columns are matched by name. Anything not listed
  * here is copied verbatim, which is what keeps note text out of the rewriting.
@@ -34,6 +73,35 @@ export const PATH_KEYS = Object.freeze([
 ])
 /** Absolute path columns stored as plain text rather than JSON. */
 export const PATH_COLUMNS = Object.freeze(['path', 'absolutepath', 'filepath', 'rootpath'])
+
+/**
+ * Remap one path field, deciding by its *real* location rather than its text.
+ *
+ * A field may name the source directly, or reach it through a symlink, or point at a
+ * directory that no longer exists. Comparing prefixes alone cannot tell those apart, and a
+ * literal prefix rewrite of an alias produces a path that exists nowhere — the reference is
+ * silently lost.
+ *
+ * `workspaceMap` maps a source workspace directory to its counterpart in the copy, so an
+ * aliased workspace path lands on the copied workspace.
+ */
+export function remapPathReal(value, sourceRoot, targetRoot, resolved, workspaceMap = new Map()) {
+  if (typeof value !== 'string' || value === '') return { value, changed: false, reason: 'empty' }
+  for (const [sourceWorkspace, targetWorkspace] of workspaceMap) {
+    if (resolved && (resolved === sourceWorkspace || resolved.startsWith(sourceWorkspace + sep))) {
+      return { value: targetWorkspace + resolved.slice(sourceWorkspace.length), changed: true, reason: 'remapped-by-real-location' }
+    }
+    if (value === sourceWorkspace || value.startsWith(sourceWorkspace + sep)) {
+      return { value: targetWorkspace + value.slice(sourceWorkspace.length), changed: true, reason: 'remapped-by-literal-prefix' }
+    }
+  }
+  if (resolved && (resolved === sourceRoot || resolved.startsWith(sourceRoot + sep))) {
+    return { value: targetRoot + resolved.slice(sourceRoot.length), changed: true, reason: 'remapped-by-real-location-from-root' }
+  }
+  const literal = remapPath(value, sourceRoot, targetRoot)
+  if (literal.changed) return { ...literal, reason: 'remapped-by-literal-prefix-from-root' }
+  return { value, changed: false, reason: 'not-a-source-path' }
+}
 
 /** Remap one string only when it actually names the source root. */
 export function remapPath(value, sourceRoot, targetRoot) {
@@ -79,6 +147,13 @@ export async function copyDataRoot(sourceRoot, targetRoot, options = {}) {
 
   const rewritten = []
   const databases = []
+  // source workspace directory -> its counterpart in the copy, used to remap by real location
+  const workspaceMap = new Map()
+  const sourceSpaces = join(sourceRoot, 'spaces')
+  for (const space of await readdir(sourceSpaces, { withFileTypes: true }).catch(() => [])) {
+    if (!space.isDirectory()) continue
+    workspaceMap.set(join(sourceSpaces, space.name, 'workspace'), join(targetRoot, 'spaces', space.name, 'workspace'))
+  }
   if (existsSync(join(sourceRoot, 'identity.sqlite'))) {
     await snapshot(join(sourceRoot, 'identity.sqlite'), join(targetRoot, 'identity.sqlite'))
     databases.push('identity.sqlite')
@@ -105,10 +180,16 @@ export async function copyDataRoot(sourceRoot, targetRoot, options = {}) {
       for (const spec of PATH_KEYS) {
         if (!tables.includes(spec.table)) continue
         for (const row of db.prepare(`SELECT rowid AS rid, value FROM "${spec.table}"`).all()) {
-          const result = remapJsonDocument(row.value, sourceRoot, targetRoot, [spec.jsonKey])
+          let doc
+          try { doc = JSON.parse(row.value) } catch { continue }
+          if (!(spec.jsonKey in doc) || typeof doc[spec.jsonKey] !== 'string') continue
+          const original = doc[spec.jsonKey]
+          const resolved = await import('node:fs/promises').then(m => m.realpath(original).catch(() => null))
+          const result = remapPathReal(original, sourceRoot, targetRoot, resolved, workspaceMap)
           if (!result.changed) continue
-          db.prepare(`UPDATE "${spec.table}" SET value=? WHERE rowid=?`).run(result.raw, row.rid)
-          for (const item of result.remapped) rewritten.push({ table: spec.table, key: item.key, from: item.from, to: item.to })
+          doc[spec.jsonKey] = result.value
+          db.prepare(`UPDATE "${spec.table}" SET value=? WHERE rowid=?`).run(JSON.stringify(doc), row.rid)
+          rewritten.push({ table: spec.table, key: spec.jsonKey, from: original, to: result.value, how: result.reason })
         }
       }
       for (const table of tables) {
@@ -125,8 +206,31 @@ export async function copyDataRoot(sourceRoot, targetRoot, options = {}) {
     } finally { db.close() }
   }
 
+  // Every declared writable path field must resolve inside the copy. A remapped value that
+  // still reaches the source through an alias would make the copy write the source's files.
+  const writableProblems = []
+  for (const spec of PATH_KEYS) {
+    for (const space of await readdir(join(targetRoot, 'spaces'), { withFileTypes: true }).catch(() => [])) {
+      if (!space.isDirectory()) continue
+      const dbPath = join(targetRoot, 'spaces', space.name, 'state.sqlite')
+      if (!existsSync(dbPath)) continue
+      const db = new DatabaseSync(dbPath, { readOnly: true })
+      try {
+        const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(r => String(r.name))
+        if (!tables.includes(spec.table)) continue
+        for (const row of db.prepare(`SELECT rowid AS rid, value FROM "${spec.table}"`).all()) {
+          let doc
+          try { doc = JSON.parse(row.value) } catch { continue }
+          if (!(spec.jsonKey in doc)) continue
+          const check = await assertWritablePathInsideCopy(doc[spec.jsonKey], targetRoot, sourceRoot)
+          if (!check.ok) writableProblems.push({ table: spec.table, key: spec.jsonKey, rowid: row.rid, ...check })
+        }
+      } finally { db.close() }
+    }
+  }
+
   const leaks = await findLeaks(sourceRoot, targetRoot)
-  return { targetRoot, rewritten, leaks, databases }
+  return { targetRoot, rewritten, leaks, databases, writableProblems }
 }
 
 /**
@@ -146,8 +250,13 @@ export async function findLeaks(sourceRoot, targetRoot) {
       if (entry.isSymbolicLink()) {
         const literal = await readlink(full).catch(() => '')
         const resolved = await realpath(full).catch(() => null)
+        const targetRealRoot = await realpath(targetRoot).catch(() => targetRoot)
         if (literal.includes(sourceRoot) || (resolved && (resolved === sourceReal || resolved.startsWith(sourceReal + sep)))) {
           leaks.push({ path: full, target: literal, resolved: resolved ?? 'dangling' })
+        } else if (resolved && !(resolved === targetRealRoot || resolved.startsWith(targetRealRoot + sep))) {
+          // A link that escapes the copy entirely is a leak too: a write through it lands
+          // outside the tree the caller thinks it owns.
+          leaks.push({ path: full, target: literal, resolved, reason: 'escapes-the-copy' })
         }
         continue
       }

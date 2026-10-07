@@ -119,3 +119,55 @@ test('copy: the retrieval endpoint is only what the caller passes in', async () 
     if (copy) await rm(dirname(copy.targetRoot), { recursive: true, force: true })
   }
 })
+
+test('copy: a writable path field that reaches the source through an alias is refused', async () => {
+  const source = await makeSyntheticDataRoot()
+  const parent = await mkdtemp(join(tmpdir(), 'pkw-copy-alias-'))
+  const target = join(parent, 'data')
+  try {
+    // The recorded workspace path is an alias: a symlink to the source workspace, so a
+    // literal comparison sees a path inside the copy while the writes land in the source.
+    const alias = join(source.root, 'alias-to-source-workspace')
+    await symlink(join(source.root, 'spaces', source.spaceId, 'workspace'), alias)
+    const db = new DatabaseSync(join(source.root, 'spaces', source.spaceId, 'state.sqlite'))
+    db.prepare('UPDATE u_workspace_workspaces SET value=?').run(JSON.stringify({
+      path: alias, title: 'synthetic workspace', sessionIds: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    }))
+    db.close()
+
+    const copy = await copyDataRoot(source.root, target)
+    // The alias must not be silently rewritten into a path that exists nowhere: the field
+    // has to land on the copied workspace, and nothing may resolve back to the source.
+    const copyDb = new DatabaseSync(join(copy.targetRoot, 'spaces', source.spaceId, 'state.sqlite'), { readOnly: true })
+    const recorded = JSON.parse(copyDb.prepare('SELECT value FROM u_workspace_workspaces').get().value).path
+    copyDb.close()
+    assert.equal(recorded, join(copy.targetRoot, 'spaces', source.spaceId, 'workspace'), `the aliased workspace path must land on the copied workspace, got ${recorded}`)
+    assert.equal(copy.writableProblems.length, 0, `the remapped field must resolve inside the copy: ${JSON.stringify(copy.writableProblems)}`)
+    assert.ok(copy.rewritten.some(r => r.how === 'remapped-by-real-location'), `the remap must be decided by real location: ${JSON.stringify(copy.rewritten)}`)
+  } finally {
+    await rm(parent, { recursive: true, force: true })
+    await rm(source.root, { recursive: true, force: true })
+  }
+})
+
+test('copy: writing the copy does not change the source', async () => {
+  const source = await makeSyntheticDataRoot()
+  const parent = await mkdtemp(join(tmpdir(), 'pkw-copy-write-'))
+  const target = join(parent, 'data')
+  try {
+    const copy = await copyDataRoot(source.root, target)
+    assert.equal(copy.writableProblems.length, 0)
+    const sourceNote = join(source.root, 'spaces', source.spaceId, 'workspace', source.relativePath)
+    const before = await readFile(sourceNote, 'utf8')
+    const beforeStat = await stat(sourceNote)
+    // Write inside the copy, exactly as a runtime would.
+    await writeFile(join(copy.targetRoot, 'spaces', source.spaceId, 'workspace', source.relativePath), '# changed in the copy\n')
+    const after = await readFile(sourceNote, 'utf8')
+    const afterStat = await stat(sourceNote)
+    assert.equal(after, before, 'the source file must be untouched')
+    assert.equal(afterStat.mtimeMs, beforeStat.mtimeMs, 'the source mtime must be untouched')
+  } finally {
+    await rm(parent, { recursive: true, force: true })
+    await rm(source.root, { recursive: true, force: true })
+  }
+})

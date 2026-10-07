@@ -96,11 +96,15 @@ export function assertAcceptance(result, { expectedVersion, label = 'verificatio
   }
   if (!result || typeof result !== 'object') refuse(`${label} returned no structured result`)
   if (result.ok !== true) refuse(`${label} did not report ok:true (got ${JSON.stringify(result.ok)})`)
-  if (result.enforcing === false) refuse(`${label} is a diagnostics run, which cannot accept a deployment`)
-  if (result.checks && result.checks.authenticated !== 'verified') {
+  // `enforcing` must be present *and* true. A verifier that omits the field has not said
+  // it was enforcing, and a diagnostics run must never gate a deployment.
+  if (result.enforcing !== true) refuse(`${label} did not report enforcing:true (got ${JSON.stringify(result.enforcing)})`)
+  // The evidence acceptance rests on must be present, not merely absent-when-wrong.
+  if (!result.checks || typeof result.checks !== 'object') refuse(`${label} reported no checks object`)
+  if (result.checks.authenticated !== 'verified') {
     refuse(`${label} did not verify an authenticated session (authenticated=${JSON.stringify(result.checks.authenticated)})`)
   }
-  const serving = result.checks?.servingVersion ?? result.servingVersion
+  const serving = result.checks.servingVersion ?? result.servingVersion
   if (!serving) refuse(`${label} did not report which release is serving`)
   if (expectedVersion && serving !== expectedVersion) refuse(`${label} reports ${serving} serving, expected ${expectedVersion}`)
   return result
@@ -135,12 +139,13 @@ function releaseName(releasePath, root) {
 }
 
 /** Restore the previous release and start it again; report step-by-step progress. */
-async function recoverPreviousRelease({ root, installed, snapshotDir, hooks, report }) {
-  const steps = { stopped: false, inputsRestored: false, currentRepointed: false, started: false }
+async function recoverPreviousRelease({ root, installed, snapshotDir, hooks, report, skipStop = false }) {
+  const steps = { stopped: skipStop, stopSkipped: skipStop, inputsRestored: false, currentRepointed: false, started: false }
   try {
-    // A stop that fails here cannot be ignored: if the old writer is still up, restoring
-    // its inputs and starting again would be reported as a recovery that did not happen.
-    await hooks.stop()
+    // The stop is attempted once. When it already reported failure, retrying it could take
+    // down a service that is healthy and fail again, so the caller's decision stands and the
+    // recovery proceeds to restore the inputs and start the release.
+    if (!skipStop) await hooks.stop()
     steps.stopped = true
     for (const name of PROFILE_INPUTS) {
       const from = join(snapshotDir, name)
@@ -170,6 +175,9 @@ export async function switchRelease({
   root, version, artifacts, registry, storeDir, hooks, allowFreshRelease = false, packageNames,
   snapshotDir, deps = {},
 }) {
+  // A stop hook that has already reported failure must not be called again: retrying a
+  // stop that reported "not stopped" can take a healthy service down and then fail again.
+  let stopAlreadyFailed = false
   const install = deps.prepareInstall ?? prepareInstall
   const digest = deps.profileInputDigest ?? profileInputDigest
   const releaseDir = join(root, 'releases', version)
@@ -212,6 +220,7 @@ export async function switchRelease({
     // A stop that reports failure may still have stopped the service. Ask the site
     // rather than assuming, because the recovery path depends on the real state.
     stopError = { message: error.message }
+    stopAlreadyFailed = true
     report.stopError = stopError
     report.stopErrorHandled = true
     if (hooks.isStopped) {
@@ -294,7 +303,7 @@ export async function switchRelease({
       throw failure
     }
 
-    const recovery = await recoverPreviousRelease({ root, installed, snapshotDir, hooks, report })
+    const recovery = await recoverPreviousRelease({ root, installed, snapshotDir, hooks, report, skipStop: stopAlreadyFailed })
     const restoredVersion = await profileVersion(join(installed, 'profile'))
     report.rollback = { restoredRelease: installed, restoredVersion }
     if (!recovery.recovered || restoredVersion !== previousVersion) {
@@ -353,6 +362,8 @@ if (process.argv[1] && import.meta.url === (await import('node:url')).pathToFile
     root: { type: 'string' }, version: { type: 'string' }, 'artifact-dir': { type: 'string' },
     'store-dir': { type: 'string' }, 'stop-hook': { type: 'string' }, 'start-hook': { type: 'string' },
     'verify-hook': { type: 'string' }, 'reachable-url': { type: 'string' }, 'snapshot-dir': { type: 'string' },
+    // Same parameter name the official verifier uses, so a site passes one convention.
+    'expected-version': { type: 'string' },
     'allow-fresh-release': { type: 'boolean', default: false },
   } })
   if (!values.root || !values.version || !values['artifact-dir'] || !values['stop-hook'] || !values['start-hook'] || !values['verify-hook']) {
@@ -374,6 +385,10 @@ if (process.argv[1] && import.meta.url === (await import('node:url')).pathToFile
         artifacts.push({ name: manifest.name, version: manifest.version, dir, tarball, sha256: sha256(await readFile(tarball)) })
       }
     }
+    const expectedVersion = values['expected-version'] ?? values.version
+    if (expectedVersion !== values.version) {
+      throw new Error(`--expected-version ${expectedVersion} does not match the release being installed (${values.version}); the verifier and the switch must agree on one version`)
+    }
     if (artifacts.length !== 10) throw new Error(`expected 10 artifacts for ${values.version} in ${values['artifact-dir']}, found ${artifacts.length}`)
     for (const artifact of artifacts) await registry.add(artifact.tarball)
     const report = await switchRelease({
@@ -386,7 +401,8 @@ if (process.argv[1] && import.meta.url === (await import('node:url')).pathToFile
         reachable: values['reachable-url'] ? () => checkReachable({ origin: values['reachable-url'] }) : undefined,
         verify: async ({ expectedVersion }) => {
           const output = await new Promise((resolvePromise, reject) => {
-            const child = spawn(values['verify-hook'], ['--expected-version', expectedVersion], { stdio: ['ignore', 'pipe', 'pipe'] })
+            // The verifier receives the version under the same flag name the switch uses.
+            const child = spawn(values['verify-hook'], ['--expected-version', expectedVersion, '--mode', 'activate'], { stdio: ['ignore', 'pipe', 'pipe'] })
             let out = ''
             child.stdout.on('data', c => { out += c })
             child.stderr.on('data', c => { out += c })

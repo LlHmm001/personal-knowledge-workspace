@@ -147,16 +147,41 @@ function resolvePeer(name) {
  * A release root is recognised by a `current` symlink pointing at the destination or at
  * a parent of it.
  */
+/**
+ * Refuse a destination that is a release currently in service.
+ *
+ * `--allow-existing` confirms ownership of a candidate directory; it is not a licence to
+ * overwrite the profile a service is running from, so this check has no opt-out.
+ *
+ * The comparison is on *real* paths: `current` is resolved with `realpath`, the
+ * destination is resolved with `realpath` (following any symlink in its own path), and
+ * every ancestor directory is checked too. Walking a fixed number of levels and comparing
+ * literal path strings misses `current/profile` and a destination reached through a link.
+ */
+async function resolveReal(path) {
+  const { realpath } = await import('node:fs/promises')
+  try { return await realpath(path) } catch { return null }
+}
+
 async function assertNotServing(profileDir) {
   const { readlink } = await import('node:fs/promises')
+  const target = await resolveReal(profileDir)
+  // Check the destination and every ancestor for a `current` link.
   let dir = profileDir
-  for (let depth = 0; depth < 6; depth += 1) {
+  const seen = new Set()
+  while (dir && !seen.has(dir)) {
+    seen.add(dir)
     const link = join(dir, 'current')
-    const target = await readlink(link).catch(() => null)
-    if (target) {
-      const resolved = resolve(dirname(link), target)
-      if (resolved === profileDir || profileDir.startsWith(resolved + sep) || resolved.startsWith(profileDir + sep)) {
-        fail(`refusing to build into ${profileDir}: it is the release in service (current -> ${resolved})`)
+    const raw = await readlink(link).catch(() => null)
+    if (raw) {
+      const resolved = await resolveReal(link)
+      if (resolved) {
+        const destination = target ?? resolve(profileDir)
+        const insideRelease = destination === resolved || destination.startsWith(resolved + sep)
+        const containsRelease = resolved.startsWith(destination + sep)
+        if (insideRelease || containsRelease) {
+          fail(`refusing to build into ${profileDir}: it is the release in service (${link} -> ${resolved}; destination resolves to ${destination})`)
+        }
       }
     }
     const parent = dirname(dir)
@@ -184,13 +209,11 @@ async function assertFreshCandidate(profileDir, confirmed) {
       fail(`refusing to build into ${profileDir}: its package.json declares a DSH profile (${manifest.name ?? 'unnamed'})`)
     }
   }
-  // A directory currently in service is refused even when confirmed.
-  const inServiceMarkers = ['node_modules/@deepseek-ai/dsh-pkw-web/lib/collaboration/index.js']
-  const hasServiceShape = inServiceMarkers.every(rel => existsSync(join(profileDir, rel)))
-  if (hasServiceShape && !confirmed) {
+  // A directory that already holds the product's own entry point is an installation.
+  const serviceShape = ['node_modules/@deepseek-ai/dsh-pkw-web/lib/collaboration/index.js']
+  if (serviceShape.every(rel => existsSync(join(profileDir, rel))) && !confirmed) {
     fail(`refusing to build into ${profileDir}: it looks like an installed PKW profile. Pass --allow-existing ${profileDir} only if you have verified it is a candidate you own.`)
   }
-
   if (confirmed) return { removeFirst: true, confirmed: true }
   try {
     const info = await stat(profileDir)
@@ -407,7 +430,12 @@ try {
     artifact.manifest = JSON.parse(execFileSync('tar', ['-xOf', artifact.tarball, 'package/package.json'], { encoding: 'utf8' }))
     registry.add(artifact)
   }
-  if (freshness.removeFirst) await rm(profile, { recursive: true, force: true })
+  if (freshness.removeFirst) {
+    // Re-check right before removing: between the guard and this point the directory could
+    // have been swapped for a link to the release in service.
+    await assertNotServing(profile)
+    await rm(profile, { recursive: true, force: true })
+  }
   await mkdir(profile, { recursive: true, mode: 0o700 })
   // An independent profile is a single-package workspace with hoisted layout: the
   // PKW plugin runtime expects to find packages by name at the profile root.

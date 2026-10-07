@@ -31,6 +31,7 @@ const { values } = parseArgs({ options: {
   'artifact-dir': { type: 'string' }, version: { type: 'string' }, port: { type: 'string' },
   'old-version': { type: 'string' }, 'store-dir': { type: 'string' }, 'bootstrap-username': { type: 'string' },
   'force-verify-failure': { type: 'boolean', default: false },
+  'bootstrap-password': { type: 'string' },
   'fail-install': { type: 'boolean', default: false },
   'modify-candidate-after-install': { type: 'boolean', default: false },
 } })
@@ -70,12 +71,15 @@ if (!existsSync(join(oldRelease, 'package.json'))) {
 const dataRoot = join(workDir, 'data')
 if (!existsSync(join(dataRoot, 'identity.sqlite'))) {
   const copy = await copyDataRoot(resolve(values['data-source']), dataRoot)
-  report.phases.copyData = { to: dataRoot, databases: copy.databases.length, rewritten: copy.rewritten.length, leaks: copy.leaks.length }
-  if (copy.leaks.length) {
+  report.phases.copyData = {
+    to: dataRoot, databases: copy.databases.length, rewritten: copy.rewritten.length,
+    leaks: copy.leaks.length, writableProblems: copy.writableProblems.length,
+  }
+  if (copy.leaks.length || copy.writableProblems.length) {
     // A copy that still names its source can write the source's files.
     report.status = 'copy-not-self-contained'
     await writeFile(join(workDir, 'report.json'), JSON.stringify(report, null, 2) + '\n', { mode: 0o600 })
-    console.error(JSON.stringify({ status: report.status, leaks: copy.leaks.slice(0, 3) }, null, 2))
+    console.error(JSON.stringify({ status: report.status, leaks: copy.leaks.slice(0, 3), writableProblems: copy.writableProblems.slice(0, 3) }, null, 2))
     process.exit(1)
   }
 }
@@ -88,13 +92,58 @@ await writeFile(configPath, JSON.stringify({
 }, null, 2) + '\n', { mode: 0o600 })
 const pidFile = join(workDir, 'listener.pid')
 let listener = null
+/**
+ * Stop this driver's listener and report what actually happened. A stop that times out is
+ * not graceful: the pid file is kept (it still names a live process) and the failure is
+ * raised so the transaction's recovery path runs.
+ */
 const stopHook = async () => {
-  if (!existsSync(pidFile)) return
+  if (!existsSync(pidFile)) { report.phases.stop = { alreadyStopped: true }; return }
   const pid = Number((await readFile(pidFile, 'utf8')).trim())
   try { process.kill(pid, 'SIGTERM') } catch { /* already gone */ }
-  for (let i = 0; i < 100; i++) { try { process.kill(pid, 0) } catch { break } await new Promise(r => setTimeout(r, 100)) }
+  let alive = false
+  for (let i = 0; i < 100; i++) {
+    try { process.kill(pid, 0); alive = true } catch { alive = false; break }
+    await new Promise(r => setTimeout(r, 100))
+  }
+  if (alive) {
+    report.phases.stop = { pid, graceful: false, alive: true }
+    throw new Error(`listener ${pid} did not stop within the drain budget`)
+  }
   await rm(pidFile, { force: true })
   report.phases.stop = { pid, graceful: true }
+}
+/** The site's own answer to "is it stopped?", used when a stop reports failure. */
+const isStopped = async () => {
+  if (!existsSync(pidFile)) return { known: true, stopped: true }
+  const pid = Number((await readFile(pidFile, 'utf8')).trim())
+  try { process.kill(pid, 0); return { known: true, stopped: false } } catch { return { known: true, stopped: true } }
+}
+
+/**
+ * Run the official collaboration verifier in enforcing mode, passing the release version
+ * through the same parameter name the official CLI uses, so the parameter combination is
+ * exercised rather than assumed.
+ */
+async function runVerifier(expectedVersion, mode) {
+  const credentialsFile = join(workDir, 'owner-password')
+  if (!existsSync(credentialsFile)) await writeFile(credentialsFile, `${values['bootstrap-password'] ?? 'rehearsal-password'}\n`, { mode: 0o600 })
+  const args = [
+    join(repoRoot, 'deploy/site/verify-collaboration.mjs'),
+    '--mode', mode, '--profile', join(await currentRelease(root), 'profile'),
+    '--public-origin', `http://127.0.0.1:${port}`, '--gateway-url', `http://127.0.0.1:${port}`,
+    '--credentials-file', credentialsFile, '--username', values['bootstrap-username'] ?? 'owner',
+    '--expected-version', expectedVersion,
+  ]
+  const output = await new Promise((resolvePromise, reject) => {
+    const child = spawn(process.execPath, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+    let out = ''
+    child.stdout.on('data', c => { out += c })
+    child.stderr.on('data', c => { out += c })
+    child.once('error', reject)
+    child.once('exit', code => code === 0 ? resolvePromise(out) : reject(new Error(out.trim().split('\n').slice(-3).join(' | ') || `verifier exited ${code}`)))
+  })
+  return JSON.parse(output.trim().split('\n').filter(Boolean).slice(-1)[0])
 }
 const startHook = async () => {
   const release = await currentRelease(root)
@@ -169,17 +218,24 @@ try {
       hooks: {
         stop: stopHook,
         start: startHook,
-        reachable: async () => ({ reachable: true, status: 200 }),
+        isStopped,
+        // Observed, never assumed: the probe reports what it actually saw.
+        reachable: async ({ previousVersion }) => {
+          const state = await checkReachable({ origin: `http://127.0.0.1:${port}`, timeoutMs: 20_000 })
+          report.phases.reachability = { previousVersion, ...state }
+          return state
+        },
+        // Acceptance for the release under test: the official verifier, in its enforcing
+        // mode, with the same parameter name the official CLI uses.
         verify: async ({ expectedVersion }) => {
           if (values['force-verify-failure'] && expectedVersion === version) {
+            report.phases.injectedFault = 'post-activation verification'
             throw new Error('rehearsal: injected post-activation verification failure')
           }
-          const installed = await profileVersion(join(await currentRelease(root), 'profile'))
-          if (installed !== expectedVersion) throw new Error(`installed ${installed}, expected ${expectedVersion}`)
-          const health = await fetch(`http://127.0.0.1:${port}/healthz`, { signal: AbortSignal.timeout(5000) })
-          if (health.status !== 200) throw new Error(`listener is not ready (HTTP ${health.status})`)
-          return { installedVersion: installed, served: true }
+          return await runVerifier(expectedVersion, 'activate')
         },
+        // A rollback is only accepted when the restored release passes the same verifier.
+        verifyPrevious: async ({ expectedVersion }) => runVerifier(expectedVersion, 'rollback'),
       },
     })
     report.status = report.result.status
@@ -193,8 +249,18 @@ try {
   try { await stopHook() } catch { /* already stopped */ }
 }
 await writeFile(join(workDir, 'report.json'), JSON.stringify(report, null, 2) + '\n', { mode: 0o600 })
+
+// Exit code policy:
+//   0  the release was activated and accepted, or the injected fault produced a
+//      *verified* rollback (original release restored and accepted again)
+//   1  anything else: a normal failure, an unverified rollback, or a fault run whose
+//      rollback did not verify
+const faultInjected = Boolean(report.phases.injectedFault)
+const activated = report.status === 'activated'
+const rollbackVerified = report.result?.rollbackEvidence?.acceptance === 'verified'
+const exitCode = activated || (faultInjected && rollbackVerified) ? 0 : 1
 console.log(JSON.stringify({
-  status: report.status, version, oldVersion,
+  status: report.status, version, oldVersion, faultInjected, rollbackVerified, exitCode,
   phases: Object.keys(report.phases), report: join(workDir, 'report.json'),
 }, null, 2))
-process.exit(0)
+process.exit(exitCode)

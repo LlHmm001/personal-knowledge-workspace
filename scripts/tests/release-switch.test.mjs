@@ -300,6 +300,10 @@ test('switch: a verifier result that is not acceptance is refused', async () => 
     ['unauthenticated', async () => ({ ok: true, enforcing: true, checks: { authenticated: 'failed_credentials_rejected', servingVersion: NEW_VERSION } })],
     ['no serving version', async () => ({ ok: true, enforcing: true, checks: { authenticated: 'verified' } })],
     ['wrong serving version', async () => ({ ok: true, enforcing: true, checks: { authenticated: 'verified', servingVersion: '0.0.0-other' } })],
+    // The shapes below used to slip through: a result with no `enforcing` field at all, and
+    // one that reports only a version without any authentication evidence.
+    ['no enforcing field', async () => ({ ok: true, checks: { authenticated: 'verified', servingVersion: NEW_VERSION } })],
+    ['no checks object', async () => ({ ok: true, enforcing: true, servingVersion: NEW_VERSION })],
   ]
   for (const [label, verify] of cases) {
     // Each case needs its own release root: a rejected switch still promotes, so the
@@ -396,9 +400,12 @@ test('switch: a stop failure whose state cannot be observed proceeds with recove
       assert.equal(error.report.stopState.assumed, 'stopped')
       assert.match(error.message, /synthetic stop failure/, 'the original stop failure must be preserved')
       assert.equal(error.report.rollback?.restoredVersion, OLD_VERSION, 'the old release must be restored')
+      assert.equal(error.report.recoverySteps.stopSkipped, true, 'recovery must record that it skipped the stop')
       return true
     })
-    assert.ok(stopAttempts >= 2, `recovery must attempt to stop again (attempts=${stopAttempts})`)
+    // The stop is attempted exactly once: a second attempt after a reported failure can
+    // take a healthy service down and fail again.
+    assert.equal(stopAttempts, 1, `the stop must be attempted once (attempts=${stopAttempts})`)
     assert.equal(await currentRelease(root), join(root, 'releases', OLD_VERSION))
   } finally { await rm(root, { recursive: true, force: true }) }
 })
