@@ -137,7 +137,9 @@ jobs:
             --tmp "${{ github.workspace }}/.pkw-ci/tmp"
           node --test scripts/tests/root-lock.test.mjs scripts/tests/release-switch.test.mjs \
             scripts/tests/deployment-gate.test.mjs scripts/tests/copy-isolation.test.mjs \
-            scripts/tests/profile-builder.test.mjs scripts/tests/pkw-shutdown.test.mjs
+            scripts/tests/profile-builder.test.mjs scripts/tests/pkw-shutdown.test.mjs \
+            scripts/tests/systemd-stop-state.test.mjs scripts/tests/collaboration-acceptance.test.mjs \
+            scripts/tests/cli-wiring.test.mjs
 
   # Self-contained deployment checks: no Harness, no network, no private artifacts.
   # Profile-builder guards generate their own synthetic Harness tree, so a green run

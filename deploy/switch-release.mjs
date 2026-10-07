@@ -40,6 +40,8 @@ import { dirname, join, resolve, sep } from 'node:path'
 import { spawn } from 'node:child_process'
 import { parseArgs } from 'node:util'
 import { prepareInstall, profileInputDigest, deploymentErrorDetails } from '../scripts/deployment.mjs'
+import { probeSystemdStopState, readCgroupMembers } from './site/systemd-stop-state.mjs'
+import { probeAcceptance, observeReachability } from './site/collaboration-acceptance.mjs'
 
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex')
 const PROFILE_INPUTS = ['package.json', 'pnpm-lock.yaml', '.npmrc']
@@ -201,18 +203,23 @@ export function assertAcceptance(result, { expectedVersion, label = 'verificatio
     throw error
   }
   if (!result || typeof result !== 'object') refuse(`${label} returned no structured result`)
-  if (result.ok !== true) refuse(`${label} did not report ok:true (got ${JSON.stringify(result.ok)})`)
-  // `enforcing` must be present *and* true. A verifier that omits the field has not said
-  // it was enforcing, and a diagnostics run must never gate a deployment.
-  if (result.enforcing !== true) refuse(`${label} did not report enforcing:true (got ${JSON.stringify(result.enforcing)})`)
+  // Every unmet requirement is collected and reported together. Stopping at `ok:false` would hide
+  // which observation actually failed, and the two are not interchangeable evidence.
+  const unmet = []
+  if (result.ok !== true) unmet.push(`did not report ok:true (got ${JSON.stringify(result.ok)})`)
+  // `enforcing` must be present *and* true. A verifier that omits the field has not said it was
+  // enforcing, and a diagnostics run must never gate a deployment.
+  if (result.enforcing !== true) unmet.push(`did not report enforcing:true (got ${JSON.stringify(result.enforcing)})`)
   // The evidence acceptance rests on must be present, not merely absent-when-wrong.
-  if (!result.checks || typeof result.checks !== 'object') refuse(`${label} reported no checks object`)
-  if (result.checks.authenticated !== 'verified') {
-    refuse(`${label} did not verify an authenticated session (authenticated=${JSON.stringify(result.checks.authenticated)})`)
+  const checks = result.checks && typeof result.checks === 'object' ? result.checks : null
+  if (!checks) unmet.push('reported no checks object')
+  if (checks && checks.authenticated !== 'verified') {
+    unmet.push(`did not verify an authenticated session (authenticated=${JSON.stringify(checks.authenticated)})`)
   }
-  const serving = result.checks.servingVersion ?? result.servingVersion
-  if (!serving) refuse(`${label} did not report which release is serving`)
-  if (expectedVersion && serving !== expectedVersion) refuse(`${label} reports ${serving} serving, expected ${expectedVersion}`)
+  const serving = checks ? (checks.servingVersion ?? result.servingVersion) : null
+  if (!serving) unmet.push('did not report which release is serving')
+  else if (expectedVersion && serving !== expectedVersion) unmet.push(`reports ${serving} serving, expected ${expectedVersion}`)
+  if (unmet.length > 0) refuse(`${label} is not acceptance: ${unmet.join('; ')}`)
   return result
 }
 
@@ -236,6 +243,32 @@ function run(command, args, cwd) {
     const child = spawn(command, args, { cwd, stdio: 'inherit', env: process.env })
     child.once('error', reject)
     child.once('exit', code => code === 0 ? resolvePromise() : reject(new Error(`${command} exited ${code}`)))
+  })
+}
+
+/**
+ * Run a command and keep everything it produced: stdout, stderr and the exit code.
+ *
+ * A command that ran and failed resolves with its code; only a command that could not be started
+ * at all carries `code: null`. The distinction matters, because "systemctl reports the unit is
+ * inactive" and "systemctl could not be run" are different findings, and only the first is
+ * evidence about the service.
+ */
+function runCapture(command, args, { timeoutMs = 10000 } = {}) {
+  return new Promise(resolvePromise => {
+    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'], env: process.env })
+    let stdout = ''
+    let stderr = ''
+    let settled = false
+    const finish = value => { if (!settled) { settled = true; clearTimeout(timer); resolvePromise(value) } }
+    const timer = setTimeout(() => {
+      try { child.kill('SIGKILL') } catch { /* already gone */ }
+      finish({ stdout, stderr: `${stderr}\n${command} did not finish within ${timeoutMs}ms`.trim(), code: null })
+    }, timeoutMs)
+    child.stdout.on('data', chunk => { stdout += chunk })
+    child.stderr.on('data', chunk => { stderr += chunk })
+    child.once('error', error => finish({ stdout, stderr: `${stderr}${error.message}`, code: null }))
+    child.once('exit', code => finish({ stdout, stderr, code }))
   })
 }
 
@@ -789,12 +822,14 @@ if (process.argv[1] && import.meta.url === (await import('node:url')).pathToFile
     // Same parameter name the official verifier uses, so a site passes one convention.
     'expected-version': { type: 'string' },
     'state-hook': { type: 'string' }, 'managed-unit': { type: 'string' },
+    'public-origin': { type: 'string' },
     'allow-fresh-release': { type: 'boolean', default: false },
   } })
   if (!values.root || !values.version || !values['artifact-dir'] || !values['stop-hook'] || !values['start-hook'] || !values['verify-hook']) {
     process.stderr.write(`Usage: node deploy/switch-release.mjs --root DIR --version V --artifact-dir DIR \
   --stop-hook F --start-hook F --verify-hook F \
-  [--state-hook F | --managed-unit NAME] [--reachable-url URL] [--snapshot-dir DIR] [--expected-version V]
+  [--state-hook F | --managed-unit NAME] --reachable-url URL \
+  [--public-origin URL] [--snapshot-dir DIR] [--expected-version V]
 
 A stop hook that cannot be asked whether the service is stopped makes the stop state
 unknown, and an unknown stop state is never treated as stopped. Supply one of:
@@ -805,6 +840,14 @@ unknown, and an unknown stop state is never treated as stopped. Supply one of:
   }
   if (!values['state-hook'] && !values['managed-unit']) {
     process.stderr.write('refusing to run: a stop state probe is required (--state-hook or --managed-unit); without it the stop state would be unknown and recovery must not start a second instance\n')
+    process.exit(2)
+  }
+  if (!values['reachable-url']) {
+    process.stderr.write('refusing to run: --reachable-url is required; without it reachability, authentication, the serving version and the note read-back cannot be observed, and a rollback could not be accepted on evidence\n')
+    process.exit(2)
+  }
+  if (values['public-origin'] && values['reachable-url'].replace(/\/$/, '') !== values['public-origin'].replace(/\/$/, '')) {
+    process.stderr.write(`refusing to run: --reachable-url ${values['reachable-url']} and --public-origin ${values['public-origin']} must name the same origin, so that the reachability observation and the acceptance probe describe one service\n`)
     process.exit(2)
   }
   const { startLoopbackRegistry } = await import('./site/loopback-registry.mjs')
@@ -835,65 +878,45 @@ unknown, and an unknown stop state is never treated as stopped. Supply one of:
       hooks: {
         stop: () => run(values['stop-hook'], [], undefined),
         start: () => run(values['start-hook'], [], undefined),
-        // The state probe is the evidence the recovery path needs. A systemd unit that
-        // reports inactive is not by itself proof that every process it started is gone, so
-        // the unit's whole cgroup is inspected: the unit must be inactive AND its cgroup
-        // must hold no processes. Anything that cannot be established stays unknown, and the
-        // shared cgroup is never stopped to satisfy this check.
+        // Stop evidence. With --state-hook the site owns the question; with --managed-unit the
+        // unit's whole identity is read: its ActiveState, its main process, its control process
+        // and the processes in its cgroup. Every command's exit code and error text are kept.
+        // Anything that could not be run, could not be read, was denied, or reports an identity
+        // that still points at a process is not evidence that the service stopped, and an unknown
+        // stop state never lets the transaction write back, repoint or start anything.
         isStopped: async () => {
           if (values['state-hook']) {
-            try { await run(values['state-hook'], [], undefined); return { known: true, stopped: true, source: 'state-hook' } } catch { return { known: true, stopped: false, source: 'state-hook' } }
-          }
-          const unit = values['managed-unit']
-          const { spawn: spawnChild } = await import('node:child_process')
-          const exec = args => new Promise(resolvePromise => {
-            const child = spawnChild('systemctl', args, { stdio: ['ignore', 'pipe', 'ignore'] })
-            let out = ''
-            child.stdout.on('data', c => { out += c })
-            child.once('error', () => resolvePromise(null))
-            child.once('exit', () => resolvePromise(out.trim()))
-          })
-          const active = await exec(['is-active', unit])
-          if (active === null) return { known: false, stopped: false, reason: 'systemctl-unavailable', unit }
-          if (active !== 'inactive' && active !== 'failed') {
-            return { known: true, stopped: false, state: active, unit, source: 'systemctl-is-active' }
-          }
-          // The unit is down. Verify nothing it started is still running in its cgroup.
-          const pids = await exec(['show', '-p', 'MainPID', '--value', unit])
-          const controlGroup = await exec(['show', '-p', 'ControlGroup', '--value', unit])
-          const members = []
-          if (controlGroup) {
-            const { readdir, readFile } = await import('node:fs/promises')
-            const cgroupPath = join('/sys/fs/cgroup', controlGroup.replace(/^\//, ''))
-            const walk = async dir => {
-              for (const entry of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
-                const full = join(dir, entry.name)
-                if (entry.isDirectory()) { await walk(full); continue }
-                if (entry.name === 'cgroup.procs') {
-                  const text = await readFile(full, 'utf8').catch(() => '')
-                  for (const line of text.split('\n')) if (line.trim()) members.push(Number(line.trim()))
-                }
-              }
+            try {
+              await run(values['state-hook'], [], undefined)
+              return { known: true, stopped: true, source: 'state-hook' }
+            } catch (error) {
+              return { known: true, stopped: false, source: 'state-hook', reason: error.message }
             }
-            await walk(cgroupPath)
           }
-          const live = members.filter(pid => { try { process.kill(pid, 0); return true } catch { return false } })
-          if (live.length > 0) {
-            return { known: true, stopped: false, state: active, leftoverPids: live.slice(0, 5), unit, source: 'cgroup-members' }
-          }
-          return { known: true, stopped: true, state: active, mainPid: pids ?? null, cgroupMembers: members.length, unit, source: 'systemctl-is-active+cgroup-members' }
-        },
-        verify: async ({ expectedVersion }) => {
-          const output = await new Promise((resolvePromise, reject) => {
-            // The verifier receives the version under the same flag name the switch uses.
-            const child = spawn(values['verify-hook'], ['--expected-version', expectedVersion, '--mode', 'activate'], { stdio: ['ignore', 'pipe', 'pipe'] })
-            let out = ''
-            child.stdout.on('data', c => { out += c })
-            child.stderr.on('data', c => { out += c })
-            child.once('exit', code => code === 0 ? resolvePromise(out) : reject(new Error(out.trim() || `verifier exited ${code}`)))
+          return probeSystemdStopState({
+            unit: values['managed-unit'],
+            runCommand: args => runCapture('systemctl', args),
+            readMembers: controlGroup => readCgroupMembers(controlGroup),
           })
-          return JSON.parse(output.trim().split('\n').filter(Boolean).slice(-1)[0])
         },
+        // Reachability on its own: the endpoint answered, and nothing about what it serves.
+        reachable: async ({ previousVersion }) => {
+          const observation = await observeReachability({ url: values['reachable-url'] })
+          return {
+            reachable: observation.reachable, status: observation.status, url: observation.url,
+            expectedVersion: previousVersion ?? null, error: observation.error ?? null,
+          }
+        },
+        // Activation acceptance: reachability, authentication, the serving version and the note
+        // read-back, observed separately and all four required.
+        verify: async ({ expectedVersion }) => probeAcceptance({
+          url: values['reachable-url'], hook: values['verify-hook'], expectedVersion, mode: 'activate',
+        }),
+        // Rollback acceptance: the same four observations, made of the release that came back. A
+        // restore that only answered on the socket is reported as unverified, never as accepted.
+        verifyPrevious: async ({ expectedVersion }) => probeAcceptance({
+          url: values['reachable-url'], hook: values['verify-hook'], expectedVersion, mode: 'rollback',
+        }),
       },
     })
     console.log(JSON.stringify({ status: report.status, version: report.version, previousVersion: report.previousVersion }, null, 2))
