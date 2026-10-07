@@ -52,6 +52,7 @@ const { values } = parseArgs({ options: {
   profile: { type: 'string' }, version: { type: 'string', default: '0.0.0-independent' },
   store: { type: 'string' }, cache: { type: 'string' }, tmp: { type: 'string' },
   harness: { type: 'string' }, registry: { type: 'string' }, 'dry-run': { type: 'boolean', default: false },
+  'release-source': { type: 'string' },
   'keep-staging': { type: 'boolean', default: false }, 'allow-existing': { type: 'string' },
   help: { type: 'boolean', default: false },
 } })
@@ -206,13 +207,17 @@ async function assertFreshCandidate(profileDir, confirmed) {
 }
 
 // ---------------------------------------------------------------- PKW packages
-const pkwRoot = join(repoRoot, 'packages/pkw')
+// Either this checkout (whose packages must have been built) or a staged release.
+const releaseSource = values['release-source'] ? resolve(values['release-source']) : null
+const pkwRoot = releaseSource ?? join(repoRoot, 'packages/pkw')
+if (releaseSource && !existsSync(pkwRoot)) fail(`--release-source does not exist: ${pkwRoot}`)
 const pkwDirs = (await readdir(pkwRoot, { withFileTypes: true })).filter(e => e.isDirectory()).map(e => e.name).sort()
 const pkwManifests = []
 for (const dir of pkwDirs) {
   const manifest = JSON.parse(await readFile(join(pkwRoot, dir, 'package.json'), 'utf8'))
   pkwManifests.push({ dir, manifest })
 }
+if (pkwManifests.length === 0) fail(`no PKW packages found in ${pkwRoot}`)
 const pkwNames = new Set(pkwManifests.map(p => p.manifest.name))
 
 // ------------------------------------------------------- Harness peer closure
@@ -319,7 +324,11 @@ async function pack(sourceDir, manifest, targetName, stampedVersion) {
 
 for (const { dir, manifest } of pkwManifests) {
   const lib = join(pkwRoot, dir, 'lib')
-  if (!existsSync(lib)) fail(`Missing build output: ${lib}. Run \`pnpm run build\` first.`)
+  if (!existsSync(lib)) {
+    fail(releaseSource
+      ? `Staged release is incomplete: ${lib} does not exist`
+      : `Missing build output: ${lib}. Run \`pnpm run build\` first.`)
+  }
   await pack(join(pkwRoot, dir), manifest, manifest.name.replace('@', '').replace('/', '__'), version)
 }
 for (const peer of [...closure.values()].sort((a, b) => a.name.localeCompare(b.name))) {

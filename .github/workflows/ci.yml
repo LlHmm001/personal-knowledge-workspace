@@ -169,6 +169,7 @@ jobs:
         run: |
           node scripts/pkw-independent-profile.mjs \
             --profile "$PWD/.ci/profile" \
+            --release-source "$PWD/.ci/packages" \
             --version 0.9.9-ci \
             --harness "$PWD/.ci/harness" \
             --store "$PWD/.ci/store" --cache "$PWD/.ci/cache" --tmp "$PWD/.ci/tmp" 
