@@ -433,3 +433,31 @@ test('switch: an unknown stop state is never reported as stopped', async () => {
     assert.equal(await currentRelease(root), join(root, 'releases', OLD_VERSION))
   } finally { await rm(root, { recursive: true, force: true }) }
 })
+
+test('switch: a stop with no state callback is unknown, not stopped', async () => {
+  const { root } = await makeRoot()
+  const service = serviceStub(verifyOk)
+  let stopAttempts = 0
+  let startAttempts = 0
+  const hooks = {
+    // No isStopped callback at all: the site cannot be asked whether the service is stopped.
+    stop: async () => { stopAttempts += 1; throw new Error('synthetic stop failure') },
+    start: async () => { startAttempts += 1 },
+    verify: service.hooks.verify,
+  }
+  try {
+    await assert.rejects(() => switchRelease({
+      root, version: NEW_VERSION, artifacts: [], registry: 'http://127.0.0.1:1', hooks,
+      snapshotDir: join(root, 'snapshots', NEW_VERSION), deps: { prepareInstall: fakeInstall() },
+    }), error => {
+      assert.equal(error.code, 'PKW_ROLLBACK_FAILED', `unexpected code ${error.code}`)
+      assert.notEqual(error.report.stopState?.stopped, true, `unknown must not be recorded as stopped: ${JSON.stringify(error.report.stopState)}`)
+      assert.equal(error.report.stopState?.assumed, 'not-stopped')
+      return true
+    })
+    // No second instance may be started and the release pointer must be untouched.
+    assert.equal(startAttempts, 0, 'a start without stop evidence would create a second writer')
+    assert.equal(await currentRelease(root), join(root, 'releases', OLD_VERSION))
+    assert.equal(stopAttempts, 1)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})

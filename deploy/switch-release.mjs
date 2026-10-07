@@ -140,16 +140,20 @@ function releaseName(releasePath, root) {
 
 /** Restore the previous release and start it again; report step-by-step progress. */
 async function recoverPreviousRelease({ root, installed, snapshotDir, hooks, report, skipStop = false }) {
-  const steps = { stopped: skipStop, stopSkipped: skipStop, inputsRestored: false, currentRepointed: false, started: false }
+  const steps = { stopped: false, stopSkipped: skipStop, inputsRestored: false, currentRepointed: false, started: false }
   try {
-    // The stop is attempted once. When it already reported failure, retrying it could take
-    // down a service that is healthy and fail again, so the caller's decision stands.
-    if (!skipStop) await hooks.stop()
-    steps.stopped = true
-    // Before starting anything, establish that no writer is running. Starting the previous
-    // release beside a live instance would create the second writer this design exists to
-    // prevent, so a state that cannot be established stops the recovery here and leaves the
-    // scene (release, inputs, `current`) untouched for a human.
+    // The stop is attempted once: retrying a stop that reported failure could take down a
+    // healthy service and fail again.
+    const stopSucceeded = skipStop ? false : await hooks.stop().then(() => true, () => false)
+    if (skipStop) {
+      // The caller skipped the stop because its own probe established the state.
+      steps.stopped = true
+    } else if (stopSucceeded) {
+      steps.stopped = true
+    }
+    // Before starting anything, the state must be known to be "stopped". Starting beside a
+    // live instance would create the second writer this design exists to prevent, so an
+    // unknown state keeps the scene (release, inputs, current) for a human instead.
     if (hooks.isStopped) {
       const state = await hooks.isStopped().catch(() => ({ known: false }))
       steps.stopEvidence = state
@@ -157,6 +161,11 @@ async function recoverPreviousRelease({ root, installed, snapshotDir, hooks, rep
         report.status = 'recovery-blocked-unverified-stop'
         return { recovered: false, error: { message: `cannot establish that the previous writer stopped (${JSON.stringify(state)}); refused to start a second instance` } }
       }
+    } else if (!steps.stopped) {
+      report.status = 'recovery-blocked-no-state-probe'
+      return { recovered: false, error: { message: 'the stop failed and no stop state probe was supplied; refused to start a release that may already be running' } }
+    } else {
+      steps.stopEvidence = { known: true, stopped: true, source: 'stop-hook-succeeded' }
     }
     for (const name of PROFILE_INPUTS) {
       const from = join(snapshotDir, name)
@@ -260,10 +269,11 @@ export async function switchRelease({
         report.stopUnverified = true
       }
     } else {
-      // No way to observe the state: assume the stop happened, because refusing to
-      // attempt recovery would leave a stopped service with the new release installed.
-      stopped = true
-      report.stopState = { known: false, assumed: 'stopped' }
+      // No way to observe the state at all. That is unknown, not stopped: recording it as
+      // stopped would let the recovery path start a second instance beside a live one.
+      stopError = stopError ?? { message: 'the stop command reported no state' }
+      report.stopState = { known: false, assumed: 'not-stopped', reason: 'no-state-callback' }
+      report.stopUnverified = true
     }
   }
   try {
@@ -397,10 +407,23 @@ if (process.argv[1] && import.meta.url === (await import('node:url')).pathToFile
     'verify-hook': { type: 'string' }, 'reachable-url': { type: 'string' }, 'snapshot-dir': { type: 'string' },
     // Same parameter name the official verifier uses, so a site passes one convention.
     'expected-version': { type: 'string' },
+    'state-hook': { type: 'string' }, 'managed-unit': { type: 'string' },
     'allow-fresh-release': { type: 'boolean', default: false },
   } })
   if (!values.root || !values.version || !values['artifact-dir'] || !values['stop-hook'] || !values['start-hook'] || !values['verify-hook']) {
-    process.stderr.write('Usage: node deploy/switch-release.mjs --root DIR --version V --artifact-dir DIR --stop-hook F --start-hook F --verify-hook F [--reachable-url URL] [--snapshot-dir DIR]\n')
+    process.stderr.write(`Usage: node deploy/switch-release.mjs --root DIR --version V --artifact-dir DIR \
+  --stop-hook F --start-hook F --verify-hook F \
+  [--state-hook F | --managed-unit NAME] [--reachable-url URL] [--snapshot-dir DIR] [--expected-version V]
+
+A stop hook that cannot be asked whether the service is stopped makes the stop state
+unknown, and an unknown stop state is never treated as stopped. Supply one of:
+  --state-hook F      an executable that exits 0 when the service is stopped
+  --managed-unit NAME a systemd unit whose ActiveState is the evidence (systemctl is-active)
+`)
+    process.exit(2)
+  }
+  if (!values['state-hook'] && !values['managed-unit']) {
+    process.stderr.write('refusing to run: a stop state probe is required (--state-hook or --managed-unit); without it the stop state would be unknown and recovery must not start a second instance\n')
     process.exit(2)
   }
   const { startLoopbackRegistry } = await import('./site/loopback-registry.mjs')
@@ -431,6 +454,28 @@ if (process.argv[1] && import.meta.url === (await import('node:url')).pathToFile
       hooks: {
         stop: () => run(values['stop-hook'], [], undefined),
         start: () => run(values['start-hook'], [], undefined),
+        // The state probe is the evidence the recovery path needs. A hook that exits 0 means
+        // stopped; a managed unit is asked through systemctl, whose answer is authoritative.
+        isStopped: async () => {
+          if (values['state-hook']) {
+            try { await run(values['state-hook'], [], undefined); return { known: true, stopped: true } } catch { return { known: true, stopped: false } }
+          }
+          try {
+            await run('systemctl', ['is-active', '--quiet', values['managed-unit']], undefined)
+            return { known: true, stopped: false }
+          } catch {
+            // is-active exits non-zero for inactive *and* for a failed unit; only 'inactive'
+            // and 'failed' mean the writer is gone.
+            const { spawn: spawnChild } = await import('node:child_process')
+            const state = await new Promise(resolvePromise => {
+              const child = spawnChild('systemctl', ['is-active', values['managed-unit']], { stdio: ['ignore', 'pipe', 'ignore'] })
+              let out = ''
+              child.stdout.on('data', c => { out += c })
+              child.once('exit', () => resolvePromise(out.trim()))
+            })
+            return { known: state === 'inactive' || state === 'failed', stopped: state === 'inactive' || state === 'failed', state }
+          }
+        },
         reachable: values['reachable-url'] ? () => checkReachable({ origin: values['reachable-url'] }) : undefined,
         verify: async ({ expectedVersion }) => {
           const output = await new Promise((resolvePromise, reject) => {

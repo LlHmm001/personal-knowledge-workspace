@@ -193,10 +193,14 @@ async function assertNotServing(profileDir) {
       const resolved = await resolveReal(link)
       if (resolved) {
         const destination = target ?? resolve(profileDir)
-        const insideRelease = destination === resolved || destination.startsWith(resolved + sep)
+        // Three relations are all refusals: equal to the release, inside it, or containing
+        // it. Containing it matters because a rebuild would remove the release as a child.
+        const equal = destination === resolved
+        const insideRelease = destination.startsWith(resolved + sep)
         const containsRelease = resolved.startsWith(destination + sep)
-        if (insideRelease || containsRelease) {
-          fail(`refusing to build into ${profileDir}: it is the release in service (${link} -> ${resolved}; destination resolves to ${destination})`)
+        if (equal || insideRelease || containsRelease) {
+          const relation = equal ? 'is' : insideRelease ? 'is inside' : 'contains'
+          fail(`refusing to build into ${profileDir}: it ${relation} the release in service (${link} -> ${resolved}; destination resolves to ${destination})`)
         }
       }
     }
