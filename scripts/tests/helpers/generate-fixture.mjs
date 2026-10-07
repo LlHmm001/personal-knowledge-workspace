@@ -11,7 +11,7 @@
  * Usage: node generate-fixture.mjs --target DIR --profile DIR --port N
  */
 import { spawn } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, lstat, rm, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -22,20 +22,32 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '.
 const { values } = parseArgs({ options: {
   target: { type: 'string' }, profile: { type: 'string' }, port: { type: 'string' },
   password: { type: 'string' }, username: { type: 'string' }, 'note-body': { type: 'string' },
+  'remove-on-failure': { type: 'boolean', default: false },
 } })
 if (!values.target || !values.profile || !values.port) {
   process.stderr.write('Usage: node generate-fixture.mjs --target DIR --profile DIR --port N [--password P] [--username U]\n')
   process.exit(2)
 }
 const target = resolve(values.target)
+let createdTarget = false
 const password = values.password ?? 'fixture-password'
 const username = values.username ?? 'owner'
 const port = Number(values.port)
-if (existsSync(join(target, 'identity.sqlite'))) {
-  console.error(`${target} already contains data; refusing to overwrite a fixture`)
+// The generator owns the directory it writes, so it will only use one that does not exist
+// yet and is not a symlink. An existing directory may hold someone's data, and the previous
+// version deleted the whole thing on failure if it lacked identity.sqlite.
+const existing = await lstat(target).catch(() => null)
+if (existing) {
+  console.error(JSON.stringify({
+    error: 'refusing to generate into an existing path',
+    target,
+    kind: existing.isSymbolicLink() ? 'symlink' : existing.isDirectory() ? 'directory' : 'file',
+    hint: 'the generator creates its own directory; pass a path that does not exist yet',
+  }, null, 2))
   process.exit(3)
 }
 await mkdir(target, { recursive: true, mode: 0o700 })
+createdTarget = true
 const configPath = join(await mkdtemp(join(tmpdir(), 'fixture-cfg-')), 'collaboration.json')
 await writeFile(configPath, JSON.stringify({
   dataPath: target, publicOrigin: `http://127.0.0.1:${port}`, bootstrapUsername: username, bootstrapPasswordEnv: 'PKW_FIXTURE_BOOTSTRAP',
@@ -50,9 +62,17 @@ child.stdout.on('data', c => { log += c })
 child.stderr.on('data', c => { log += c })
 
 const stop = async () => {
-  child.kill('SIGTERM')
-  for (let i = 0; i < 80; i++) { if (child.exitCode !== null) return; await new Promise(r => setTimeout(r, 100)) }
-  child.kill('SIGKILL')
+  if (child.exitCode === null) {
+    child.kill('SIGTERM')
+    for (let i = 0; i < 120; i++) { if (child.exitCode !== null) break; await new Promise(r => setTimeout(r, 100)) }
+    if (child.exitCode === null) {
+      child.kill('SIGKILL')
+      // Wait for the exit event, not for a timeout: reporting "generated" while the writer
+      // is still running would leave a second writer on the fixture.
+      await new Promise(resolvePromise => child.once('exit', resolvePromise))
+    }
+  }
+  return { exitCode: child.exitCode, signal: child.signalCode }
 }
 
 const jar = new Map()
@@ -74,13 +94,24 @@ const call = async (path, { method = 'GET', body, raw } = {}) => {
 }
 
 try {
-  let ready = false
-  for (let i = 0; i < 100; i++) {
-    try { if ((await call('/healthz')).status === 200) { ready = true; break } } catch { /* not up yet */ }
-    if (child.exitCode !== null) break
+  // Readiness must be evidence that *this* child bound the port: its own startup line,
+  // followed by a health answer. A health answer alone could come from a service that was
+  // already listening, and logging in to that would write to the wrong data root.
+  let listening = false
+  let healthOk = false
+  for (let i = 0; i < 150; i++) {
+    if (child.exitCode !== null) {
+      throw new Error(`the listener exited with ${child.exitCode} before binding the port: ${log.slice(-400)}`)
+    }
+    if (!listening && log.includes('"status":"listening"')) listening = true
+    if (listening && !healthOk) {
+      try { healthOk = (await call('/healthz')).status === 200 } catch { healthOk = false }
+    }
+    if (listening && healthOk) break
     await new Promise(r => setTimeout(r, 200))
   }
-  if (!ready) throw new Error(`the listener did not become ready: ${log.slice(-400)}`)
+  if (!listening) throw new Error(`this process never reported listening (the port may be held by another service): ${log.slice(-400)}`)
+  if (!healthOk) throw new Error(`this process reported listening but is not answering health checks: ${log.slice(-400)}`)
 
   const login = await call('/pkw/login', { method: 'POST', body: { username, password } })
   if (login.status !== 200) throw new Error(`fixture login failed (${login.status}): ${JSON.stringify(login.body).slice(0, 200)}`)
@@ -104,14 +135,20 @@ try {
   if (uploaded.status !== 200) throw new Error(`fixture uploadAttachment failed (${uploaded.status}): ${JSON.stringify(uploaded.body).slice(0, 300)}`)
 
   await call('/pkw/manage', { method: 'POST', body: { action: 'logout' } })
-  await stop()
+  const stopped = await stop()
   console.log(JSON.stringify({
+    stopped,
     target, spaceId: space.id, noteId: created.body.value.noteId,
     attachment: uploaded.body?.value ?? null, noteBody: body, attachmentBytes: bytes.length,
   }, null, 2))
 } catch (error) {
-  await stop()
-  console.error(JSON.stringify({ error: error.message, log: log.slice(-400) }, null, 2))
-  await rm(target, { recursive: true, force: true })
+  const stopped = await stop()
+  // The scene is preserved: only a directory this run created is removed, and even then
+  // only when asked, so a failure can be inspected.
+  console.error(JSON.stringify({
+    error: error.message, stopped, target, createdTarget,
+    preserved: true, log: log.slice(-400),
+  }, null, 2))
+  if (values['remove-on-failure'] && createdTarget) await rm(target, { recursive: true, force: true })
   process.exit(1)
 }

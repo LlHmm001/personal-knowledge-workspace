@@ -27,7 +27,7 @@
  *
  * Exit 0 = verified, non-zero = refused (reason on stderr, JSON on stdout).
  */
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { parseArgs } from 'node:util'
 import { resolve } from 'node:path'
 
@@ -120,16 +120,25 @@ const healthBody = health.status === 0 ? '' : await health.text().catch(() => ''
 if (health.status === 0) refuse(`the collaboration gateway at ${gatewayUrl} could not be reached: ${health.error}`)
 // When the caller names the configuration, the reachable gateway must be the one that
 // configuration describes: a healthy unrelated service is not the deployed release.
-if (expectedConfigPath) {
+if (values.config) {
+  // An explicit --config is a claim about which instance this is; a missing or invalid file
+  // must be refused, not silently skipped.
+  if (!existsSync(expectedConfigPath)) refuse(`--config ${expectedConfigPath} does not exist`)
   let configured = null
-  try { configured = JSON.parse(readFileSync(expectedConfigPath, 'utf8')) } catch { configured = null }
+  try { configured = JSON.parse(readFileSync(expectedConfigPath, 'utf8')) } catch (error) {
+    refuse(`--config ${expectedConfigPath} is not valid JSON: ${error.message}`)
+  }
+  if (!configured || typeof configured !== 'object' || typeof configured.dataPath !== 'string') {
+    refuse(`--config ${expectedConfigPath} does not describe a collaboration instance (no dataPath)`)
+  }
+  evidence.checks.configDataPath = configured.dataPath
   const configuredOrigin = configured?.publicOrigin ? configured.publicOrigin.replace(/\/$/, '') : null
-  const configuredPort = configuredOrigin ? new URL(configuredOrigin).port : null
-  const gatewayPort = new URL(gatewayUrl).port
   evidence.checks.configOrigin = configuredOrigin
-  evidence.checks.gatewayPort = gatewayPort
-  if (configuredPort && gatewayPort && configuredPort !== gatewayPort) {
-    refuse(`the gateway on port ${gatewayPort} is not the one this configuration describes (${configuredOrigin})`)
+  // The public origin's port describes the reverse proxy, not the listener, so it cannot
+  // prove instance identity. What ties this instance to the profile is the configuration's
+  // own data root, and the profile is checked against the release that must be serving.
+  if (configured.dataPath && !existsSync(configured.dataPath)) {
+    refuse(`the configured data root ${configured.dataPath} does not exist`)
   }
 }
 evidence.checks.gatewayHealthzStatus = health.status
@@ -186,7 +195,14 @@ if (password === '') {
     let parsed; try { parsed = JSON.parse(text) } catch { parsed = text }
     return { status: response.status, body: parsed, headers: response.headers }
   }
-  const login = await call('/pkw/login', { method: 'POST', body: { username, password } })
+  let login
+  try {
+    login = await call('/pkw/login', { method: 'POST', body: { username, password } })
+  } catch (error) {
+    // A transport failure during authentication is a refusal, not a stack trace.
+    evidence.checks.authenticated = 'not_verified_transport_failure'
+    refuse(`the login request could not be completed: ${error.message}`)
+  }
   evidence.checks.loginStatus = login.status
   if (login.status !== 200) {
     evidence.checks.authenticated = 'failed_credentials_rejected'
@@ -227,7 +243,13 @@ if (password === '') {
     if (listed.length > 0) {
       const first = listed[0]
       const noteId = first.noteId ?? first.id
-      const read = await call(`/pkw/spaces/${priv.id}/api`, { method: 'POST', body: { method: 'getNote', args: { noteId } }, headers: { 'x-pkw-csrf': value.csrf } })
+      let read
+      try {
+        read = await call(`/pkw/spaces/${priv.id}/api`, { method: 'POST', body: { method: 'getNote', args: { noteId } }, headers: { 'x-pkw-csrf': value.csrf } })
+      } catch (error) {
+        evidence.checks.noteReadable = false
+        refuse(`reading a note back could not be completed: ${error.message}`)
+      }
       evidence.checks.getNoteStatus = read.status
       evidence.checks.noteReadable = read.status === 200 && typeof (read.body?.value?.note?.contentHash ?? read.body?.value?.content) !== 'undefined'
       if (!evidence.checks.noteReadable) refuse('a note listed by the space could not be read back')

@@ -129,7 +129,12 @@ export function remapJsonDocument(raw, sourceRoot, targetRoot, jsonKeys) {
  * Copy `sourceRoot` into `targetRoot` (which must not already exist).
  * Returns { targetRoot, rewritten, leaks, databases }.
  */
-export async function copyDataRoot(sourceRoot, targetRoot, options = {}) {
+export async function copyDataRoot(sourceRootInput, targetRootInput, options = {}) {
+  // Normalise both roots first: the mapping and every leak decision compare real locations,
+  // so a symlinked source or target must not change the answer.
+  const { realpath } = await import('node:fs/promises')
+  const sourceRoot = await realpath(resolve(sourceRootInput)).catch(() => resolve(sourceRootInput))
+  const targetRoot = resolve(targetRootInput)
   if (existsSync(targetRoot)) {
     const entries = await readdir(targetRoot)
     if (entries.length > 0) throw new Error(`target directory is not empty (${entries.length} entries): ${targetRoot}`)

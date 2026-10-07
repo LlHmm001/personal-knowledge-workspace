@@ -165,8 +165,24 @@ async function resolveReal(path) {
 
 async function assertNotServing(profileDir) {
   const { readlink } = await import('node:fs/promises')
-  const target = await resolveReal(profileDir)
-  // Check the destination and every ancestor for a `current` link.
+  // Resolve the destination first, so an intermediate symlink that points into the release
+  // is followed rather than compared as text.
+  let target = await resolveReal(profileDir)
+  if (!target) {
+    // The destination may not exist yet: resolve its deepest existing ancestor and append
+    // the remainder, then resolve the result too.
+    let probe = profileDir
+    const tail = []
+    for (let depth = 0; depth < 12; depth += 1) {
+      const real = await resolveReal(probe)
+      if (real) { target = tail.length ? join(real, ...tail.reverse()) : real; break }
+      tail.push(probe.split(sep).pop())
+      const parent = dirname(probe)
+      if (parent === probe) break
+      probe = parent
+    }
+  }
+  // Check the destination, its real form, and every ancestor for a `current` link.
   let dir = profileDir
   const seen = new Set()
   while (dir && !seen.has(dir)) {
@@ -187,6 +203,23 @@ async function assertNotServing(profileDir) {
     const parent = dirname(dir)
     if (parent === dir) break
     dir = parent
+  }
+  // Finally, walk the real ancestor chain of the resolved destination.
+  let realDir = target
+  const realSeen = new Set()
+  while (realDir && !realSeen.has(realDir)) {
+    realSeen.add(realDir)
+    const target2 = join(realDir, 'current')
+    const raw2 = await readlink(target2).catch(() => null)
+    if (raw2) {
+      const resolved2 = await resolveReal(target2)
+      if (resolved2 && (target === resolved2 || target?.startsWith(resolved2 + sep))) {
+        fail(`refusing to build into ${profileDir}: it resolves into the release in service (${target2} -> ${resolved2})`)
+      }
+    }
+    const parent = dirname(realDir)
+    if (parent === realDir) break
+    realDir = parent
   }
 }
 

@@ -380,13 +380,14 @@ test('switch: a failing stop is investigated instead of assuming what happened',
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 
-test('switch: a stop failure whose state cannot be observed proceeds with recovery', async () => {
+test('switch: a live instance whose stop state cannot be observed blocks recovery', async () => {
   const { root } = await makeRoot()
   const service = serviceStub(verifyOk)
   let stopAttempts = 0
   const hooks = {
     ...service.hooks,
-    stop: async () => { stopAttempts += 1; if (stopAttempts === 1) throw new Error('synthetic stop failure') },
+    stop: async () => { stopAttempts += 1; throw new Error('synthetic stop failure') },
+    // The previous writer is in fact still alive, but the probe cannot confirm it.
     isStopped: async () => ({ known: false }),
   }
   try {
@@ -394,18 +395,41 @@ test('switch: a stop failure whose state cannot be observed proceeds with recove
       root, version: NEW_VERSION, artifacts: [], registry: 'http://127.0.0.1:1', hooks,
       snapshotDir: join(root, 'snapshots', NEW_VERSION), deps: { prepareInstall: fakeInstall() },
     }), error => {
-      // The stop failed and its state is unknown. The transaction must not silently
-      // succeed; it must attempt recovery and report the original failure.
-      assert.equal(error.code, 'PKW_DEPLOYMENT_ROLLED_BACK', `unexpected code ${error.code}`)
-      assert.equal(error.report.stopState.assumed, 'stopped')
-      assert.match(error.message, /synthetic stop failure/, 'the original stop failure must be preserved')
-      assert.equal(error.report.rollback?.restoredVersion, OLD_VERSION, 'the old release must be restored')
-      assert.equal(error.report.recoverySteps.stopSkipped, true, 'recovery must record that it skipped the stop')
+      // Starting the old release beside a possibly live instance would create a second
+      // writer, so the recovery must refuse and keep the scene.
+      assert.equal(error.code, 'PKW_ROLLBACK_FAILED', `unexpected code ${error.code}`)
+      assert.match(error.message, /could not be established|did not restore|second instance/i)
       return true
     })
-    // The stop is attempted exactly once: a second attempt after a reported failure can
-    // take a healthy service down and fail again.
-    assert.equal(stopAttempts, 1, `the stop must be attempted once (attempts=${stopAttempts})`)
+    assert.equal(service.calls.start, 0, 'no start may be attempted without stop evidence')
+    assert.equal(await currentRelease(root), join(root, 'releases', OLD_VERSION), 'the release pointer must be left as it was')
+    assert.equal(stopAttempts, 1, 'a failed stop is never retried')
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('switch: an unknown stop state is never reported as stopped', async () => {
+  const { root } = await makeRoot()
+  const service = serviceStub(verifyOk)
+  let stopAttempts = 0
+  const hooks = {
+    ...service.hooks,
+    stop: async () => { stopAttempts += 1; if (stopAttempts === 1) throw new Error('synthetic stop failure') },
+    // The probe cannot establish whether the previous writer is still running.
+    isStopped: async () => ({ known: false }),
+  }
+  try {
+    await assert.rejects(() => switchRelease({
+      root, version: NEW_VERSION, artifacts: [], registry: 'http://127.0.0.1:1', hooks,
+      snapshotDir: join(root, 'snapshots', NEW_VERSION), deps: { prepareInstall: fakeInstall() },
+    }), error => {
+      assert.equal(error.code, 'PKW_ROLLBACK_FAILED', `unexpected code ${error.code}`)
+      // Nothing may claim the service stopped when that could not be established.
+      assert.notEqual(error.report.stopState?.stopped, true, `stopState must not claim stopped: ${JSON.stringify(error.report.stopState)}`)
+      assert.equal(service.calls.start, 0, 'no start may be attempted without stop evidence')
+      assert.match(error.message, /could not be established|cannot establish|stop failure/)
+      return true
+    })
+    assert.equal(stopAttempts, 1, 'the stop must be attempted once')
     assert.equal(await currentRelease(root), join(root, 'releases', OLD_VERSION))
   } finally { await rm(root, { recursive: true, force: true }) }
 })

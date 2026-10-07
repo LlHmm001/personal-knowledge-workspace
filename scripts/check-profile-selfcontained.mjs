@@ -107,16 +107,32 @@ let tracedImports = null
 if (values['trace-imports']) {
   const { spawn } = await import('node:child_process')
   const traceScript = join(dirname(fileURLToPath(import.meta.url)), 'tests/helpers/trace-imports.mjs')
-  const output = await new Promise(resolvePromise => {
+  // stdout carries the structured result, stderr carries diagnostics: mixing them would
+  // make an unparseable payload look like a successful trace.
+  const traced = await new Promise(resolvePromise => {
     const child = spawn(process.execPath, [traceScript, '--profile', profile], { stdio: ['ignore', 'pipe', 'pipe'] })
-    let out = ''
-    child.stdout.on('data', c => { out += c })
-    child.stderr.on('data', c => { out += c })
-    child.once('exit', () => resolvePromise(out))
+    let stdout = '', stderr = ''
+    child.stdout.on('data', c => { stdout += c })
+    child.stderr.on('data', c => { stderr += c })
+    child.once('error', error => resolvePromise({ code: -1, stdout, stderr: `${stderr}${error.message}` }))
+    child.once('exit', code => resolvePromise({ code, stdout, stderr }))
   })
-  try { tracedImports = JSON.parse(output.trim().split('\n').filter(Boolean).slice(-1)[0]) } catch { tracedImports = { error: output.slice(-300) } }
-  if (tracedImports?.importError) violations.push(`the entry point could not be imported: ${tracedImports.importError}`)
-  for (const file of tracedImports?.outside ?? []) violations.push(`the runtime loaded a file from outside the profile -> ${file}`)
+  if (traced.code !== 0 && traced.code !== 5) {
+    violations.push(`the import tracer exited ${traced.code}: ${traced.stderr.trim().split('\n').slice(-3).join(' | ').slice(0, 300)}`)
+  } else {
+    let parsed = null
+    try { parsed = JSON.parse(traced.stdout.trim()) } catch (error) {
+      violations.push(`the import tracer produced no parseable result: ${error.message}`)
+    }
+    if (parsed) {
+      if (typeof parsed.loaded !== 'number' || !Array.isArray(parsed.outside)) {
+        violations.push(`the import tracer result is missing required fields: ${JSON.stringify(Object.keys(parsed))}`)
+      }
+      if (parsed.importError) violations.push(`the entry point could not be imported: ${parsed.importError}`)
+      for (const file of parsed.outside ?? []) violations.push(`the runtime loaded a file from outside the profile -> ${file}`)
+      tracedImports = { loaded: parsed.loaded ?? null, outside: parsed.outside ?? [], exitCode: traced.code, stderr: traced.stderr.trim().slice(0, 200) }
+    }
+  }
 }
 
 const result = {

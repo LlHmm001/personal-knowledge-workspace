@@ -143,10 +143,21 @@ async function recoverPreviousRelease({ root, installed, snapshotDir, hooks, rep
   const steps = { stopped: skipStop, stopSkipped: skipStop, inputsRestored: false, currentRepointed: false, started: false }
   try {
     // The stop is attempted once. When it already reported failure, retrying it could take
-    // down a service that is healthy and fail again, so the caller's decision stands and the
-    // recovery proceeds to restore the inputs and start the release.
+    // down a service that is healthy and fail again, so the caller's decision stands.
     if (!skipStop) await hooks.stop()
     steps.stopped = true
+    // Before starting anything, establish that no writer is running. Starting the previous
+    // release beside a live instance would create the second writer this design exists to
+    // prevent, so a state that cannot be established stops the recovery here and leaves the
+    // scene (release, inputs, `current`) untouched for a human.
+    if (hooks.isStopped) {
+      const state = await hooks.isStopped().catch(() => ({ known: false }))
+      steps.stopEvidence = state
+      if (!(state.known === true && state.stopped === true)) {
+        report.status = 'recovery-blocked-unverified-stop'
+        return { recovered: false, error: { message: `cannot establish that the previous writer stopped (${JSON.stringify(state)}); refused to start a second instance` } }
+      }
+    }
     for (const name of PROFILE_INPUTS) {
       const from = join(snapshotDir, name)
       if (!existsSync(from)) continue
@@ -239,12 +250,14 @@ export async function switchRelease({
         failure.cause = error
         throw failure
       } else {
-        // Unknown: the safe reading is "assume it did stop" and let recovery try again.
-        // Refusing here would leave a service that may be down with the new release
-        // installed and no attempt to bring the old one back.
-        stopped = true
-        report.stopState = { ...state, assumed: 'stopped' }
-        report.stopFailureProceeded = true
+        // Unknown is not "stopped". The transaction ends here with the current release and
+        // the original error intact, and the recovery path decides what may be done: it will
+        // not start anything until it can establish that no writer is running.
+        // Unknown is not "stopped". The state is recorded and the transaction fails through
+        // the normal path, so the recovery logic (which refuses to start without evidence)
+        // makes the decision instead of a branch that skips recovery entirely.
+        report.stopState = { ...state, assumed: 'not-stopped' }
+        report.stopUnverified = true
       }
     } else {
       // No way to observe the state: assume the stop happened, because refusing to
@@ -259,8 +272,15 @@ export async function switchRelease({
     // failure, because pretending it succeeded would hide a service that did not stop
     // when it was told to.
     if (stopError) {
-      const failure = new Error(`the stop command reported failure: ${stopError.message}`)
-      failure.code = 'PKW_STOP_FAILED'
+      const failure = new Error(report.stopUnverified
+        ? `the stop command reported failure and the service state could not be established: ${stopError.message}`
+        : `the stop command reported failure: ${stopError.message}`)
+      failure.code = report.stopUnverified ? 'PKW_STOP_STATE_UNKNOWN' : 'PKW_STOP_FAILED'
+      throw failure
+    }
+    if (!stopped) {
+      const failure = new Error('the transaction did not establish that the service is stopped')
+      failure.code = 'PKW_STOP_STATE_UNKNOWN'
       throw failure
     }
     if (deps.afterStopBeforeDriftCheck) await deps.afterStopBeforeDriftCheck({ candidate, releaseDir })
@@ -294,12 +314,25 @@ export async function switchRelease({
   } catch (error) {
     report.activationError = { message: error.message, code: error.code ?? null, details: deploymentErrorDetails?.(error) }
     if (!stopped) {
-      // Nothing was stopped, so there is nothing to recover.
-      report.status = 'failed-before-stop'
-      const failure = new Error(`Deployment failed before the service was stopped: ${error.message}`)
-      failure.code = error.code ?? 'PKW_DEPLOYMENT_FAILED'
+      // Nothing was stopped. Recovery still runs when the stop itself failed, because the
+      // inputs may have to be restored and the state has to be established; it will refuse to
+      // start anything it cannot prove is safe. A failure that never attempted a stop has
+      // nothing to recover.
+      const stopWasAttempted = stopAlreadyFailed
+      if (!stopWasAttempted) {
+        report.status = 'failed-before-stop'
+        const failure = new Error(`Deployment failed before the service was stopped: ${error.message}`)
+        failure.code = error.code ?? 'PKW_DEPLOYMENT_FAILED'
+        failure.report = report
+        failure.cause = error
+        throw failure
+      }
+      const recovery = await recoverPreviousRelease({ root, installed, snapshotDir, hooks, report, skipStop: true })
+      report.status = recovery.recovered ? 'rolled-back-unverified' : 'recovery-blocked-unverified-stop'
+      const reasons = [error, ...(recovery.error ? [new Error(recovery.error.message)] : [])]
+      const failure = new AggregateError(reasons, `Deployment failed and the service state could not be established; the current release was left in place`)
+      failure.code = 'PKW_ROLLBACK_FAILED'
       failure.report = report
-      failure.cause = error
       throw failure
     }
 
