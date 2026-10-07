@@ -158,16 +158,14 @@ jobs:
         with:
           node-version: 22
       - run: pnpm install --frozen-lockfile
-      - name: Stage this checkout as a release
+      # Compiling the real sources needs the Harness declaration files, which only the
+      # job above has. Release mechanics do not, so this job uses a fixture release and a
+      # fixture Harness and still exercises the assembly and the isolation check for real.
+      - name: Generate the fixture release and Harness tree
         run: |
-          node -e "
-            const { stagePackages } = await import('./scripts/deployment.mjs');
-            const artifacts = await stagePackages('.ci/packages', '0.9.9-ci', 'http://127.0.0.1:4873');
-            console.log(JSON.stringify(artifacts.map(a => ({ name: a.name, sha256: a.sha256 })), null, 1));
-          " --input-type=module
-      - name: Generate the fixture Harness tree
-        run: node scripts/tests/helpers/fixture-harness.mjs "$PWD/.ci/harness"
-      - name: Build a self-contained profile from the staged release
+          node scripts/tests/helpers/fixture-release.mjs "$PWD/.ci/packages" 0.9.9-ci
+          node scripts/tests/helpers/fixture-harness.mjs "$PWD/.ci/harness"
+      - name: Assemble a self-contained profile from the staged release
         run: |
           node scripts/pkw-independent-profile.mjs \
             --profile "$PWD/.ci/profile" \
