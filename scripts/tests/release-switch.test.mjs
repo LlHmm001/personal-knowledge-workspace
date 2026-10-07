@@ -196,7 +196,7 @@ test('switch: a failure inside the transaction restores the old release and repo
       return true
     })
     assert.equal(await currentRelease(root), join(root, 'releases', OLD_VERSION), 'current must point back at the old release')
-    assert.equal(service.calls.stop, 2, 'the transaction stops for the switch and again for the recovery')
+    assert.equal(service.calls.stop, 1, 'the stop runs once for the whole switch; recovery never repeats it')
     assert.equal(service.calls.start, 2, 'the recovery must start the restored release')
     assert.equal(await profileVersion(join(root, 'releases', OLD_VERSION, 'profile')), OLD_VERSION)
   } finally { await rm(root, { recursive: true, force: true }) }
@@ -459,5 +459,42 @@ test('switch: a stop with no state callback is unknown, not stopped', async () =
     assert.equal(startAttempts, 0, 'a start without stop evidence would create a second writer')
     assert.equal(await currentRelease(root), join(root, 'releases', OLD_VERSION))
     assert.equal(stopAttempts, 1)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('switch: a probe reporting "still running" overrides a successful stop', async () => {
+  const { root } = await makeRoot()
+  const service = serviceStub(verifyOk)
+  let startAttempts = 0
+  let stopAttempts = 0
+  let probeCalls = 0
+  const order = []
+  const hooks = {
+    // The stop hook claims success, but the probe shows the writer is still alive.
+    stop: async () => { stopAttempts += 1; order.push('stop') }, // reports success
+    start: async () => { startAttempts += 1; order.push('start') },
+    isStopped: async () => { probeCalls += 1; order.push('probe'); return { known: true, stopped: false, source: 'synthetic-probe' } },
+    // Force the activation to fail so the recovery path is the one under test.
+    verify: async () => { throw new Error('synthetic verification failure') },
+    reachable: async () => ({ reachable: true, status: 200 }),
+  }
+  try {
+    await assert.rejects(() => switchRelease({
+      root, version: NEW_VERSION, artifacts: [], registry: 'http://127.0.0.1:1', hooks,
+      snapshotDir: join(root, 'snapshots', NEW_VERSION), deps: { prepareInstall: fakeInstall() },
+    }), error => {
+      // The stop was not confirmed, so the deployment fails and no rollback is claimed.
+      assert.equal(error.code, 'PKW_DEPLOYMENT_ROLLED_BACK', `unexpected code ${error.code}: ${error.message}`)
+      assert.equal(error.rollbackVerified, false, 'no rollback may be claimed')
+      assert.notEqual(error.report?.status, 'rolled-back', `status must not claim a rollback: ${error.report?.status}`)
+      return true
+    })
+    // The probe is consulted, and once it reports a live writer nothing may start: the one
+    // start in the log is the activation attempt that happened before the probe.
+    assert.equal(probeCalls, 1, `the probe must be consulted (order=${order.join(',')})`)
+    assert.equal(startAttempts, 1, `no further start may follow the probe (order=${order.join(',')})`)
+    assert.equal(order.indexOf('probe') < order.lastIndexOf('start'), false, `no start may come after the probe (order=${order.join(',')})`)
+    assert.equal(stopAttempts, 1, 'the stop must not be retried')
+    assert.equal(await currentRelease(root), join(root, 'releases', OLD_VERSION), 'current must not be repointed')
   } finally { await rm(root, { recursive: true, force: true }) }
 })

@@ -139,26 +139,23 @@ function releaseName(releasePath, root) {
 }
 
 /** Restore the previous release and start it again; report step-by-step progress. */
-async function recoverPreviousRelease({ root, installed, snapshotDir, hooks, report, skipStop = false }) {
+async function recoverPreviousRelease({ root, installed, snapshotDir, hooks, report, skipStop = false, stopSucceeded: stopSucceededFromTransaction = null }) {
   const steps = { stopSkipped: skipStop, stopSucceeded: false, evidence: null, inputsRestored: false, currentRepointed: false, started: false }
   try {
     // skipStop decides one thing only: whether the stop hook is executed again. It is not
     // evidence that anything stopped.
-    const stopSucceeded = skipStop ? false : await hooks.stop().then(() => true, () => false)
+    const stopSucceeded = stopSucceededFromTransaction ?? (skipStop ? false : await hooks.stop().then(() => true, () => false))
     steps.stopSucceeded = stopSucceeded
 
     // Establish real stop evidence *before* restoring inputs, repointing current, or starting.
     // The evidence is either the stop hook reporting success, or a probe that answers
     // "stopped" with certainty. Anything else is unknown, and unknown keeps the scene.
-    let evidence = stopSucceeded ? { known: true, stopped: true, source: 'stop-hook-succeeded' } : null
-    if (hooks.isStopped) {
-      const probed = await hooks.isStopped().catch(() => ({ known: false }))
-      steps.evidence = probed
-      if (probed.known === true && probed.stopped === true) {
-        evidence = { ...probed, source: probed.source ?? 'state-probe' }
-      } else if (evidence === null || probed.known !== true) {
-        evidence = null
-      }
+    // The transaction already established the evidence before calling recovery, so this only
+    // records it. A probe that reported a live writer never reaches this point.
+    let evidence = null
+    if (stopSucceeded || report.stopConfirmed === true) {
+      evidence = report.stopState ?? { known: true, stopped: true, source: 'stop-hook-succeeded' }
+      if (evidence.known !== true) evidence = { known: true, stopped: true, source: 'stop-hook-succeeded' }
     }
     if (evidence === null) {
       report.status = hooks.isStopped ? 'recovery-blocked-unverified-stop' : 'recovery-blocked-no-state-probe'
@@ -239,9 +236,11 @@ export async function switchRelease({
   // ── transaction: everything below runs while the service is stopped ───────────
   let stopped = false
   let stopError = null
+  let stopSucceeded = false
   try {
     await hooks.stop()
     stopped = true
+    stopSucceeded = true
   } catch (error) {
     // A stop that reports failure may still have stopped the service. Ask the site
     // rather than assuming, because the recovery path depends on the real state.
@@ -343,7 +342,7 @@ export async function switchRelease({
         failure.cause = error
         throw failure
       }
-      const recovery = await recoverPreviousRelease({ root, installed, snapshotDir, hooks, report, skipStop: true })
+      const recovery = await recoverPreviousRelease({ root, installed, snapshotDir, hooks, report, skipStop: true, stopSucceeded })
       report.status = recovery.recovered ? 'rolled-back-unverified' : 'recovery-blocked-unverified-stop'
       const reasons = [error, ...(recovery.error ? [new Error(recovery.error.message)] : [])]
       const failure = new AggregateError(reasons, `Deployment failed and the service state could not be established; the current release was left in place`)
@@ -352,7 +351,9 @@ export async function switchRelease({
       throw failure
     }
 
-    const recovery = await recoverPreviousRelease({ root, installed, snapshotDir, hooks, report, skipStop: stopAlreadyFailed })
+    // The stop ran once for this switch and its outcome is already known, so the recovery
+    // never repeats it: a second stop can take down a healthy service and fail again.
+    const recovery = await recoverPreviousRelease({ root, installed, snapshotDir, hooks, report, skipStop: true, stopSucceeded })
     const restoredVersion = await profileVersion(join(installed, 'profile'))
     report.rollback = { restoredRelease: installed, restoredVersion }
     if (!recovery.recovered || restoredVersion !== previousVersion) {
