@@ -31,7 +31,7 @@ import { createServer } from 'node:http'
 import { createRequire } from 'node:module'
 import { execFileSync, spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { dirname, join, resolve, sep } from 'node:path'
+import { dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
 
@@ -52,7 +52,8 @@ const { values } = parseArgs({ options: {
   profile: { type: 'string' }, version: { type: 'string', default: '0.0.0-independent' },
   store: { type: 'string' }, cache: { type: 'string' }, tmp: { type: 'string' },
   harness: { type: 'string' }, registry: { type: 'string' }, 'dry-run': { type: 'boolean', default: false },
-  'keep-staging': { type: 'boolean', default: false }, help: { type: 'boolean', default: false },
+  'keep-staging': { type: 'boolean', default: false }, 'allow-existing': { type: 'string' },
+  help: { type: 'boolean', default: false },
 } })
 if (values.help) { process.stdout.write(USAGE); process.exit(0) }
 if (!values.profile) { process.stderr.write(USAGE); process.exit(2) }
@@ -121,6 +122,56 @@ function resolvePeer(name) {
   return null
 }
 
+/**
+ * Refuse to build over anything that is not a brand-new candidate directory.
+ *
+ * The builder installs into `--profile`, so an unconditional remove-then-create
+ * would destroy whatever the caller pointed at — an installed DSH profile, the
+ * release currently serving, or a directory holding data. A destination is accepted
+ * only when it is provably fresh: either it does not exist, or it is an empty
+ * directory. `--allow-existing <path>` repeats the path as an explicit confirmation
+ * that the caller knows it is a candidate directory it owns.
+ */
+async function assertFreshCandidate(profileDir, confirmed) {
+  if (!isAbsolute(profileDir)) fail('--profile must be an absolute path')
+  if (confirmed && resolve(confirmed) !== profileDir) fail(`--allow-existing must repeat the exact --profile path (${profileDir})`)
+
+  // Refusals that no flag can override: an installed profile is never a build target.
+  for (const marker of ['cordis.yml', 'cordis.patch.yml']) {
+    if (existsSync(join(profileDir, marker))) {
+      fail(`refusing to build into ${profileDir}: it contains ${marker}, which marks an installed DSH/plugin profile, not a candidate directory`)
+    }
+  }
+  const manifestPath = join(profileDir, 'package.json')
+  if (existsSync(manifestPath)) {
+    let manifest = null
+    try { manifest = JSON.parse(await readFile(manifestPath, 'utf8')) } catch { manifest = null }
+    if (manifest && (/^dsh-profile/.test(manifest.name ?? '') || manifest.dsh !== undefined)) {
+      fail(`refusing to build into ${profileDir}: its package.json declares a DSH profile (${manifest.name ?? 'unnamed'})`)
+    }
+  }
+  // A directory currently in service is refused even when confirmed.
+  const inServiceMarkers = ['node_modules/@deepseek-ai/dsh-pkw-web/lib/collaboration/index.js']
+  const hasServiceShape = inServiceMarkers.every(rel => existsSync(join(profileDir, rel)))
+  if (hasServiceShape && !confirmed) {
+    fail(`refusing to build into ${profileDir}: it looks like an installed PKW profile. Pass --allow-existing ${profileDir} only if you have verified it is a candidate you own.`)
+  }
+
+  if (confirmed) return { removeFirst: true, confirmed: true }
+  try {
+    const info = await stat(profileDir)
+    if (!info.isDirectory()) fail(`--profile exists and is not a directory: ${profileDir}`)
+    const contents = await readdir(profileDir)
+    if (contents.length > 0) {
+      fail(`--profile is not empty (${contents.length} entries): ${profileDir}. Point it at a new candidate directory, or pass --allow-existing ${profileDir} if you have verified it is a candidate you own.`)
+    }
+    return { removeFirst: false }
+  } catch (error) {
+    if (error.code === 'ENOENT') return { removeFirst: false }
+    throw error
+  }
+}
+
 // ---------------------------------------------------------------- PKW packages
 const pkwRoot = join(repoRoot, 'packages/pkw')
 const pkwDirs = (await readdir(pkwRoot, { withFileTypes: true })).filter(e => e.isDirectory()).map(e => e.name).sort()
@@ -157,8 +208,9 @@ while (queue.length) {
 }
 if (unresolved.length) fail(`Cannot resolve required Harness peers: ${unresolved.join(', ')}`)
 
+const freshness = await assertFreshCandidate(profile, values['allow-existing'])
 const plan = {
-  profile, version, harnessRoot, repoRoot,
+  profile, version, harnessRoot, repoRoot, freshness,
   pkw: pkwManifests.map(p => ({ name: p.manifest.name, dir: join(pkwRoot, p.dir) })),
   peers: [...closure.values()].map(p => ({ name: p.name, version: p.version, dir: p.dir, origin: p.origin })),
   unresolved,
@@ -313,7 +365,7 @@ try {
     artifact.manifest = JSON.parse(execFileSync('tar', ['-xOf', artifact.tarball, 'package/package.json'], { encoding: 'utf8' }))
     registry.add(artifact)
   }
-  await rm(profile, { recursive: true, force: true })
+  if (freshness.removeFirst) await rm(profile, { recursive: true, force: true })
   await mkdir(profile, { recursive: true, mode: 0o700 })
   // An independent profile is a single-package workspace with hoisted layout: the
   // PKW plugin runtime expects to find packages by name at the profile root.

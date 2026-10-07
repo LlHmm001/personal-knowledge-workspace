@@ -18,9 +18,12 @@
  * single-user `/pkw` route on the DSH origin must answer 404, while the
  * authenticated collaboration gateway serves the portal.
  *
- * Authenticated acceptance is attempted only when an owner credential file is
- * supplied; when it is absent or rejected the report says so explicitly instead of
- * implying that business behaviour was verified.
+ * Two modes, never conflated:
+ *   - enforcing (default) requires a credential file, a working login, a serving
+ *     version that matches both the requested version and the installed one, and a
+ *     readable note. Missing credentials, a refused login or a version mismatch fail.
+ *   - `--diagnostics` is a read-only report that never gates a deployment and marks
+ *     every unverified check as not verified.
  *
  * Exit 0 = verified, non-zero = refused (reason on stderr, JSON on stdout).
  */
@@ -37,10 +40,18 @@ const { values } = parseArgs({ options: {
   'credentials-file': { type: 'string' },
   'deployment-version': { type: 'string' },
   username: { type: 'string' },
+  diagnostics: { type: 'boolean', default: false },
   help: { type: 'boolean', default: false },
 } })
 if (values.help || !values.profile || !values['public-origin']) {
   process.stdout.write(`Usage: node deploy/site/verify-collaboration.mjs --profile DIR --public-origin URL [options]
+
+  Two modes, and they are not interchangeable:
+    (default)      ENFORCING. Requires a credential file and a confirmed serving
+                   version. Missing credentials, a refused login, or a service that is
+                   not serving the expected version are failures.
+    --diagnostics  READ-ONLY report. Never gates anything: it prints what it could
+                   observe and marks every unverified check as not verified.
 
   --mode activate|rollback     which step is being verified (default activate)
   --version VERSION            version that must be installed and serving
@@ -62,7 +73,8 @@ const username = values.username ?? 'owner'
 function installedVersion() {
   try { return JSON.parse(readFileSync(`${profile}/node_modules/@deepseek-ai/dsh-pkw-web/package.json`, 'utf8')).version } catch { return undefined }
 }
-const evidence = { mode, requestedVersion, installedVersion: installedVersion(), checks: {}, ok: false }
+const enforcing = !values.diagnostics
+const evidence = { mode, enforcing, requestedVersion, installedVersion: installedVersion(), checks: {}, ok: false }
 const refuse = (message, extra = {}) => {
   console.error(`collaboration verifier (${mode}) refused: ${message}`)
   console.log(JSON.stringify({ ok: false, mode, error: message, ...evidence, ...extra }))
@@ -104,14 +116,19 @@ if (![401, 403, 404, 405].includes(anonymousApi.status)) refuse(`unauthenticated
 if (!requestedVersion) refuse(`${mode} verification requires the expected release version`)
 if (installedVersion() !== requestedVersion) refuse(`installed release is ${installedVersion()}, expected ${requestedVersion}`)
 
-// Authenticated, space-scoped business acceptance when an owner credential exists.
+// Authenticated, space-scoped business acceptance.
+//
+// In enforcing mode every one of these is mandatory: a deployment (or a rollback) is
+// not accepted on reachability alone. A read-only diagnostics run reports the same
+// observations but refuses to call itself a verification.
 let password = ''
 if (values['credentials-file']) {
   try { password = readFileSync(values['credentials-file'], 'utf8').trim() } catch { password = '' }
 }
 if (password === '') {
   evidence.checks.authenticated = 'not_verified_no_credentials'
-  evidence.note = 'owner credentials unavailable; authenticated space and version acceptance explicitly NOT verified'
+  evidence.note = 'owner credentials unavailable; authenticated space and version acceptance NOT verified'
+  if (enforcing) refuse('authenticated acceptance requires an owner credential file (--credentials-file); reachability alone is not acceptance')
 } else {
   const jar = new Map()
   const cookieHeader = () => [...jar].map(([k, v]) => `${k}=${v}`).join('; ')
@@ -130,9 +147,11 @@ if (password === '') {
     return { status: response.status, body: parsed, headers: response.headers }
   }
   const login = await call('/pkw/login', { method: 'POST', body: { username, password } })
+  evidence.checks.loginStatus = login.status
   if (login.status !== 200) {
-    evidence.checks.authenticated = 'not_verified_credentials_rejected'
-    evidence.note = `login refused with HTTP ${login.status}; authenticated acceptance NOT verified (credentials are supplied by the owner)`
+    evidence.checks.authenticated = 'failed_credentials_rejected'
+    evidence.note = `login refused with HTTP ${login.status}`
+    if (enforcing) refuse(`login was refused with HTTP ${login.status}; a deployment may not be accepted without a working authenticated session`)
   } else {
     const session = await call('/pkw/session')
     const value = session.body?.value ?? {}
@@ -140,19 +159,43 @@ if (password === '') {
     evidence.checks.authenticated = 'verified'
     evidence.checks.spaces = (value.spaces ?? []).map(space => `${space.kind}:${space.role}`)
     if (!priv) refuse('owner session exposes no private space')
+    if (!value.csrf) refuse('owner session exposes no CSRF token')
+    // The page must report the release that is actually serving, and it must be the
+    // expected one. This is the check that a health endpoint cannot stand in for.
     const page = await call(`/pkw/spaces/${priv.id}`)
     evidence.checks.spacePageStatus = page.status
-    evidence.checks.spacePageVersion = page.headers.get('x-pkw-version') ?? null
+    const serving = page.headers.get('x-pkw-version') ?? null
+    evidence.checks.servingVersion = serving
     if (page.status !== 200) refuse(`private space page is not served (HTTP ${page.status})`)
+    if (!serving) refuse('the space page reports no serving version; the running release cannot be confirmed')
+    if (requestedVersion && serving !== requestedVersion) refuse(`the service is running ${serving}, expected ${requestedVersion}`)
+    if (installedVersion() !== serving) refuse(`installed release is ${installedVersion()} but the service is running ${serving}; a restart has not taken effect`)
     const summary = await call(`/pkw/spaces/${priv.id}/api`, { method: 'POST', body: { method: 'summary', args: {} }, headers: { 'x-pkw-csrf': value.csrf } })
     evidence.checks.summaryStatus = summary.status
     evidence.checks.summary = {
       notes: summary.body?.value?.notes, attachments: summary.body?.value?.attachments, mappings: summary.body?.value?.mappings,
     }
     if (summary.status !== 200 || !Number.isInteger(summary.body?.value?.notes)) refuse('space summary business contract failed')
+    // Real reads, not just a count: the private space must return its notes and the
+    // attachment list must be reachable.
+    const notes = await call(`/pkw/spaces/${priv.id}/api`, { method: 'POST', body: { method: 'listNotes', args: {} }, headers: { 'x-pkw-csrf': value.csrf } })
+    evidence.checks.listNotesStatus = notes.status
+    if (notes.status !== 200) refuse(`listNotes failed (HTTP ${notes.status})`)
+    const listed = Array.isArray(notes.body?.value) ? notes.body.value : notes.body?.value?.notes
+    evidence.checks.noteCount = Array.isArray(listed) ? listed.length : null
+    if (!Array.isArray(listed)) refuse('listNotes did not return a note list')
+    if (listed.length > 0) {
+      const first = listed[0]
+      const noteId = first.noteId ?? first.id
+      const read = await call(`/pkw/spaces/${priv.id}/api`, { method: 'POST', body: { method: 'getNote', args: { noteId } }, headers: { 'x-pkw-csrf': value.csrf } })
+      evidence.checks.getNoteStatus = read.status
+      evidence.checks.noteReadable = read.status === 200 && typeof (read.body?.value?.note?.contentHash ?? read.body?.value?.content) !== 'undefined'
+      if (!evidence.checks.noteReadable) refuse('a note listed by the space could not be read back')
+    }
     await call('/pkw/manage', { method: 'POST', body: { action: 'logout' }, headers: { 'x-pkw-csrf': value.csrf } })
   }
 }
+
 evidence.ok = true
 console.log(JSON.stringify(evidence))
 process.exit(0)

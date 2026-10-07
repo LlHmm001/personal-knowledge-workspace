@@ -87,12 +87,22 @@ for (const dir of [hooks, logDir]) await mkdir(dir, { recursive: true, mode: 0o7
 // ---------------------------------------------------------------- isolated copies
 if (!existsSync(join(profile, 'package.json'))) {
   await cp(resolve(values['profile-source']), profile, { recursive: true, dereference: false })
-  report.phases.copyProfile = { from: resolve(values['profile-source']), to: profile }
+  report.phases.copyProfile = { from: resolve(values['profile-source']), to: profile, freshCandidate: true }
 }
 if (!existsSync(join(dataRoot, 'identity.sqlite'))) {
-  await cp(resolve(values['data-source']), dataRoot, { recursive: true, dereference: false })
-  for (const name of ['gateway.lock', 'identity.sqlite-wal', 'identity.sqlite-shm']) await rm(join(dataRoot, name), { force: true })
-  report.phases.copyData = { from: resolve(values['data-source']), to: dataRoot }
+  // A rehearsal copy must be self-contained: databases come from a consistent
+  // snapshot (not a file copy with the WAL deleted afterwards), and every absolute
+  // path that named the source is rewritten to the copy so nothing writes back.
+  const { copyDataRootConsistently } = await import('../scripts/tests/helpers/synthetic.mjs')
+  const copy = await copyDataRootConsistently(resolve(values['data-source']))
+  await cp(copy.root, dataRoot, { recursive: true, dereference: false })
+  await rm(copy.root, { recursive: true, force: true })
+  report.phases.copyData = { from: resolve(values['data-source']), to: dataRoot, rewrittenPaths: copy.rewrittenPaths.length, method: 'sqlite-snapshot' }
+  if (copy.rewrittenPaths.length === 0) {
+    // Not necessarily wrong — a data root with no absolute paths needs no rewrite —
+    // but it must be stated rather than assumed.
+    report.phases.copyData.note = 'no absolute source paths were found to rewrite'
+  }
 }
 // Point the copy at nothing remote: no production retrieval endpoint may be written.
 const configPath = join(workDir, 'collaboration.json')

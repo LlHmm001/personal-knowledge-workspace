@@ -57,9 +57,10 @@ const config = JSON.parse(await readFile(resolve(values.config), 'utf8'))
 // writer is still alive is never touched: refuse instead of racing for the root.
 const lock = await prepareRootLock(config.dataPath)
 if (!lock.ready) {
-  const detail = { status: 'lock-refused', reason: lock.reason, pid: lock.pid ?? null, lockPath: lock.lockPath ?? null }
-  console.error(JSON.stringify(detail))
-  process.exit(lock.reason === 'live-writer' ? 3 : 4)
+  // Refuse rather than guess. The exit code says which rule was hit, and the file is
+  // left exactly as found so a human can inspect the writer it names.
+  console.error(JSON.stringify({ status: 'lock-refused', reason: lock.reason, pid: lock.pid ?? null, detail: lock.detail ?? null, lockPath: lock.lockPath ?? null }))
+  process.exit(lock.exitCode ?? 5)
 }
 if (lock.recoveredFrom) console.log(JSON.stringify({ status: 'stale-lock-recovered', ...lock.recoveredFrom }))
 
