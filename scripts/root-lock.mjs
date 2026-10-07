@@ -10,15 +10,17 @@
  * writer still owns lets two writers loose on one data root.
  *
  *   live writer                     -> refuse (exit 3), lock untouched
- *   provably dead writer            -> clear, then let the gateway claim it again
+ *   pid provably not present        -> clear, then let the gateway claim it again
  *   empty, malformed or unreadable  -> refuse (exit 4), file left in place as evidence
- *   unknown                         -> refuse (exit 5): any doubt resolves to "live"
+ *   identity uncertain              -> refuse (exit 5): any doubt resolves to "live"
  *
- * A writer counts as live unless the process is gone *and* the identity matches:
- * the recorded pid must no longer exist, or the process that now owns that pid must
- * be provably a different process. Identity is not decided by a time delta alone; it
- * compares the process start time from `/proc/<pid>/stat` against the lock timestamp
- * with a small tolerance, and treats every unclear case as live.
+ * The *only* evidence that clears a lock is that the recorded pid does not exist.
+ * PID reuse is deliberately **not** inferred: the lock records a pid and a wall-clock
+ * timestamp, and comparing those two cannot distinguish a reused pid from a live
+ * writer — a safe inference would need every writer to record a stable process
+ * identity such as the boot id plus the process start time. Until the writers record
+ * that, a pid that exists is treated as the writer, and any metadata that cannot be
+ * read or interpreted leaves the lock in place.
  *
  * Concurrent starters are serialised through an exclusive `flock` on a gate file, so
  * only one process can be in the clearing path at a time and no starter can move a
@@ -29,35 +31,37 @@ import { join } from 'node:path'
 
 export const LOCK_EXIT = Object.freeze({ LIVE_WRITER: 3, UNREADABLE: 4, UNKNOWN: 5 })
 
-/** Linux USER_HZ used by /proc/<pid>/stat. */
-const USER_HZ = 100
-/** The gateway writes the lock immediately after starting, so the start time and the
- * lock timestamp are within this window; anything further apart is a different process. */
-const IDENTITY_TOLERANCE_MS = 2000
-
 async function readText(path) {
   try { return await readFile(path, 'utf8') } catch { return null }
 }
 
-function parseStatStartTicks(statText) {
-  if (!statText) return null
-  // The comm field may contain spaces and parentheses: parse after the last ')'.
+/**
+ * Whether a pid currently exists. `null` means the answer could not be obtained,
+ * which callers must treat as "exists": losing a lock is worse than refusing to start.
+ */
+async function pidExists(pid) {
+  try {
+    await stat(`/proc/${pid}`)
+    return true
+  } catch (error) {
+    if (error.code === 'ENOENT') return false
+    return null
+  }
+}
+
+/**
+ * Record a stable process identity for a lock.
+ * Provided so a site *can* enable automatic reuse detection once every writer records
+ * it; nothing infers reuse from a timestamp in the meantime.
+ */
+export async function processIdentity(pid = process.pid) {
+  const bootId = (await readText('/proc/sys/kernel/random/boot_id'))?.trim() ?? null
+  const statText = await readText(`/proc/${pid}/stat`)
+  if (statText === null || bootId === null) return null
   const after = statText.slice(statText.lastIndexOf(')') + 2).split(' ')
-  const ticks = Number(after[19])
-  return Number.isFinite(ticks) ? ticks : null
-}
-
-async function bootTimeMs() {
-  const uptime = await readText('/proc/uptime')
-  if (!uptime) return null
-  const seconds = Number(uptime.split(' ')[0])
-  return Number.isFinite(seconds) ? Date.now() - seconds * 1000 : null
-}
-
-/** Clock ticks since boot for a running pid, or null when it cannot be read. */
-async function startTicks(pid) {
-  try { await stat(`/proc/${pid}`) } catch { return null }
-  return parseStatStartTicks(await readText(`/proc/${pid}/stat`))
+  const startTicks = Number(after[19])
+  if (!Number.isFinite(startTicks)) return null
+  return { pid, bootId, startTicks: String(startTicks) }
 }
 
 /** Whether the pid currently belongs to a process running our listener, if knowable. */
@@ -70,22 +74,34 @@ async function looksLikeOurWriter(pid) {
 }
 
 /**
- * Decide whether the recorded writer is still alive.
- * `alive: true` also covers every case that cannot be decided with certainty.
+ * Decide whether the recorded writer may be treated as gone.
+ *
+ *   { gone: true }                     the pid does not exist — the only clearing case
+ *   { gone: false, certain: true }     the pid exists and is a process we can read
+ *   { gone: false, certain: false }    the answer could not be established
  */
 export async function writerStatus(record) {
   const pid = Number(record?.pid)
-  if (!Number.isInteger(pid) || pid <= 0) return { alive: true, reason: 'no-usable-pid' }
-  const ticks = await startTicks(pid)
-  if (ticks === null) return { alive: false, reason: 'pid-not-present' }
-  const boot = await bootTimeMs()
-  const recorded = Date.parse(record?.createdAt ?? '')
-  if (boot === null || !Number.isFinite(recorded)) return { alive: true, reason: 'identity-undecidable' }
-  const startMs = boot + ticks * (1000 / USER_HZ)
-  const delta = Math.abs(startMs - recorded)
-  if (delta > IDENTITY_TOLERANCE_MS) return { alive: false, reason: `pid-reuse (start differs by ${Math.round(delta)}ms)` }
+  if (!Number.isInteger(pid) || pid <= 0) return { gone: false, certain: false, reason: 'no-usable-pid' }
+  const exists = await pidExists(pid)
+  if (exists === false) return { gone: true, certain: true, reason: 'pid-not-present' }
+  if (exists === null) return { gone: false, certain: false, reason: 'pid-state-unreadable' }
+  const recorded = record?.identity
+  if (recorded && typeof recorded === 'object') {
+    // A recorded identity can be compared exactly; a mismatch means a different process.
+    const statText = await readText(`/proc/${pid}/stat`)
+    const bootId = (await readText('/proc/sys/kernel/random/boot_id'))?.trim() ?? null
+    if (statText !== null && bootId !== null) {
+      const after = statText.slice(statText.lastIndexOf(')') + 2).split(' ')
+      const same = bootId === recorded.bootId && String(after[19]) === String(recorded.startTicks)
+      return same
+        ? { gone: false, certain: true, reason: 'recorded-identity-matches' }
+        : { gone: true, certain: true, reason: 'recorded-identity-differs (pid was reused)' }
+    }
+    return { gone: false, certain: false, reason: 'identity-unreadable' }
+  }
   const ours = await looksLikeOurWriter(pid)
-  return { alive: true, reason: ours === true ? 'live-listener' : 'live-process-with-matching-start' }
+  return { gone: false, certain: ours !== null, reason: ours === true ? 'live-listener' : 'live-process' }
 }
 
 /**
@@ -131,9 +147,15 @@ export async function prepareRootLock(dataPath, { attempts = 2 } = {}) {
       return { ready: false, reason: 'lock-without-owner', exitCode: LOCK_EXIT.UNREADABLE, lockPath }
     }
     const status = await writerStatus(parsed)
-    if (status.alive) return { ready: false, reason: 'live-writer', exitCode: LOCK_EXIT.LIVE_WRITER, pid: parsed.pid, detail: status.reason, lockPath }
-    if (status.reason === 'identity-undecidable' || status.reason === 'no-usable-pid') {
-      return { ready: false, reason: 'unknown-writer', exitCode: LOCK_EXIT.UNKNOWN, pid: parsed.pid, detail: status.reason, lockPath }
+    if (!status.gone) {
+      // Live, or not decidable. Both keep the lock and refuse to start.
+      const undecided = status.certain === false
+      return {
+        ready: false,
+        reason: undecided ? 'writer-identity-uncertain' : 'live-writer',
+        exitCode: undecided ? LOCK_EXIT.UNKNOWN : LOCK_EXIT.LIVE_WRITER,
+        pid: parsed.pid, detail: status.reason, lockPath,
+      }
     }
 
     // The writer is gone. Serialise the clearing path so two starters cannot both act.
@@ -148,8 +170,14 @@ export async function prepareRootLock(dataPath, { attempts = 2 } = {}) {
         return { ready: false, reason: 'malformed-lock', exitCode: LOCK_EXIT.UNREADABLE, lockPath }
       }
       const statusAgain = await writerStatus(parsedAgain)
-      if (statusAgain.alive) {
-        return { ready: false, reason: 'live-writer', exitCode: LOCK_EXIT.LIVE_WRITER, pid: parsedAgain.pid, detail: statusAgain.reason, lockPath }
+      if (!statusAgain.gone) {
+        const undecided = statusAgain.certain === false
+        return {
+          ready: false,
+          reason: undecided ? 'writer-identity-uncertain' : 'live-writer',
+          exitCode: undecided ? LOCK_EXIT.UNKNOWN : LOCK_EXIT.LIVE_WRITER,
+          pid: parsedAgain.pid, detail: statusAgain.reason, lockPath,
+        }
       }
       // Record the inode, remove exactly that file, and confirm it is gone. Never
       // delete a file that is not the one just examined.

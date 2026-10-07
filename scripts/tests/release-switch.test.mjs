@@ -114,9 +114,13 @@ test('switch: a candidate that drifted after install is refused before the switc
           await writeFile(join(candidate, 'node_modules/@deepseek-ai/dsh-pkw-web/lib/index.js'), 'export const version = "tampered"\n')
         },
       },
-    }), error => error.code === 'PKW_CANDIDATE_DRIFT')
-    assert.equal(await currentRelease(root), join(root, 'releases', OLD_VERSION), 'current must be unchanged')
-    assert.ok(service.calls.stop >= 1 && service.calls.start >= 1, 'the service must be left running')
+    }), error => {
+      assert.equal(error.code, 'PKW_DEPLOYMENT_ROLLED_BACK', `unexpected code ${error.code}: ${error.message}`)
+      assert.match(error.message, /drifted/, `the original cause must be preserved: ${error.message}`)
+      return true
+    })
+    assert.equal(await currentRelease(root), join(root, 'releases', OLD_VERSION), 'current must point back at the old release')
+    assert.equal(service.calls.verify.length, 0, 'a drifted candidate must never reach verification')
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 
@@ -137,6 +141,59 @@ test('switch: a failing verification rolls back to the actual previous version',
     assert.equal(await profileVersion(oldProfile), OLD_VERSION, 'the restored release must declare the old version')
     assert.ok(service.calls.reachable >= 1, 'the rollback must confirm the restored release came back up')
     assert.deepEqual(service.calls.verify, [NEW_VERSION], 'acceptance runs for the release being deployed, not silently for the rollback')
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('switch: an existing snapshot directory is refused and never overwritten', async () => {
+  const { root } = await makeRoot()
+  const service = serviceStub(verifyOk)
+  const snapshotDir = join(root, 'snapshots', NEW_VERSION)
+  try {
+    await mkdir(snapshotDir, { recursive: true })
+    const keep = join(snapshotDir, 'existing-recovery-material')
+    await writeFile(keep, 'do not overwrite me\n')
+    await assert.rejects(() => switchRelease({
+      root, version: NEW_VERSION, artifacts: [], registry: 'http://127.0.0.1:1', hooks: service.hooks,
+      snapshotDir, deps: { prepareInstall: fakeInstall() },
+    }), /snapshot directory already exists/)
+    assert.equal(await readFile(keep, 'utf8'), 'do not overwrite me\n', 'existing recovery material must survive')
+    assert.equal(service.calls.stop, 0, 'the refusal happens before anything is stopped')
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('switch: a failure inside the transaction restores the old release and reports both errors', async () => {
+  const { root } = await makeRoot()
+  let startCalls = 0
+  const service = {
+    calls: { stop: 0, start: 0, verify: [] },
+    hooks: {
+      stop: async () => { service.calls.stop += 1 },
+      start: async () => {
+        startCalls += 1
+        service.calls.start += 1
+        // The first start is the new release; make it fail so the transaction has to
+        // recover, then let the recovery start succeed the second time.
+        if (startCalls === 1) throw new Error('synthetic failure while starting the new release')
+      },
+      verify: async context => verifyOk(context),
+      reachable: async () => ({ reachable: true, status: 200 }),
+    },
+  }
+  try {
+    await assert.rejects(() => switchRelease({
+      root, version: NEW_VERSION, artifacts: [], registry: 'http://127.0.0.1:1', hooks: service.hooks,
+      snapshotDir: join(root, 'snapshots', NEW_VERSION), deps: { prepareInstall: fakeInstall() },
+    }), error => {
+      assert.equal(error.code, 'PKW_DEPLOYMENT_ROLLED_BACK', `unexpected code ${error.code}: ${error.message}`)
+      // Both errors must be present: the original one and the recovery outcome.
+      assert.match(error.message, /synthetic failure while starting the new release/, 'the original error must be preserved')
+      assert.equal(error.cause?.message, 'synthetic failure while starting the new release')
+      return true
+    })
+    assert.equal(await currentRelease(root), join(root, 'releases', OLD_VERSION), 'current must point back at the old release')
+    assert.equal(service.calls.stop, 2, 'the transaction stops for the switch and again for the recovery')
+    assert.equal(service.calls.start, 2, 'the recovery must start the restored release')
+    assert.equal(await profileVersion(join(root, 'releases', OLD_VERSION, 'profile')), OLD_VERSION)
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 

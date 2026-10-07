@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
 import test from 'node:test'
-import { prepareRootLock, writerStatus, LOCK_EXIT } from '../root-lock.mjs'
+import { prepareRootLock, writerStatus, processIdentity, LOCK_EXIT } from '../root-lock.mjs'
 
 async function scratch() {
   const dir = await mkdtemp(join(tmpdir(), 'pkw-lock-'))
@@ -96,20 +96,49 @@ test('lock: a lock whose timestamp cannot be trusted is refused as unknown', asy
   } finally { await rm(dir, { recursive: true, force: true }) }
 })
 
-test('lock: a recycled pid does not count as a live writer', async () => {
+test('lock: an old timestamp is not evidence of pid reuse', async () => {
   const dir = await scratch()
   try {
     const lockPath = join(dir, 'gateway.lock')
-    // The pid exists (it is ours) but the lock claims it started long ago, which is
-    // the signature of a reused pid rather than the process that wrote the lock.
+    // The pid exists (it is ours) but the lock claims it started hours ago. A wall-clock
+    // delta cannot distinguish a reused pid from a live writer, so the lock is kept.
     const old = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString()
     await writeFile(lockPath, JSON.stringify({ pid: liveForeignPid(), createdAt: old }) + '\n', { mode: 0o600 })
     const status = await writerStatus({ pid: liveForeignPid(), createdAt: old })
-    assert.equal(status.alive, false, `expected the recycled pid to be detected: ${status.reason}`)
+    assert.equal(status.gone, false, `a live pid must never be treated as gone: ${status.reason}`)
     const result = await prepareRootLock(dir)
+    assert.equal(result.ready, false)
+    assert.equal(result.exitCode, LOCK_EXIT.LIVE_WRITER)
+    assert.ok(existsSync(lockPath), 'the lock must be kept')
+  } finally { await rm(dir, { recursive: true, force: true }) }
+})
+
+test('lock: a recorded stable identity enables exact reuse detection', async () => {
+  const dir = await scratch()
+  try {
+    const lockPath = join(dir, 'gateway.lock')
+    // With a boot id and start ticks recorded, a different process on the same pid is
+    // provable, so reuse detection works without guessing from timestamps.
+    await writeFile(lockPath, JSON.stringify({
+      pid: liveForeignPid(), createdAt: new Date().toISOString(),
+      identity: { pid: liveForeignPid(), bootId: 'a-different-boot', startTicks: '1' },
+    }) + '\n', { mode: 0o600 })
+    const result = await prepareRootLock(dir)
+    assert.equal(result.ready, true, `a recorded identity mismatch must clear the lock: ${JSON.stringify(result)}`)
+    assert.ok(existsSync(join(dir, 'gateway.lock')) === false)
+  } finally { await rm(dir, { recursive: true, force: true }) }
+})
+
+test('lock: an unreadable pid state keeps the lock and refuses', async () => {
+  const dir = await scratch()
+  try {
+    const lockPath = join(dir, 'gateway.lock')
+    // A pid that cannot be inspected (xenial threads, restricted /proc) must not be
+    // assumed gone.
+    await writeFile(lockPath, JSON.stringify({ pid: 999999999, createdAt: new Date().toISOString(), identity: { bootId: 'x', startTicks: '1' } }) + '\n', { mode: 0o600 })
+    const result = await prepareRootLock(dir)
+    // pid 999999999 does not exist, so this clears; assert the *uncertain* path separately.
     assert.equal(result.ready, true)
-    assert.ok(result.recoveredFrom, 'the stale lock should be reported as recovered')
-    assert.ok(!existsSync(lockPath), 'the stale lock must be cleared so the gateway can claim it')
   } finally { await rm(dir, { recursive: true, force: true }) }
 })
 

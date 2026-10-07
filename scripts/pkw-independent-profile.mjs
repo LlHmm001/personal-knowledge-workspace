@@ -57,6 +57,12 @@ const { values } = parseArgs({ options: {
 } })
 if (values.help) { process.stdout.write(USAGE); process.exit(0) }
 if (!values.profile) { process.stderr.write(USAGE); process.exit(2) }
+// Validated before resolving: resolving first would silently accept a relative path and
+// install somewhere the caller did not name.
+if (!isAbsolute(values.profile)) {
+  process.stderr.write(`--profile must be an absolute path; received ${JSON.stringify(values.profile)}\n`)
+  process.exit(2)
+}
 const profile = resolve(values.profile)
 const version = values.version
 const harnessRoot = resolve(values.harness ?? process.env.DSH_HARNESS_ROOT ?? '/opt/deepseek-harness')
@@ -132,7 +138,34 @@ function resolvePeer(name) {
  * directory. `--allow-existing <path>` repeats the path as an explicit confirmation
  * that the caller knows it is a candidate directory it owns.
  */
+/**
+ * Refuse a destination that is a release currently in service.
+ *
+ * `--allow-existing` confirms ownership of a candidate directory; it is not a licence
+ * to overwrite the profile a service is running from, so this check has no opt-out.
+ * A release root is recognised by a `current` symlink pointing at the destination or at
+ * a parent of it.
+ */
+async function assertNotServing(profileDir) {
+  const { readlink } = await import('node:fs/promises')
+  let dir = profileDir
+  for (let depth = 0; depth < 6; depth += 1) {
+    const link = join(dir, 'current')
+    const target = await readlink(link).catch(() => null)
+    if (target) {
+      const resolved = resolve(dirname(link), target)
+      if (resolved === profileDir || profileDir.startsWith(resolved + sep) || resolved.startsWith(profileDir + sep)) {
+        fail(`refusing to build into ${profileDir}: it is the release in service (current -> ${resolved})`)
+      }
+    }
+    const parent = dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+}
+
 async function assertFreshCandidate(profileDir, confirmed) {
+  await assertNotServing(profileDir)
   if (!isAbsolute(profileDir)) fail('--profile must be an absolute path')
   if (confirmed && resolve(confirmed) !== profileDir) fail(`--allow-existing must repeat the exact --profile path (${profileDir})`)
 
