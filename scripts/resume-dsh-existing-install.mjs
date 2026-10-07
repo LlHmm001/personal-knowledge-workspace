@@ -163,6 +163,12 @@ export function snapshotWorkspace(rows) {
 
 /** Compose configuration without CLI boot, link repair, installs or writes. */
 export async function verifyResumeConfiguration({ profile, installAnchor, baselineFile, snapshot, homePatchFile }, { boot, yaml, H }) {
+  // Older supported Harness releases expose these readers but do not export
+  // loadProfileDirectory. Do not substitute loadProfile: it can initialize or
+  // normalize the profile on disk before returning the same configuration.
+  for (const name of ['readProfileManifest', 'resolveBundleDir', 'loadOverlayPatches', 'loadOptionalPatches', 'composeEntries']) {
+    if (typeof boot?.[name] !== 'function') snapshotError('HOST_BOOT_API_UNSUPPORTED');
+  }
   const watched = new Map();
   const watch = path => {
     const bytes = fs.readFileSync(path), hash = createHash('sha256').update(bytes).digest('hex');
@@ -173,7 +179,17 @@ export async function verifyResumeConfiguration({ profile, installAnchor, baseli
   const js = new yaml.Type('tag:yaml.org,2002:js', { kind: 'scalar', construct: v => ({ __jsExpr: v }) });
   const schema = yaml.JSON_SCHEMA.extend(js);
   const parse = path => yaml.load(watch(path), { schema });
-  const currentManifest = JSON.parse(watch(join(profile, 'package.json')));
+  const manifestPath = join(profile, 'package.json');
+  const manifestBytes = watch(manifestPath);
+  const currentManifest = boot.readProfileManifest('dsh', profile);
+  if (!equal(currentManifest, JSON.parse(manifestBytes))) snapshotError('BUNDLE_FILES_CHANGED_DURING_CHECK');
+  watch(manifestPath);
+  const bundles = currentManifest.dsh?.profile?.bundles ?? [];
+  if (!Array.isArray(bundles) || bundles.some(name => typeof name !== 'string' || !name || name.trim() !== name)) {
+    snapshotError('INVALID_PROFILE_BUNDLES');
+  }
+  const patchReload = currentManifest.dsh?.profile?.patchReload;
+  if (patchReload !== undefined && patchReload !== 'live' && patchReload !== 'startup') snapshotError('INVALID_PROFILE_PATCH_RELOAD');
   const bundlePatch = name => {
     const dir = boot.resolveBundleDir('dsh', name, installAnchor, profile);
     const manifest = JSON.parse(watch(join(dir, 'package.json'))), declared = manifest.dsh?.bundle?.patch;
@@ -183,12 +199,14 @@ export async function verifyResumeConfiguration({ profile, installAnchor, baseli
     watch(path);
     return path;
   };
-  for (const name of currentManifest.dsh.profile.bundles) bundlePatch(name);
-  if (fs.existsSync(join(profile, 'cordis.patch.yml'))) watch(join(profile, 'cordis.patch.yml'));
+  const layers = bundles.map(name => boot.loadOverlayPatches('dsh', bundlePatch(name)));
+  const profilePatch = join(profile, 'cordis.patch.yml');
+  const hasProfilePatch = fs.existsSync(profilePatch);
+  if (hasProfilePatch) watch(profilePatch);
   if (fs.existsSync(homePatchFile)) watch(homePatchFile);
-  const p = boot.loadProfileDirectory('dsh', profile, installAnchor);
+  const profilePatches = hasProfilePatch ? boot.loadOverlayPatches('dsh', profilePatch) : [];
   const warnings = [];
-  const rows = boot.composeEntries([...p.layers.map(x => x.patches), p.patches,
+  const rows = boot.composeEntries([...layers, profilePatches,
     boot.loadOptionalPatches('dsh', homePatchFile) ?? []], x => warnings.push(x));
   if (warnings.length) snapshotError('CONFIG_PATCH_WARNING');
   let historicalRows;

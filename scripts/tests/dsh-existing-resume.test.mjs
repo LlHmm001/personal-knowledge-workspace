@@ -25,6 +25,17 @@ test('resume module can be parsed and imported without starting services or open
   assert.equal(output, 'import-only');
 });
 
+test('configuration verification rejects missing read-only boot APIs before reading profile files', async () => {
+  const required = ['readProfileManifest', 'resolveBundleDir', 'loadOverlayPatches', 'loadOptionalPatches', 'composeEntries'];
+  for (const name of required) {
+    for (const value of [undefined, 'not-a-function']) {
+      const boot = Object.fromEntries(required.map(key => [key, () => { throw new Error('must not run'); }]));
+      boot[name] = value;
+      await assert.rejects(verifyResumeConfiguration({}, { boot, yaml: {}, H: {} }), { code: 'HOST_BOOT_API_UNSUPPORTED' });
+    }
+  }
+});
+
 test('site inputs stay in arguments and the inspected profile must match the existing web unit', () => {
   assert.equal(parseResumeOptions(args)['trusted-host'], 'example.invalid');
   assert.throws(() => parseResumeOptions(args.map(x => x === '/root/.dsh/profiles/web' ? '/example/other-profile' : x)), { code: 'UNSUPPORTED_SERVICE_PROFILE' });
@@ -402,7 +413,11 @@ test('real Harness reconstructs a saved profile without installing, evaluating p
   { skip: !process.env.DSH_RESUME_TEST_HARNESS }, async t => {
     const harness = process.env.DSH_RESUME_TEST_HARNESS;
     assert.equal(isAbsolute(harness), true, 'DSH_RESUME_TEST_HARNESS must be an absolute Harness path');
-    const boot = await import(pathToFileURL(join(harness, 'packages/boot/app-boot/lib/index.js')).href);
+    const harnessRequire = createRequire(join(harness, 'apps/cli/package.json'));
+    const boot = await import(pathToFileURL(harnessRequire.resolve('@deepseek-ai/dsh-app-boot')).href);
+    const legacyBoot = { ...boot, loadProfile() { throw new Error('loadProfile may write and must never be called'); } };
+    delete legacyBoot.loadProfileDirectory;
+    assert.equal(legacyBoot.loadProfileDirectory, undefined);
     const yaml = createRequire(join(harness, 'vendor/include/package.json'))('js-yaml');
     const H = await import('../recover-dsh-without-pkw.mjs');
     const root = await mkdtemp(join(tmpdir(), 'dsh-resume-harness-'));
@@ -483,26 +498,81 @@ test('real Harness reconstructs a saved profile without installing, evaluating p
       assert.throws(() => boot.resolveBundleDir('dsh', '@deepseek-ai/dsh-pkw-base', installAnchor, profile),
         /cannot resolve profile bundle/, 'the historical PKW bundle is intentionally not installed');
 
-      await t.test('reconstructs with current host bundles and the original relative-plugin anchor', async () => {
-        const before = await fixtureTreeFingerprint(root), compositions = [];
-        const inspectedBoot = { ...boot, composeEntries(layers, warn) {
-          const rows = boot.composeEntries(layers, warn);
-          compositions.push(structuredClone(rows));
-          return rows;
-        } };
-        const result = await verifyResumeConfiguration(options, { boot: inspectedBoot, yaml, H });
-        assert.equal(result.sourceKind, 'saved-profile-inputs-current-host-bundles');
-        assert.equal(compositions.length, 2);
-        for (const rows of compositions) {
-          assert.equal(rows.find(row => row.id === 'local-extra').name, pathToFileURL(join(profile, 'relative-plugin.mjs')).href);
-          assert.equal(rows.some(row => row.id === 'pkw-notes'), false);
-          assert.deepEqual(rows.find(row => row.id === 'storage-json').config.root, { __jsExpr: "dshHomePath('storages')" });
-          assert.equal(rows.find(row => row.id === 'workspace').config.label, 'saved-workspace');
+      for (const [apiLabel, publicBoot] of [['modern public APIs', boot], ['legacy public APIs without loadProfileDirectory', legacyBoot]]) {
+        await t.test(`reconstructs through ${apiLabel} with original layer semantics and relative-plugin anchor`, async () => {
+          const before = await fixtureTreeFingerprint(root), compositions = [];
+          let manifestReads = 0;
+          const inspectedBoot = { ...publicBoot, readProfileManifest(...args) {
+            manifestReads++;
+            return publicBoot.readProfileManifest(...args);
+          }, composeEntries(layers, warn) {
+            const rows = boot.composeEntries(layers, warn);
+            compositions.push(structuredClone(rows));
+            return rows;
+          } };
+          const nativeProfile = boot.loadProfileDirectory('dsh', profile, installAnchor);
+          const oracleWarnings = [];
+          const oracleRows = boot.composeEntries([...nativeProfile.layers.map(layer => layer.patches), nativeProfile.patches,
+            boot.loadOptionalPatches('dsh', homePatchFile) ?? []], warning => oracleWarnings.push(warning));
+          assert.deepEqual(oracleWarnings, []);
+          const result = await verifyResumeConfiguration(options, { boot: inspectedBoot, yaml, H });
+          assert.equal(manifestReads, 1, 'the official read-only manifest validator must run');
+          assert.equal(result.sourceKind, 'saved-profile-inputs-current-host-bundles');
+          assert.equal(compositions.length, 2);
+          assert.deepEqual(compositions[0], oracleRows, 'public API composition must match the directory reader layer order');
+          for (const rows of compositions) {
+            assert.equal(rows.find(row => row.id === 'local-extra').name, pathToFileURL(join(profile, 'relative-plugin.mjs')).href);
+            assert.equal(rows.some(row => row.id === 'pkw-notes'), false);
+            assert.deepEqual(rows.find(row => row.id === 'storage-json').config.root, { __jsExpr: "dshHomePath('storages')" });
+            assert.equal(rows.find(row => row.id === 'workspace').config.label, 'saved-workspace');
+          }
+          assert.deepEqual([...globalThis[marker]].sort(), [...libraries].sort(), 'all five installed library entries were imported');
+          assert.ok(result.inputs.some(([path]) => path === join(bundle, 'cordis.patch.yml')));
+          assert.ok(result.inputs.some(([path]) => path === join(snapshot, 'package.json')));
+          assert.equal(result.inputs.some(([path]) => path.startsWith(join(snapshot, 'node_modules'))), false);
+          assert.deepEqual(await fixtureTreeFingerprint(root), before);
+        });
+      }
+
+      await t.test('legacy API rejects invalid manifests and patchReload without normalizing or writing them', async () => {
+        const manifestFile = join(profile, 'package.json');
+        for (const [value, rejection] of [
+          [[], /must hold a JSON object/],
+          [{ ...currentManifest, dsh: { profile: { ...currentManifest.dsh.profile, patchReload: 'sometimes' } } }, { code: 'INVALID_PROFILE_PATCH_RELOAD' }],
+          [{ ...currentManifest, dsh: { profile: { ...currentManifest.dsh.profile, bundles: bundleName } } }, { code: 'INVALID_PROFILE_BUNDLES' }],
+        ]) {
+          await writeFile(manifestFile, JSON.stringify(value));
+          try {
+            const before = await fixtureTreeFingerprint(root);
+            await assert.rejects(verifyResumeConfiguration(options, { boot: legacyBoot, yaml, H }), rejection);
+            assert.deepEqual(await fixtureTreeFingerprint(root), before);
+          } finally { await writeFile(manifestFile, JSON.stringify(currentManifest)); }
         }
-        assert.deepEqual([...globalThis[marker]].sort(), [...libraries].sort(), 'all five installed library entries were imported');
-        assert.ok(result.inputs.some(([path]) => path === join(bundle, 'cordis.patch.yml')));
-        assert.ok(result.inputs.some(([path]) => path === join(snapshot, 'package.json')));
-        assert.equal(result.inputs.some(([path]) => path.startsWith(join(snapshot, 'node_modules'))), false);
+      });
+
+      await t.test('legacy API accepts default and startup patchReload without persisting defaults', async () => {
+        const manifestFile = join(profile, 'package.json');
+        for (const patchReload of [undefined, 'startup']) {
+          const manifest = structuredClone(currentManifest);
+          if (patchReload === undefined) delete manifest.dsh.profile.patchReload;
+          else manifest.dsh.profile.patchReload = patchReload;
+          await writeFile(manifestFile, JSON.stringify(manifest));
+          try {
+            const before = await fixtureTreeFingerprint(root);
+            await verifyResumeConfiguration(options, { boot: legacyBoot, yaml, H });
+            assert.deepEqual(await fixtureTreeFingerprint(root), before);
+          } finally { await writeFile(manifestFile, JSON.stringify(currentManifest)); }
+        }
+      });
+
+      await t.test('manifest parser output must match the bound file rather than silently normalize it', async () => {
+        const before = await fixtureTreeFingerprint(root);
+        const changedBoot = { ...legacyBoot, readProfileManifest(...args) {
+          const manifest = boot.readProfileManifest(...args);
+          manifest.dsh.profile.bundles = [];
+          return manifest;
+        } };
+        await assert.rejects(verifyResumeConfiguration(options, { boot: changedBoot, yaml, H }), { code: 'BUNDLE_FILES_CHANGED_DURING_CHECK' });
         assert.deepEqual(await fixtureTreeFingerprint(root), before);
       });
 
@@ -516,7 +586,9 @@ test('real Harness reconstructs a saved profile without installing, evaluating p
           await writeFile(join(snapshot, 'cordis.patch.yml'), changedPatch);
           try {
             const before = await fixtureTreeFingerprint(root);
-            await assert.rejects(verifyResumeConfiguration(options, { boot, yaml, H }), rejection);
+            for (const api of [boot, legacyBoot]) {
+              await assert.rejects(verifyResumeConfiguration(options, { boot: api, yaml, H }), rejection);
+            }
             assert.deepEqual(await fixtureTreeFingerprint(root), before);
           } finally { await writeFile(join(snapshot, 'cordis.patch.yml'), oldPatch); }
         });
@@ -524,7 +596,9 @@ test('real Harness reconstructs a saved profile without installing, evaluating p
       await t.test('rejects a missing historical home layer when a current home patch exists', async () => {
         await rm(join(snapshot, 'home-cordis.patch.yml'));
         const before = await fixtureTreeFingerprint(root);
-        await assert.rejects(verifyResumeConfiguration(options, { boot, yaml, H }), { code: 'SNAPSHOT_HOME_LAYER_MISSING' });
+        for (const api of [boot, legacyBoot]) {
+          await assert.rejects(verifyResumeConfiguration(options, { boot: api, yaml, H }), { code: 'SNAPSHOT_HOME_LAYER_MISSING' });
+        }
         assert.deepEqual(await fixtureTreeFingerprint(root), before);
       });
     } finally {
