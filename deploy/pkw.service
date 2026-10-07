@@ -1,0 +1,45 @@
+# PKW independent collaboration service (template).
+#
+# Install:
+#   sed -e 's|@PKW_ROOT@|/LlHmm9527/pkw|g' \
+#       -e 's|@PKW_VERSION@|0.1.8-pkw.1|g' \
+#       deploy/pkw.service > /etc/systemd/system/pkw-collaboration.service
+#   systemctl daemon-reload
+#
+# Deliberately absent: any DSH path, and any stop/start hook for another service.
+# This unit owns one process, one profile and one data root. It must never need to
+# stop or restart DSH, and DSH must never need to stop it.
+#
+# The release directory is a symlink flipped atomically by the deployment script;
+# this unit reads it only at start, so a switch never disturbs a running process.
+[Unit]
+Description=PKW collaboration gateway (private/team spaces, authenticated /pkw)
+Documentation=https://github.com/LlHmm001/personal-knowledge-workspace
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+# The profile carries its own pinned Harness peers; no ancestor lookup is used.
+WorkingDirectory=@PKW_ROOT@/current/profile
+Environment=HOME=@PKW_ROOT@
+Environment=DSH_HOME=@PKW_ROOT@
+# Only PKW's own secrets belong here (retrieval API key, gateway password).
+EnvironmentFile=@PKW_ROOT@/secrets/pkw-gateway.env
+# Below TimeoutStopSec on purpose: the listener reports a forced exit (code 1)
+# before systemd escalates to SIGKILL, so a non-graceful stop is always visible.
+Environment=PKW_DRAIN_TIMEOUT_MS=25000
+ExecStart=/usr/local/bin/node @PKW_ROOT@/current/scripts/serve-collaboration.mjs \
+  --profile @PKW_ROOT@/current/profile \
+  --config @PKW_ROOT@/secrets/collaboration.json \
+  --port 3081
+Restart=always
+RestartSec=3
+TimeoutStopSec=30
+# A failed stop must be recorded rather than retried silently forever.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Install]
+WantedBy=multi-user.target

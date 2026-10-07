@@ -172,11 +172,48 @@ export function deploymentErrorDetails(error, seen = new Set(), depth = 0) {
   return result
 }
 
+/** A profile snapshot fingerprint: the inputs a rollback has to reproduce. */
+export async function profileInputDigest(profile) {
+  const parts = []
+  for (const name of ['package.json', 'pnpm-lock.yaml', 'package-lock.json', '.npmrc']) {
+    const file = join(profile, name)
+    parts.push(`${name}:${await exists(file) ? sha256(await readFile(file)) : 'absent'}`)
+  }
+  parts.push(`modules:${await exists(join(profile, 'node_modules/.modules.yaml')) ? sha256(await readFile(join(profile, 'node_modules/.modules.yaml'))) : 'absent'}`)
+  return sha256(parts.join('\n'))
+}
+
+/**
+ * Install the release into the profile *without* stopping the service first.
+ *
+ * Rationale: stopping the service and only then discovering that the profile
+ * cannot be installed leaves a stopped service and no rollback material. Doing the
+ * install first keeps the previous release serving for the whole preparation
+ * phase; a failure here is reported and nothing is stopped.
+ *
+ * The result is adopted by `activate()` only if the profile inputs are unchanged
+ * between preparation and adoption, so the snapshot still captures a comparable
+ * state and a concurrent writer cannot slip an unnoticed change past the check.
+ */
+export async function prepareInstall({ profile, artifacts, registry, storeDir }, execute = run) {
+  const before = await profileInputDigest(profile)
+  const args = ['add', '--save-exact', '--ignore-scripts', '--config.auto-install-peers=false', `--registry=${registry}`, `--@deepseek-ai:registry=${registry}`]
+  if (storeDir) args.push(`--store-dir=${storeDir}`)
+  args.push(...artifacts.map(p => `${p.name}@${p.version}`))
+  await execute('pnpm', args, profile)
+  await execute(process.execPath, [join(repoRoot, 'scripts/check-runtime-imports.mjs'), '--profile', profile, '--version', artifacts[0].version], profile)
+  return { inputDigest: before, installedAt: new Date().toISOString() }
+}
+
 /** Rollback installation on failure, and do not report success if recovery fails.
  * A custom verifier must enforce the deployment's real page/business contract
  * for BOTH activation and rollback; the default remains the strict HTTP probe.
+ *
+ * options.prepared, when present, is the result of `prepareInstall()`: the install
+ * has already happened with the service still up, so this call snapshots the
+ * restored profile first and then only switches.
  */
-export async function activate({ profile, backup, artifacts, registry, stop, start, url, beforeHost, verify: configuredVerify }, execute = run, verify = configuredVerify === undefined ? verifyHttp : configuredVerify) {
+export async function activate({ profile, backup, artifacts, registry, stop, start, url, beforeHost, prepared, verify: configuredVerify }, execute = run, verify = configuredVerify === undefined ? verifyHttp : configuredVerify) {
   // Existing deployment adapters supply options.verify. Never silently ignore
   // their authenticated probe or choose between two different verifiers.
   if (configuredVerify !== undefined && verify !== configuredVerify) throw new TypeError('Conflicting deployment verifiers: use options.verify or the third argument')
@@ -186,10 +223,17 @@ export async function activate({ profile, backup, artifacts, registry, stop, sta
     await execute(stop, [], profile)
     await snapshotProfile(profile, backup)
     snapshotted = true
-    await execute('pnpm', ['add', '--save-exact', '--ignore-scripts', '--config.auto-install-peers=false', `--registry=${registry}`, `--@deepseek-ai:registry=${registry}`, ...artifacts.map(p => `${p.name}@${p.version}`)], profile)
+    if (prepared) {
+      // The install ran while the service was still serving. If anything changed
+      // the profile inputs in between, refuse rather than adopt an unknown state.
+      const now = await profileInputDigest(profile)
+      if (now !== prepared.inputDigest) throw new Error('Profile inputs changed between preparation and adoption; refusing to adopt an unknown snapshot')
+    } else {
+      await execute('pnpm', ['add', '--save-exact', '--ignore-scripts', '--config.auto-install-peers=false', `--registry=${registry}`, `--@deepseek-ai:registry=${registry}`, ...artifacts.map(p => `${p.name}@${p.version}`)], profile)
+    }
     const afterHost = await hostFingerprint(profile)
     if (JSON.stringify(beforeHost) !== JSON.stringify(afterHost)) throw new Error('Harness peer entries changed during profile install')
-    await execute(process.execPath, [join(repoRoot, 'scripts/check-runtime-imports.mjs'), '--profile', profile, '--version', artifacts[0].version], profile)
+    if (!prepared) await execute(process.execPath, [join(repoRoot, 'scripts/check-runtime-imports.mjs'), '--profile', profile, '--version', artifacts[0].version], profile)
     await execute(start, [], profile)
     return await verify(url, 15, artifacts[0].version)
   } catch (error) {
