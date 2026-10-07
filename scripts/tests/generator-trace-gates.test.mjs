@@ -11,7 +11,7 @@
  */
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -165,4 +165,102 @@ test('trace gate: combined with the checker flags, a refused trace becomes a vio
     assert.equal(result.code, 2, `unexpected exit ${result.code}: ${result.stderr}`)
     assert.match(result.stderr, /not an installed profile/)
   } finally { await rm(dir, { recursive: true, force: true }) }
+})
+
+// ── the real entry point, end to end ─────────────────────────────────────────────────────────
+
+/**
+ * A profile with a real peer closure, which the generator needs to start an actual listener.
+ * Required, never guessed; the test declares the skip and names the input.
+ */
+function profileUnderTest() {
+  return process.env.PKW_TEST_PROFILE ?? ''
+}
+
+/** The first port from `from` that nothing is listening on, so a parallel test cannot collide. */
+async function freePort(from) {
+  const { createServer } = await import('node:net')
+  for (let port = from; port < from + 200; port += 1) {
+    const free = await new Promise(resolvePromise => {
+      const server = createServer()
+      server.once('error', () => resolvePromise(false))
+      server.once('listening', () => server.close(() => resolvePromise(true)))
+      server.listen(port, '127.0.0.1')
+    })
+    if (free) return port
+  }
+  throw new Error(`no free port in ${from}..${from + 200}`)
+}
+
+test('generator: the real entry point generates a fixture and stops its listener', {
+  skip: profileUnderTest() ? false : 'no PKW profile available (set PKW_TEST_PROFILE)',
+}, async () => {
+  // The whole entry point: it must see the listener's own startup line while it is still printing,
+  // confirm health from that process, create the fixture through the product API, stop the
+  // listener, and exit 0. The log is read live, so a fixed snapshot would fail here.
+  const workspace = await mkdtemp(join(tmpdir(), 'pkw-gen-real-'))
+  const target = join(workspace, 'data')
+  const port = await freePort(42711)
+  try {
+    const generator = join(process.cwd(), 'scripts/tests/helpers/generate-fixture.mjs')
+    const result = await new Promise(resolvePromise => {
+      const child = spawn(process.execPath, [
+        generator, '--target', target, '--profile', profileUnderTest(), '--port', String(port),
+      ], { stdio: ['ignore', 'pipe', 'pipe'] })
+      let stdout = '', stderr = ''
+      child.stdout.on('data', chunk => { stdout += chunk })
+      child.stderr.on('data', chunk => { stderr += chunk })
+      child.once('exit', code => resolvePromise({ code, stdout, stderr }))
+    })
+    assert.equal(result.code, 0, `the generator failed: ${result.stderr.slice(-600)}`)
+    const report = JSON.parse(result.stdout)
+    // The listener was stopped, and stopped by exiting rather than by being killed.
+    assert.deepEqual(report.stopped, { exitCode: 0, signal: null, spawnError: null })
+    assert.match(report.spaceId, /^sp_/)
+    assert.match(report.noteId, /^note_/)
+    assert.equal(report.attachmentBytes, 27)
+    assert.equal(report.attachment?.sizeBytes, 27, 'the upload is reported with its stored size')
+    assert.match(report.attachment?.attachmentId ?? '', /^att_/)
+    // The fixture is a real data root: its own databases, and the note on disk.
+    const entries = (await readdir(target)).sort()
+    assert.ok(entries.includes('identity.sqlite'), `expected an identity store, got ${JSON.stringify(entries)}`)
+    assert.ok(entries.includes('spaces'), `expected spaces, got ${JSON.stringify(entries)}`)
+    const spaceEntries = await readdir(join(target, 'spaces', report.spaceId))
+    assert.ok(spaceEntries.includes('state.sqlite'), `expected a space state store, got ${JSON.stringify(spaceEntries)}`)
+    // The note lives under the space's workspace, at the relative path the fixture asked for.
+    const note = join(target, 'spaces', report.spaceId, 'workspace', 'notes', 'fixture/note.md')
+    const noteText = await readFile(note, 'utf8')
+    // The product writes the note with its own front matter, and the body the fixture asked for.
+    assert.ok(noteText.includes(`id: ${report.noteId}`), `the note must carry its own id: ${noteText.slice(0, 120)}`)
+    assert.ok(noteText.endsWith(report.noteBody), `the note must hold the body the fixture asked for: ${noteText.slice(-120)}`)
+    const attachmentDir = join(target, 'spaces', report.spaceId, 'workspace', 'attachments', report.attachment.attachmentId)
+    const attachmentFiles = await readdir(attachmentDir)
+    assert.equal(attachmentFiles.length, 1, `expected one stored attachment object, got ${JSON.stringify(attachmentFiles)}`)
+    assert.equal((await stat(join(attachmentDir, attachmentFiles[0]))).size, 27)
+    // The fixture is private, as the generator leaves it.
+    assert.equal((await stat(target)).mode & 0o777, 0o700)
+  } finally { await rm(workspace, { recursive: true, force: true }) }
+})
+
+test('generator: the real entry point refuses a target that already exists', async () => {
+  // The other end of the entry point: an existing path is refused, and what is in it is untouched.
+  const workspace = await mkdtemp(join(tmpdir(), 'pkw-gen-exists-'))
+  const target = join(workspace, 'data')
+  await mkdir(target, { recursive: true })
+  await writeFile(join(target, 'someone-elses-file'), 'keep me\n')
+  try {
+    const generator = join(process.cwd(), 'scripts/tests/helpers/generate-fixture.mjs')
+    const result = await new Promise(resolvePromise => {
+      const child = spawn(process.execPath, [
+        generator, '--target', target, '--profile', profileUnderTest() || '/nonexistent-profile', '--port', '42712',
+      ], { stdio: ['ignore', 'pipe', 'pipe'] })
+      let stdout = '', stderr = ''
+      child.stdout.on('data', chunk => { stdout += chunk })
+      child.stderr.on('data', chunk => { stderr += chunk })
+      child.once('exit', code => resolvePromise({ code, stdout, stderr }))
+    })
+    assert.equal(result.code, 3, `unexpected exit ${result.code}: ${result.stderr}`)
+    assert.match(result.stderr, /refusing to generate into an existing path/)
+    assert.equal(await readFile(join(target, 'someone-elses-file'), 'utf8'), 'keep me\n')
+  } finally { await rm(workspace, { recursive: true, force: true }) }
 })

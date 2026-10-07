@@ -303,3 +303,130 @@ test('copy: a failed copy cannot be turned into a running service by the caller'
     await rm(dirname(target), { recursive: true, force: true })
   }
 })
+
+// ── a preserved failure is never reused blindly ──────────────────────────────────────────────
+
+test('copy: an existing data root is re-verified, and one that is not isolated is refused again', async () => {
+  const source = await makeSyntheticDataRoot()
+  const outside = await mkdtemp(join(tmpdir(), 'pkw-outside-'))
+  const target = join(await mkdtemp(join(tmpdir(), 'pkw-copy-')), 'data')
+  try {
+    // The first attempt fails and its copy is left on disk, as the library promises. It carries
+    // what every real copy carries: databases that make a later run believe the copy is finished.
+    await symlink(outside, join(source.root, 'spaces', source.spaceId, 'link-to-outside'))
+    const { verifyExistingCopy } = await import('../../scripts/copy-data-root.mjs')
+    await assert.rejects(() => copyDataRoot(source.root, target), error => error.code === 'PKW_COPY_NOT_ISOLATED')
+    assert.equal(existsSync(join(target, 'identity.sqlite')), true, 'the preserved copy must still hold its identity store')
+
+    // The link that leaked is gone, but the copy is still not isolated: its declared workspace path
+    // names a directory outside it. A run that trusted `identity.sqlite` would now proceed.
+    await rm(join(target, 'spaces', source.spaceId, 'link-to-outside'))
+    await pointWorkspaceAt(join(target, 'spaces', source.spaceId, 'state.sqlite'), join(outside, 'workspace'))
+
+    let thrown = null
+    try {
+      await verifyExistingCopy(source.root, target)
+    } catch (error) { thrown = error }
+    assert.ok(thrown, 'an existing directory must be verified again, not trusted because it is there')
+    assert.equal(thrown.code, 'PKW_COPY_NOT_ISOLATED')
+    assert.ok(thrown.writableProblems.length >= 1, `expected writable problems: ${JSON.stringify(thrown.writableProblems)}`)
+    assert.equal(thrown.targetRoot, await realpath(target))
+    // The scene is still there: the refusal did not clean anything up.
+    assert.equal(existsSync(join(target, 'identity.sqlite')), true)
+    assert.equal(existsSync(join(target, 'spaces', source.spaceId, 'state.sqlite')), true)
+  } finally {
+    await rm(source.root, { recursive: true, force: true })
+    await rm(outside, { recursive: true, force: true })
+    await rm(dirname(target), { recursive: true, force: true })
+  }
+})
+
+test('copy: an existing data root whose source is unknown may not be reused at all', async () => {
+  const source = await makeSyntheticDataRoot()
+  const target = join(await mkdtemp(join(tmpdir(), 'pkw-copy-')), 'data')
+  try {
+    await copyDataRoot(source.root, target)
+    const { verifyExistingCopy } = await import('../../scripts/copy-data-root.mjs')
+    let thrown = null
+    try {
+      await verifyExistingCopy(null, target)
+    } catch (error) { thrown = error }
+    assert.ok(thrown, 'without the source there is nothing to verify against')
+    assert.equal(thrown.code, 'PKW_COPY_SOURCE_UNKNOWN')
+    assert.match(thrown.message, /the source it was copied from is unknown/)
+  } finally {
+    await rm(source.root, { recursive: true, force: true })
+    await rm(dirname(target), { recursive: true, force: true })
+  }
+})
+
+test('copy: a clean existing root passes re-verification, so reuse is allowed on evidence', async () => {
+  const source = await makeSyntheticDataRoot()
+  const target = join(await mkdtemp(join(tmpdir(), 'pkw-copy-')), 'data')
+  try {
+    const copy = await copyDataRoot(source.root, target)
+    const { verifyExistingCopy } = await import('../../scripts/copy-data-root.mjs')
+    const verified = await verifyExistingCopy(source.root, target)
+    assert.equal(verified.reused, true)
+    assert.equal(verified.targetRoot, copy.targetRoot)
+    assert.deepEqual(verified.leaks, [])
+    assert.deepEqual(verified.writableProblems, [])
+  } finally {
+    await rm(source.root, { recursive: true, force: true })
+    await rm(dirname(target), { recursive: true, force: true })
+  }
+})
+
+test('rehearsal: two consecutive runs refuse the preserved copy and configure nothing', async () => {
+  const { execFile } = await import('node:child_process')
+  const { promisify } = await import('node:util')
+  const run = promisify(execFile)
+  const source = await makeSyntheticDataRoot()
+  const outside = await mkdtemp(join(tmpdir(), 'pkw-outside-'))
+  const workDir = await mkdtemp(join(tmpdir(), 'pkw-rehearse-'))
+  const driver = join(process.cwd(), 'deploy/rehearse-release.mjs')
+  try {
+    // A link inside the space escapes the copy, so the first run must refuse the copy.
+    await symlink(outside, join(source.root, 'spaces', source.spaceId, 'link-to-outside'))
+    // The driver seeds its old release from a profile before it copies data, so it is given a
+    // synthetic one: the refusal under test happens in the copy phase, which follows.
+    const { makeSyntheticHarness } = await import('./helpers/synthetic-harness.mjs')
+    const profileSource = join(workDir, 'profile-source')
+    await makeSyntheticHarness(profileSource)
+    const args = [
+      '--work-dir', workDir, '--data-source', source.root, '--profile-source', profileSource,
+      '--artifact-dir', join(workDir, 'artifacts-that-do-not-exist'),
+      '--version', '0.9.9-rehearsal', '--port', '42777',
+    ]
+    const first = await run(process.execPath, [driver, ...args], { encoding: 'utf8' }).then(() => null, error => error)
+    assert.ok(first, 'the first rehearsal must refuse a copy that is not isolated')
+    assert.equal(first.code, 1, `unexpected exit ${first.code}: ${first.stdout}`)
+    assert.match(first.stderr, /copy-not-self-contained/)
+    assert.match(first.stderr, /"preserved": true/)
+    // The refusal is recorded, and the copy is still there: this is the scene the second run finds.
+    const dataRoot = join(workDir, 'data')
+    assert.equal(existsSync(join(dataRoot, 'identity.sqlite')), true)
+    assert.equal(existsSync(join(workDir, 'collaboration.json')), false, 'nothing may be configured on a refused copy')
+
+    // The second run of the same work directory finds that copy. It must verify it again, refuse
+    // it again, and still configure nothing.
+    const second = await run(process.execPath, [driver, ...args], { encoding: 'utf8' }).then(() => null, error => error)
+    assert.ok(second, 'the second rehearsal must refuse the preserved copy too')
+    assert.equal(second.code, 1, `unexpected exit ${second.code}: ${second.stdout}`)
+    assert.match(second.stderr, /copy-not-self-contained/)
+    assert.match(second.stderr, /"phase": "re-verified"/)
+    assert.match(second.stderr, /"preserved": true/)
+    assert.equal(existsSync(join(workDir, 'collaboration.json')), false, 'the second run must not configure the refused copy')
+    // The scene survives both runs, and the report records the second refusal as a re-verification.
+    assert.equal(existsSync(join(dataRoot, 'identity.sqlite')), true)
+    assert.equal(existsSync(join(dataRoot, 'spaces', source.spaceId, 'link-to-outside')), true, 'the failure scene must not be cleaned up')
+    const report = JSON.parse(await readFile(join(workDir, 'report.json'), 'utf8'))
+    assert.equal(report.status, 'copy-not-self-contained')
+    assert.equal(report.phases.copyData.reused, true)
+    assert.ok(report.phases.copyData.leaks.length >= 1)
+  } finally {
+    await rm(source.root, { recursive: true, force: true })
+    await rm(outside, { recursive: true, force: true })
+    await rm(workDir, { recursive: true, force: true })
+  }
+})

@@ -214,9 +214,75 @@ export async function copyDataRoot(sourceRootInput, targetRootInput, options = {
     } finally { db.close() }
   }
 
-  // Every declared writable path field must resolve inside the copy. A remapped value that
-  // still reaches the source through an alias would make the copy write the source's files.
-  const writableProblems = []
+  const writableProblems = await findWritableProblems({ sourceRoot, targetRoot })
+
+  const leaks = await findLeaks(sourceRoot, targetRoot)
+  // ── the isolation gate, decided here rather than by each caller ────────────────
+  // Every caller of this function needs the same answer: a copy that still names the source, or
+  // whose declared write paths reach outside itself, may never be served. Deciding it inside the
+  // library means a caller cannot forget to ask, and cannot start a runtime on a copy that failed
+  // the check. The scene is preserved: the copy stays on disk exactly as it was produced, with the
+  // findings attached to the error, and nothing is cleaned up.
+  refuseIfNotIsolated({ sourceRoot, targetRoot, leaks, writableProblems, databases, rewritten })
+  return { sourceRoot, targetRoot, rewritten, leaks, databases, writableProblems }
+}
+
+/** The library's own isolation refusal, carrying the findings and the roots they were made about. */
+export function refuseIfNotIsolated({ sourceRoot, targetRoot, leaks, writableProblems, databases = [], rewritten = [] }) {
+  if (leaks.length === 0 && writableProblems.length === 0) return
+  const failure = new Error(`the copy in ${targetRoot} is not isolated from ${sourceRoot}: ${leaks.length} leak(s), ${writableProblems.length} writable path problem(s)`)
+  failure.code = 'PKW_COPY_NOT_ISOLATED'
+  failure.sourceRoot = sourceRoot
+  failure.targetRoot = targetRoot
+  failure.leaks = leaks
+  failure.writableProblems = writableProblems
+  failure.databases = databases
+  failure.rewritten = rewritten
+  throw failure
+}
+
+/**
+ * Re-check a data root that already exists, instead of trusting that it was checked before.
+ *
+ * A copy that fails the gate is deliberately left on disk so the failure can be inspected — and
+ * that preserved copy is exactly what a second run of the same work directory would find. Its
+ * presence proves nothing about whether it is isolated: it may be the very copy that was refused.
+ * So an existing root is verified again, in full, before anything is configured against it, and a
+ * root that fails is refused again rather than reused.
+ *
+ * `sourceRoot` must be the same source the copy was made from; when it is unknown the caller
+ * cannot re-verify and must not reuse the directory at all.
+ */
+export async function verifyExistingCopy(sourceRootInput, targetRootInput) {
+  if (!sourceRootInput) {
+    const unknown = new Error(`cannot verify the data root ${targetRootInput}: the source it was copied from is unknown, so reuse cannot be justified`)
+    unknown.code = 'PKW_COPY_SOURCE_UNKNOWN'
+    unknown.targetRoot = resolve(targetRootInput)
+    throw unknown
+  }
+  const { realpath } = await import('node:fs/promises')
+  const sourceRoot = await realpath(resolve(sourceRootInput)).catch(() => resolve(sourceRootInput))
+  const targetRoot = await realpath(resolve(targetRootInput)).catch(() => resolve(targetRootInput))
+  const leaks = await findLeaks(sourceRoot, targetRoot)
+  const writableProblems = await findWritableProblems({ sourceRoot, targetRoot })
+  refuseIfNotIsolated({ sourceRoot, targetRoot, leaks, writableProblems })
+  return { sourceRoot, targetRoot, leaks, writableProblems, reused: true }
+}
+
+/** True when a thrown copy failure is the library's own isolation refusal. */
+export function isNotIsolated(error) {
+  return Boolean(error) && error.code === 'PKW_COPY_NOT_ISOLATED'
+}
+
+/**
+ * Every declared writable path field that does not resolve inside the copy.
+ *
+ * A field may be remapped and still reach outside — through a symlink, or because the value never
+ * named the source to begin with. Used both when a copy is produced and when an existing root is
+ * re-verified, so the two cannot drift apart.
+ */
+export async function findWritableProblems({ sourceRoot, targetRoot }) {
+  const problems = []
   for (const spec of PATH_KEYS) {
     for (const space of await readdir(join(targetRoot, 'spaces'), { withFileTypes: true }).catch(() => [])) {
       if (!space.isDirectory()) continue
@@ -231,38 +297,12 @@ export async function copyDataRoot(sourceRootInput, targetRootInput, options = {
           try { doc = JSON.parse(row.value) } catch { continue }
           if (!(spec.jsonKey in doc)) continue
           const check = await assertWritablePathInsideCopy(doc[spec.jsonKey], targetRoot, sourceRoot)
-          if (!check.ok) writableProblems.push({ table: spec.table, key: spec.jsonKey, rowid: row.rid, ...check })
+          if (!check.ok) problems.push({ table: spec.table, key: spec.jsonKey, rowid: row.rid, ...check })
         }
       } finally { db.close() }
     }
   }
-
-  const leaks = await findLeaks(sourceRoot, targetRoot)
-  const result = { sourceRoot, targetRoot, rewritten, leaks, databases, writableProblems }
-
-  // ── the isolation gate, decided here rather than by each caller ────────────────
-  // Every caller of this function needs the same answer: a copy that still names the source, or
-  // whose declared write paths reach outside itself, may never be served. Deciding it inside the
-  // library means a caller cannot forget to ask, and cannot start a runtime on a copy that failed
-  // the check. The scene is preserved: the copy stays on disk exactly as it was produced, with the
-  // findings attached to the error, and nothing is cleaned up.
-  if (leaks.length > 0 || writableProblems.length > 0) {
-    const failure = new Error(`the copy in ${targetRoot} is not isolated from ${sourceRoot}: ${leaks.length} leak(s), ${writableProblems.length} writable path problem(s)`)
-    failure.code = 'PKW_COPY_NOT_ISOLATED'
-    failure.sourceRoot = sourceRoot
-    failure.targetRoot = targetRoot
-    failure.leaks = leaks
-    failure.writableProblems = writableProblems
-    failure.databases = databases
-    failure.rewritten = rewritten
-    throw failure
-  }
-  return result
-}
-
-/** True when a thrown copy failure is the library's own isolation refusal. */
-export function isNotIsolated(error) {
-  return Boolean(error) && error.code === 'PKW_COPY_NOT_ISOLATED'
+  return problems
 }
 
 /**

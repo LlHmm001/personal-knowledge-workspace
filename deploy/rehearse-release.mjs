@@ -22,7 +22,7 @@ import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import { spawn } from 'node:child_process'
 import { switchRelease, profileVersion, currentRelease, checkReachable } from './switch-release.mjs'
-import { copyDataRoot, isNotIsolated } from '../scripts/copy-data-root.mjs'
+import { copyDataRoot, verifyExistingCopy, isNotIsolated } from '../scripts/copy-data-root.mjs'
 import { startLoopbackRegistry } from './site/loopback-registry.mjs'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -72,24 +72,48 @@ if (!existsSync(join(oldRelease, 'package.json'))) {
 // the findings the library attached, and the rehearsal stops: nothing is configured and no
 // listener is started on a copy that failed the gate. The copy is left in place for inspection.
 const dataRoot = join(workDir, 'data')
-if (!existsSync(join(dataRoot, 'identity.sqlite'))) {
+/**
+ * Report a refused data copy and stop the rehearsal. Nothing is configured and no listener is
+ * started, and the directory is left exactly as it is: a failure that is cleaned up cannot be
+ * inspected, and a failure that is reused silently is worse than either.
+ */
+async function refuseDataRoot(error, phase) {
+  report.status = 'copy-not-self-contained'
+  report.phases.copyData = {
+    to: dataRoot, preserved: true, reused: phase === 're-verified',
+    leaks: error.leaks ?? [], writableProblems: error.writableProblems ?? [],
+    databases: error.databases ?? [], rewritten: error.rewritten ?? [],
+  }
+  await writeFile(join(workDir, 'report.json'), JSON.stringify(report, null, 2) + '\n', { mode: 0o600 })
+  console.error(JSON.stringify({
+    status: report.status, phase, message: error.message, target: dataRoot, preserved: true,
+    leaks: (error.leaks ?? []).slice(0, 3), writableProblems: (error.writableProblems ?? []).slice(0, 3),
+  }, null, 2))
+  process.exit(1)
+}
+// An existing data directory is re-verified in full, never trusted because it is there. A copy
+// that failed the gate is deliberately kept on disk, so the next run of the same work directory
+// finds exactly the copy that was refused; and a directory that was left by an interrupted run is
+// not known to be complete either. `identity.sqlite` existing says only that something wrote here.
+if (existsSync(join(dataRoot, 'identity.sqlite'))) {
+  let verified
+  try {
+    verified = await verifyExistingCopy(resolve(values['data-source']), dataRoot)
+  } catch (error) {
+    if (!isNotIsolated(error)) throw error
+    await refuseDataRoot(error, 're-verified')
+  }
+  report.phases.copyData = {
+    to: dataRoot, reloaded: true,
+    leaks: verified.leaks.length, writableProblems: verified.writableProblems.length,
+  }
+} else {
   let copy
   try {
     copy = await copyDataRoot(resolve(values['data-source']), dataRoot)
   } catch (error) {
     if (!isNotIsolated(error)) throw error
-    report.status = 'copy-not-self-contained'
-    report.phases.copyData = {
-      to: dataRoot, preserved: true,
-      leaks: error.leaks, writableProblems: error.writableProblems,
-      databases: error.databases, rewritten: error.rewritten,
-    }
-    await writeFile(join(workDir, 'report.json'), JSON.stringify(report, null, 2) + '\n', { mode: 0o600 })
-    console.error(JSON.stringify({
-      status: report.status, message: error.message, target: error.targetRoot, preserved: true,
-      leaks: error.leaks.slice(0, 3), writableProblems: error.writableProblems.slice(0, 3),
-    }, null, 2))
-    process.exit(1)
+    await refuseDataRoot(error, 'copied')
   }
   report.phases.copyData = {
     to: dataRoot, databases: copy.databases.length, rewritten: copy.rewritten.length,

@@ -59,7 +59,10 @@ const child = spawn(process.execPath, [
   '--config', configPath, '--port', String(port),
 ], { env: { ...process.env, PKW_FIXTURE_BOOTSTRAP: password }, stdio: ['ignore', 'pipe', 'pipe'] })
 const lifetime = trackLifetime(child)
-const log = lifetime.log
+// Read the log through the tracker every time. Saving it in a string here would freeze the
+// output as it was at this instant, so the readiness loop would never see the line the
+// listener prints later and would report "never reported listening" about a healthy child.
+const log = () => lifetime.log
 
 const stop = async () => {
   if (lifetime.settled) return lifetime.outcome
@@ -108,17 +111,17 @@ try {
   let healthOk = false
   for (let i = 0; i < 150; i++) {
     if (lifetime.settled) {
-      throw new Error(`the listener ${describeOutcome(lifetime.outcome)} before binding the port: ${log.slice(-400)}`)
+      throw new Error(`the listener ${describeOutcome(lifetime.outcome)} before binding the port: ${log().slice(-400)}`)
     }
-    if (!listening && log.includes('"status":"listening"')) listening = true
+    if (!listening && log().includes('"status":"listening"')) listening = true
     if (listening && !healthOk) {
       try { healthOk = (await call('/healthz')).status === 200 } catch { healthOk = false }
     }
     if (listening && healthOk) break
     await new Promise(r => setTimeout(r, 200))
   }
-  if (!listening) throw new Error(`this process never reported listening (the port may be held by another service): ${log.slice(-400)}`)
-  if (!healthOk) throw new Error(`this process reported listening but is not answering health checks: ${log.slice(-400)}`)
+  if (!listening) throw new Error(`this process never reported listening (the port may be held by another service): ${log().slice(-800)}`)
+  if (!healthOk) throw new Error(`this process reported listening but is not answering health checks: ${log().slice(-800)}`)
 
   const login = await call('/pkw/login', { method: 'POST', body: { username, password } })
   if (login.status !== 200) throw new Error(`fixture login failed (${login.status}): ${JSON.stringify(login.body).slice(0, 200)}`)
@@ -158,7 +161,7 @@ try {
   // only when asked, so a failure can be inspected.
   console.error(JSON.stringify({
     error: error.message, stopped, stopError, target, createdTarget,
-    preserved: true, log: log.slice(-400),
+    preserved: true, log: log().slice(-800),
   }, null, 2))
   if (values['remove-on-failure'] && createdTarget) await rm(target, { recursive: true, force: true })
   process.exit(1)
