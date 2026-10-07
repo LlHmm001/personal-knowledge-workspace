@@ -29,17 +29,21 @@
  */
 import { readFileSync } from 'node:fs'
 import { parseArgs } from 'node:util'
+import { resolve } from 'node:path'
 
 const { values } = parseArgs({ options: {
   mode: { type: 'string', default: 'activate' },
   version: { type: 'string' },
+  // The switch passes the version under this name, and the official CLI convention is
+  // --version; both are accepted so a site does not have to translate between them.
+  'expected-version': { type: 'string' },
   profile: { type: 'string' },
   'dsh-url': { type: 'string' },
   'gateway-url': { type: 'string', default: 'http://127.0.0.1:3081' },
   'public-origin': { type: 'string' },
   'credentials-file': { type: 'string' },
   'deployment-version': { type: 'string' },
-  username: { type: 'string' },
+  username: { type: 'string' }, config: { type: 'string' },
   diagnostics: { type: 'boolean', default: false },
   help: { type: 'boolean', default: false },
 } })
@@ -67,7 +71,16 @@ const mode = values.mode
 const profile = values.profile
 const publicOrigin = values['public-origin'].replace(/\/$/, '')
 const gatewayUrl = values['gateway-url'].replace(/\/$/, '')
-const requestedVersion = values.version ?? values['deployment-version']
+/**
+ * The verifier is told which profile it is verifying, so an unrelated service on the same
+ * host cannot be probed by accident: the gateway port must belong to that profile.
+ */
+const expectedConfigPath = values.config ? resolve(values.config) : null
+const requestedVersion = values.version ?? values['expected-version'] ?? values['deployment-version']
+if (values.version && values['expected-version'] && values.version !== values['expected-version']) {
+  console.error(`--version ${values.version} and --expected-version ${values['expected-version']} disagree`)
+  process.exit(2)
+}
 const username = values.username ?? 'owner'
 
 function installedVersion() {
@@ -80,7 +93,17 @@ const refuse = (message, extra = {}) => {
   console.log(JSON.stringify({ ok: false, mode, error: message, ...evidence, ...extra }))
   process.exit(1)
 }
-const probe = (url, options = {}, ms = 10_000) => fetch(url, { ...options, signal: AbortSignal.timeout(ms) })
+// Every probe is bounded and its transport failure is a refusal, never an uncaught
+// exception: a verifier that crashes cannot tell an operator what it saw.
+const probe = async (url, options = {}, ms = 10_000) => {
+  try {
+    return await fetch(url, { ...options, signal: AbortSignal.timeout(ms) })
+  } catch (error) {
+    const failure = new Error(`request to ${new URL(url).pathname} failed: ${error.message}`)
+    failure.code = 'PKW_PROBE_FAILED'
+    throw failure
+  }
+}
 
 // The legacy single-user entry must be off; this is the cutover evidence.
 if (values['dsh-url']) {
@@ -90,25 +113,42 @@ if (values['dsh-url']) {
 }
 
 // The gateway must be genuinely serving, not merely listening.
-const health = await probe(`${gatewayUrl}/healthz`).catch(error => ({ status: 0, error: error.message }))
-const healthBody = await health.text?.().catch(() => '') ?? ''
+const health = await probe(`${gatewayUrl}/healthz`).catch(error => ({ status: 0, error: error.message, text: async () => '' }))
+const healthBody = health.status === 0 ? '' : await health.text().catch(() => '')
+// Nothing after this point may run without a reachable gateway: the first message an
+// operator reads has to say what could not be reached, not a stack trace.
+if (health.status === 0) refuse(`the collaboration gateway at ${gatewayUrl} could not be reached: ${health.error}`)
+// When the caller names the configuration, the reachable gateway must be the one that
+// configuration describes: a healthy unrelated service is not the deployed release.
+if (expectedConfigPath) {
+  let configured = null
+  try { configured = JSON.parse(readFileSync(expectedConfigPath, 'utf8')) } catch { configured = null }
+  const configuredOrigin = configured?.publicOrigin ? configured.publicOrigin.replace(/\/$/, '') : null
+  const configuredPort = configuredOrigin ? new URL(configuredOrigin).port : null
+  const gatewayPort = new URL(gatewayUrl).port
+  evidence.checks.configOrigin = configuredOrigin
+  evidence.checks.gatewayPort = gatewayPort
+  if (configuredPort && gatewayPort && configuredPort !== gatewayPort) {
+    refuse(`the gateway on port ${gatewayPort} is not the one this configuration describes (${configuredOrigin})`)
+  }
+}
 evidence.checks.gatewayHealthzStatus = health.status
 evidence.checks.gatewayHealthzBody = healthBody.trim().slice(0, 200)
 if (health.status !== 200 || !healthBody.includes('ready')) refuse(`collaboration gateway is not ready at ${gatewayUrl} (HTTP ${health.status})`)
 
-const portal = await probe(`${publicOrigin}/pkw`, { redirect: 'manual' })
-const portalHtml = await portal.text()
+const portal = await probe(`${publicOrigin}/pkw`, { redirect: 'manual' }).catch(error => ({ status: 0, text: async () => '', error: error.message }))
+const portalHtml = portal.status === 0 ? '' : await portal.text().catch(() => '')
 evidence.checks.portalStatus = portal.status
 evidence.checks.portalHasTitle = portalHtml.includes('PKW · 我的空间')
 if (portal.status !== 200 || !evidence.checks.portalHasTitle) refuse(`collaboration portal is not served at ${publicOrigin}/pkw (HTTP ${portal.status})`)
 
 // Unauthenticated surfaces must still refuse.
-const anonymousSession = await probe(`${publicOrigin}/pkw/session`, { redirect: 'manual' })
+const anonymousSession = await probe(`${publicOrigin}/pkw/session`, { redirect: 'manual' }).catch(error => ({ status: 0, error: error.message }))
 evidence.checks.anonymousSessionStatus = anonymousSession.status
 if (anonymousSession.status !== 401) refuse(`unauthenticated /pkw/session must be 401 (got ${anonymousSession.status})`)
 const anonymousApi = await probe(`${publicOrigin}/pkw/api`, {
   method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"method":"summary","args":{}}', redirect: 'manual',
-})
+}).catch(error => ({ status: 0, error: error.message }))
 evidence.checks.anonymousApiStatus = anonymousApi.status
 if (![401, 403, 404, 405].includes(anonymousApi.status)) refuse(`unauthenticated /pkw/api must be refused (got ${anonymousApi.status})`)
 
