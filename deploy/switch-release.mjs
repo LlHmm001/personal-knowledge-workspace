@@ -370,18 +370,24 @@ async function stopAndConfirm({ hooks, report, label }) {
 /**
  * Restore the release in service after a failure.
  *
- * Two independent questions, never conflated:
+ * Three independent questions, never conflated:
  *
- *   may the inputs be written back?   only when the snapshot is complete
+ *   may the inputs be written back?   only when the snapshot is complete and still intact
  *   may anything be touched at all?   only with fresh evidence that no writer is alive now
+ *   did the restore finish?           only then may the release be started and called recovered
  *
  * Evidence gathered before the promotion describes the instance that was replaced, not the one
  * that may be running after it. So a stop is requested again for whatever is live now, and it is
- * confirmed before the inputs are written back, before `current` is repointed and before anything
- * is started. A complete snapshot only decides whether the snapshot may be applied: without a
- * confirmed stop, recovery refuses and reports why.
+ * confirmed before anything is touched. A complete snapshot only makes it a candidate for being
+ * applied: without a confirmed stop, recovery refuses and reports why.
+ *
+ * The snapshot is then verified as a whole — every registered entry present, of the recorded kind,
+ * with the recorded bytes, size and permissions — before the first byte is written. Missing or
+ * damaged material stops the restore there: nothing is written back, the entry point is left where
+ * it is, the release is not started, and neither `inputsUnchanged` nor a recovered restore is
+ * claimed. A restore that fails halfway is reported as written-but-unfinished rather than undone.
  */
-async function recoverPreviousRelease({ root, installed, snapshotDir, hooks, report }) {
+async function recoverPreviousRelease({ root, installed, snapshotDir, hooks, report, restore }) {
   const applySnapshot = typeof snapshotDir === 'string'
   const steps = {
     stop: 'refused-without-evidence', stopEvidence: null,
@@ -403,45 +409,104 @@ async function recoverPreviousRelease({ root, installed, snapshotDir, hooks, rep
     // has to be brought back up.
     steps.inputsUnchanged = true
   }
-  const restored = await startPreviousReleaseSteps({ root, previousRelease: installed, snapshotDir, report, hooks, steps, applySnapshot })
+  const restored = await startPreviousReleaseSteps({ root, previousRelease: installed, snapshotDir, report, hooks, steps, applySnapshot, restore })
   report.recoverySteps = steps
   return restored
 }
 
 /**
+ * Read the manifest of a snapshot and check every entry against the material actually on disk,
+ * before anything is written back.
+ *
+ * Each registered entry must be present, of the recorded kind, and hold the recorded bytes,
+ * size and permissions. An entry that is missing is a failure, never a skip: a snapshot that
+ * silently drops one of its inputs is not the snapshot the release was built from, and writing
+ * back the rest would leave a release that runs with inputs nobody chose.
+ */
+async function snapshotUsable(snapshotDir) {
+  const manifest = await readSnapshotManifest(snapshotDir)
+  if (!manifest) {
+    const broken = new Error(`the snapshot in ${snapshotDir} has no usable manifest, so nothing may be written back from it`)
+    broken.code = 'PKW_SNAPSHOT_UNUSABLE'
+    throw broken
+  }
+  const names = Object.keys(manifest.inputs)
+  if (names.length === 0) {
+    const empty = new Error(`the snapshot in ${snapshotDir} registers no inputs, so it is not a snapshot of anything`)
+    empty.code = 'PKW_SNAPSHOT_UNUSABLE'
+    throw empty
+  }
+  for (const [name, description] of Object.entries(manifest.inputs)) {
+    if (!description || description.kind !== 'file') {
+      const refusal = new Error(`the snapshot entry ${name} is a ${description?.kind ?? 'missing kind'}, which this restore cannot put back`)
+      refusal.code = 'PKW_UNSUPPORTED_INPUT'
+      throw refusal
+    }
+    const material = await describeInput(join(snapshotDir, name))
+    if (!material) {
+      const missing = new Error(`the snapshot material ${name} is missing, so nothing may be written back from this snapshot`)
+      missing.code = 'PKW_SNAPSHOT_UNUSABLE'
+      throw missing
+    }
+    if (material.kind !== 'file') {
+      const wrongKind = new Error(`the snapshot material ${name} is a ${material.kind}, but the manifest registered a file`)
+      wrongKind.code = 'PKW_SNAPSHOT_UNUSABLE'
+      throw wrongKind
+    }
+    if (material.sha256 !== description.sha256) {
+      const corrupted = new Error(`the snapshot material ${name} does not hold the captured bytes`)
+      corrupted.code = 'PKW_SNAPSHOT_UNUSABLE'
+      throw corrupted
+    }
+    if (material.size !== description.size) {
+      const wrongSize = new Error(`the snapshot material ${name} is ${material.size} bytes, but ${description.size} were captured`)
+      wrongSize.code = 'PKW_SNAPSHOT_UNUSABLE'
+      throw wrongSize
+    }
+    if (material.mode !== description.mode) {
+      const wrongMode = new Error(`the snapshot material ${name} has mode ${material.mode.toString(8)}, but ${description.mode.toString(8)} was captured`)
+      wrongMode.code = 'PKW_SNAPSHOT_UNUSABLE'
+      throw wrongMode
+    }
+  }
+  return manifest
+}
+
+/** Put one captured input back, with the permissions the release declared. */
+async function restoreInput({ from, to, name, description }) {
+  await rm(to, { recursive: true, force: true })
+  await cp(from, to)
+  await chmod(to, description.mode)
+  if (!(await matchesInput(to, description))) throw new Error(`the restored input ${name} does not match the snapshot`)
+}
+
+/** Write the captured inputs back. The snapshot is verified as a whole before the first write. */
+async function restoreInputs({ snapshotDir, previousRelease, steps, restore }) {
+  const manifest = await snapshotUsable(snapshotDir)
+  for (const [name, description] of Object.entries(manifest.inputs)) {
+    const from = join(snapshotDir, name)
+    const to = join(previousRelease, 'profile', name)
+    // An input that still matches the capture — bytes, permissions and, for a link, the link
+    // itself — is left alone: rewriting it could only lose something.
+    if (await matchesInput(to, description)) continue
+    await restore({ from, to, name, description })
+    steps.inputsRestored = true
+  }
+  if (!steps.inputsRestored) steps.inputsUnchanged = true
+}
+
+/**
  * The shared tail of both recovery modes: apply the inputs, replace the entry point atomically,
  * start the release, and read its version back.
+ *
+ * The inputs are verified and written before the entry point is touched or anything is started.
+ * A snapshot that is missing material, corrupted, or already registered as unusable stops the
+ * restore there: nothing is written back, the entry point is left where it is, the old release is
+ * not started, and neither `inputsUnchanged` nor a recovered restore is claimed.
  */
-async function startPreviousReleaseSteps({ root, previousRelease, snapshotDir, report, hooks, steps, applySnapshot }) {
+async function startPreviousReleaseSteps({ root, previousRelease, snapshotDir, report, hooks, steps, applySnapshot, restore = restoreInput }) {
   try {
-    if (applySnapshot) {
-      const manifest = await readSnapshotManifest(snapshotDir)
-      if (!manifest) {
-        const broken = new Error(`the snapshot in ${snapshotDir} has no usable manifest, so nothing may be written back from it`)
-        broken.code = 'PKW_SNAPSHOT_UNUSABLE'
-        throw broken
-      }
-      for (const [name, description] of Object.entries(manifest.inputs)) {
-        const from = join(snapshotDir, name)
-        const to = join(previousRelease, 'profile', name)
-        if (!existsSync(from)) continue
-        // An input that still matches the capture — bytes, permissions and, for a link, the link
-        // itself — is left alone: rewriting it could only lose something.
-        if (await matchesInput(to, description)) continue
-        if (description.kind !== 'file') {
-          const refusal = new Error(`the captured input ${name} is a ${description.kind}, which this restore cannot put back`)
-          refusal.code = 'PKW_UNSUPPORTED_INPUT'
-          throw refusal
-        }
-        await rm(to, { recursive: true, force: true })
-        await cp(from, to)
-        // The permissions the release declared are part of the input, so they are restored too.
-        await chmod(to, description.mode)
-        if (!(await matchesInput(to, description))) throw new Error(`the restored input ${name} does not match the snapshot`)
-        steps.inputsRestored = true
-      }
-      if (!steps.inputsRestored) steps.inputsUnchanged = true
-    }
+    if (applySnapshot) await restoreInputs({ snapshotDir, previousRelease, steps, restore })
     steps.currentRepointed = await pointCurrentAtomically(root, currentLinkTarget(previousRelease, root))
     await hooks.start()
     steps.started = true
@@ -450,7 +515,7 @@ async function startPreviousReleaseSteps({ root, previousRelease, snapshotDir, r
     return { recovered: true }
   } catch (error) {
     report.previousRestore = { required: true, steps, error: { message: error.message } }
-    return { recovered: false, failureReason: error.message, error: { message: error.message, details: deploymentErrorDetails?.(error) } }
+    return { recovered: false, failureReason: error.message, error: { message: error.message, code: error.code ?? null, details: deploymentErrorDetails?.(error) } }
   }
 }
 
@@ -658,6 +723,9 @@ export async function switchRelease({
     // create the second writer this whole transaction exists to prevent.
     const recovery = await recoverPreviousRelease({
       root, installed: releaseToRestore, snapshotDir: snapshotTaken ? snapshotDir : null, hooks, report,
+      restore: deps.restoreInput
+        ? ({ from, to, name, description }) => deps.restoreInput({ from, to, name, description, copy: cp, setMode: chmod })
+        : undefined,
     })
 
     const restoredVersion = await profileVersion(join(releaseToRestore, 'profile'))

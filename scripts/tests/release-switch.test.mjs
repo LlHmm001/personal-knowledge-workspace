@@ -335,6 +335,191 @@ test('switch: a permission change that keeps the bytes is still restored', async
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 
+/**
+ * The scenario the snapshot exists for, with the snapshot itself damaged afterwards: acceptance
+ * fails, the snapshot is broken, and the release's own inputs were changed on top of that. Every
+ * variant must be refused before the first write, and none of them may start the old release.
+ */
+async function runDamagedSnapshotScenario({ damage, tamper }) {
+  const { root, oldProfile } = await makeRoot()
+  const service = livenessService({ root, verifyFails: ({ version }) => version === NEW_VERSION ? { message: 'synthetic verification failure' } : null })
+  const snapshotDir = join(root, 'snapshots', NEW_VERSION)
+  // What the release itself is made of. A write-back would show up here.
+  const ownFile = join(oldProfile, 'node_modules/@deepseek-ai/dsh-pkw-web/lib/index.js')
+  const ownFileBefore = await readFile(ownFile, 'utf8')
+  const packageJsonAfterTamper = '{"name":"changed by someone else"}\n'
+  try {
+    const error = await switchRelease({
+      root, version: NEW_VERSION, artifacts: [], registry: 'http://127.0.0.1:1', hooks: service.hooks,
+      snapshotDir,
+      deps: {
+        prepareInstall: fakeInstall(),
+        afterStopBeforeDriftCheck: async ({ candidate }) => {
+          // The old release's inputs are changed while the service is stopped, so a restore would
+          // have real work to do if it were allowed to do it.
+          await writeFile(join(oldProfile, 'package.json'), packageJsonAfterTamper)
+          if (tamper) await tamper({ oldProfile, ownFile })
+          await damage({ snapshotDir })
+          await writeFile(join(candidate, 'node_modules/@deepseek-ai/dsh-pkw-web/lib/index.js'), 'export const version = "tampered"\n')
+        },
+      },
+    }).then(() => null, caught => caught)
+    return { error, root, oldProfile, ownFile, ownFileBefore, packageJsonAfterTamper, service }
+  } catch (unexpected) {
+    await rm(root, { recursive: true, force: true })
+    throw unexpected
+  }
+}
+
+test('switch: a snapshot missing a registered file is refused before anything is written back', async () => {
+  const { error, root, oldProfile, ownFile, ownFileBefore, packageJsonAfterTamper, service } = await runDamagedSnapshotScenario({
+    damage: async ({ snapshotDir }) => rm(join(snapshotDir, 'pnpm-lock.yaml')),
+  })
+  try {
+    // The failure is the snapshot's, reported structurally, and the promotion failure is kept as
+    // the original error rather than replaced by it.
+    assert.equal(error.code, 'PKW_ROLLBACK_FAILED', `unexpected code ${error.code}: ${error.message}`)
+    assert.equal(error.report.status, 'rollback-failed')
+    assert.equal(error.errors[1].code, undefined)
+    assert.match(error.errors[1].message, /the snapshot material pnpm-lock\.yaml is missing/)
+    assert.equal(error.report.rollback.restoredVersion, OLD_VERSION)
+    const steps = error.report.previousRestore.steps
+    // A missing entry is a failure, never a skip: nothing is claimed as unchanged or restored, and
+    // the old release is never started.
+    assert.equal(steps.inputsUnchanged, false, 'a damaged snapshot may not be reported as unchanged')
+    assert.equal(steps.inputsRestored, false)
+    assert.equal(steps.started, false, 'the old release must not be started from a damaged snapshot')
+    assert.equal(steps.currentRepointed, false, 'the entry point is left where it is')
+    assert.equal(error.report.previousRestore.error.message.includes('is missing'), true)
+    // Nothing was written back: the changed input is still the changed input, and the release's own
+    // files are untouched.
+    assert.equal(await readFile(join(oldProfile, 'package.json'), 'utf8'), packageJsonAfterTamper)
+    assert.equal(await readFile(ownFile, 'utf8'), ownFileBefore)
+    // The candidate was stopped and the old release was not started, so nothing of this run is left
+    // running: the failure is visible instead of half-applied.
+    assert.deepEqual(service.running, [], `nothing may be left running, got ${JSON.stringify(service.running)}`)
+    // Nothing of this run was started: the promotion was refused and the restore was refused too.
+    assert.equal(service.startCount, 0, 'no release may be started when the restore is refused')
+    assert.deepEqual(service.attemptedStops, [OLD_VERSION], 'only the release in service was stopped')
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('switch: a snapshot whose captured bytes changed is refused before anything is written back', async () => {
+  const { error, root, oldProfile, ownFile, ownFileBefore, packageJsonAfterTamper } = await runDamagedSnapshotScenario({
+    damage: async ({ snapshotDir }) => writeFile(join(snapshotDir, 'package.json'), '{"name":"corrupted snapshot copy"}\n'),
+  })
+  try {
+    assert.equal(error.code, 'PKW_ROLLBACK_FAILED', `unexpected code ${error.code}: ${error.message}`)
+    assert.equal(error.report.status, 'rollback-failed')
+    assert.match(error.errors[1].message, /the snapshot material package\.json does not hold the captured bytes/)
+    const steps = error.report.previousRestore.steps
+    assert.equal(steps.inputsUnchanged, false)
+    assert.equal(steps.inputsRestored, false)
+    assert.equal(steps.started, false)
+    assert.equal(steps.currentRepointed, false)
+    assert.equal(await readFile(join(oldProfile, 'package.json'), 'utf8'), packageJsonAfterTamper)
+    assert.equal(await readFile(ownFile, 'utf8'), ownFileBefore)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('switch: a snapshot whose captured permissions changed is refused before anything is written back', async () => {
+  const { root, oldProfile } = await makeRoot()
+  const service = livenessService({ root, verifyFails: ({ version }) => version === NEW_VERSION ? { message: 'synthetic verification failure' } : null })
+  // The release declares 0600 for this input, so the capture records 0600.
+  const declaredMode = 0o600
+  const damagedMode = 0o644
+  await chmod(join(oldProfile, '.npmrc'), declaredMode)
+  const tampered = '{"name":"changed by someone else"}\n'
+  let capturedMode = null
+  try {
+    const error = await switchRelease({
+      root, version: NEW_VERSION, artifacts: [], registry: 'http://127.0.0.1:1', hooks: service.hooks,
+      snapshotDir: join(root, 'snapshots', NEW_VERSION),
+      deps: {
+        prepareInstall: fakeInstall(),
+        afterStopBeforeDriftCheck: async ({ candidate }) => {
+          await writeFile(join(oldProfile, 'package.json'), tampered)
+          // The captured copy loses the declared permission while the service is stopped.
+          await chmod(join(root, 'snapshots', NEW_VERSION, '.npmrc'), damagedMode)
+          capturedMode = (await stat(join(root, 'snapshots', NEW_VERSION, '.npmrc'))).mode & 0o7777
+          await writeFile(join(candidate, 'node_modules/@deepseek-ai/dsh-pkw-web/lib/index.js'), 'export const version = "tampered"\n')
+        },
+      },
+    }).then(() => null, caught => caught)
+    // The damage really happened, and the manifest still records what was captured.
+    assert.equal(capturedMode, damagedMode, 'the captured copy must actually be damaged')
+    assert.equal(error.report.snapshot.inputs['.npmrc'].mode, declaredMode, 'the manifest records the declared mode')
+    assert.equal(error.code, 'PKW_ROLLBACK_FAILED', `unexpected code ${error.code}: ${error.message}`)
+    assert.equal(error.report.status, 'rollback-failed')
+    assert.match(error.errors[1].message, new RegExp(`^recovery failed: the snapshot material \\.npmrc has mode ${damagedMode.toString(8)}, but ${declaredMode.toString(8)} was captured$`))
+    const steps = error.report.previousRestore.steps
+    assert.equal(steps.inputsUnchanged, false, 'a damaged snapshot may not be reported as unchanged')
+    assert.equal(steps.inputsRestored, false)
+    assert.equal(steps.started, false, 'the old release must not be started from a damaged snapshot')
+    assert.equal(steps.currentRepointed, false)
+    // Nothing was written back: the changed input and the declared permissions are both as they were.
+    assert.equal(await readFile(join(oldProfile, 'package.json'), 'utf8'), tampered)
+    assert.equal((await stat(join(oldProfile, '.npmrc'))).mode & 0o7777, declaredMode)
+    assert.deepEqual(service.running, [], 'nothing may be left running')
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('switch: a snapshot entry replaced by the wrong kind is refused before anything is written back', async () => {
+  const { error, root, oldProfile, packageJsonAfterTamper } = await runDamagedSnapshotScenario({
+    damage: async ({ snapshotDir }) => {
+      await rm(join(snapshotDir, '.npmrc'))
+      await symlink(join(snapshotDir, 'package.json'), join(snapshotDir, '.npmrc'))
+    },
+  })
+  try {
+    assert.equal(error.code, 'PKW_ROLLBACK_FAILED', `unexpected code ${error.code}: ${error.message}`)
+    assert.equal(error.report.status, 'rollback-failed')
+    assert.match(error.errors[1].message, /the snapshot material \.npmrc is a symlink, but the manifest registered a file/)
+    const steps = error.report.previousRestore.steps
+    assert.equal(steps.inputsUnchanged, false)
+    assert.equal(steps.inputsRestored, false)
+    assert.equal(steps.started, false)
+    assert.equal(await readFile(join(oldProfile, 'package.json'), 'utf8'), packageJsonAfterTamper)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('switch: a write-back that fails mid-way is never reported as unchanged or recovered', async () => {
+  const { root, oldProfile } = await makeRoot()
+  const service = livenessService({ root, verifyFails: ({ version }) => version === NEW_VERSION ? { message: 'synthetic verification failure' } : null })
+  try {
+    const error = await switchRelease({
+      root, version: NEW_VERSION, artifacts: [], registry: 'http://127.0.0.1:1', hooks: service.hooks,
+      snapshotDir: join(root, 'snapshots', NEW_VERSION),
+      deps: {
+        prepareInstall: fakeInstall(),
+        afterStopBeforeDriftCheck: async ({ candidate }) => {
+          // Two inputs differ from the capture, so two write-backs are attempted.
+          await writeFile(join(oldProfile, 'package.json'), '{"name":"changed by someone else"}\n')
+          await chmod(join(oldProfile, '.npmrc'), 0o600)
+          await writeFile(join(candidate, 'node_modules/@deepseek-ai/dsh-pkw-web/lib/index.js'), 'export const version = "tampered"\n')
+        },
+        // Writing the first input back succeeds, the second one fails.
+        restoreInput: async ({ from, to, name, description, copy, setMode }) => {
+          if (name === '.npmrc') throw new Error('synthetic write-back failure')
+          await copy(from, to)
+          await setMode(to, description.mode)
+        },
+      },
+    }).then(() => null, caught => caught)
+    assert.equal(error.code, 'PKW_ROLLBACK_FAILED', `unexpected code ${error.code}: ${error.message}`)
+    assert.equal(error.report.status, 'rollback-failed')
+    const steps = error.report.previousRestore.steps
+    assert.equal(steps.inputsRestored, true, 'the inputs that were written back are reported as written')
+    assert.equal(steps.inputsUnchanged, false)
+    assert.equal(steps.started, false, 'a restore that did not finish may not start the release')
+    assert.equal(steps.currentRepointed, false)
+    assert.match(error.errors[1].message, /synthetic write-back failure/)
+    // The write that did happen is on disk, and no release runs.
+    assert.equal(await readFile(join(oldProfile, 'package.json'), 'utf8'), RELEASE_INPUTS['package.json'])
+    assert.deepEqual(service.running, [], 'nothing may be left running after a failed restore')
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
 test('switch: install goes to the candidate, the old release keeps serving until promotion', async () => {
   const { root, oldProfile } = await makeRoot()
   const service = serviceStub(verifyOk)
