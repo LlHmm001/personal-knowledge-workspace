@@ -163,6 +163,20 @@ async function resolveReal(path) {
   try { return await realpath(path) } catch { return null }
 }
 
+/**
+ * Decide whether a destination relates to the release in service in a way that must be
+ * refused. All three relations are refusals: equal to the release, inside it, or containing
+ * it (a rebuild would otherwise remove the release as a child). One implementation is shared
+ * by the literal-ancestor walk and the real-ancestor walk so neither can drift.
+ */
+function releaseServiceRelation(destination, releaseReal) {
+  if (!destination || !releaseReal) return null
+  if (destination === releaseReal) return 'is'
+  if (destination.startsWith(releaseReal + sep)) return 'is inside'
+  if (releaseReal.startsWith(destination + sep)) return 'contains'
+  return null
+}
+
 async function assertNotServing(profileDir) {
   const { readlink } = await import('node:fs/promises')
   // Resolve the destination first, so an intermediate symlink that points into the release
@@ -217,8 +231,9 @@ async function assertNotServing(profileDir) {
     const raw2 = await readlink(target2).catch(() => null)
     if (raw2) {
       const resolved2 = await resolveReal(target2)
-      if (resolved2 && (target === resolved2 || target?.startsWith(resolved2 + sep))) {
-        fail(`refusing to build into ${profileDir}: it resolves into the release in service (${target2} -> ${resolved2})`)
+      const relation2 = releaseServiceRelation(target, resolved2)
+      if (relation2) {
+        fail(`refusing to build into ${profileDir}: it ${relation2} the release in service (${target2} -> ${resolved2}; destination resolves to ${target})`)
       }
     }
     const parent = dirname(realDir)

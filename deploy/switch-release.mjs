@@ -140,33 +140,39 @@ function releaseName(releasePath, root) {
 
 /** Restore the previous release and start it again; report step-by-step progress. */
 async function recoverPreviousRelease({ root, installed, snapshotDir, hooks, report, skipStop = false }) {
-  const steps = { stopped: false, stopSkipped: skipStop, inputsRestored: false, currentRepointed: false, started: false }
+  const steps = { stopSkipped: skipStop, stopSucceeded: false, evidence: null, inputsRestored: false, currentRepointed: false, started: false }
   try {
-    // The stop is attempted once: retrying a stop that reported failure could take down a
-    // healthy service and fail again.
+    // skipStop decides one thing only: whether the stop hook is executed again. It is not
+    // evidence that anything stopped.
     const stopSucceeded = skipStop ? false : await hooks.stop().then(() => true, () => false)
-    if (skipStop) {
-      // The caller skipped the stop because its own probe established the state.
-      steps.stopped = true
-    } else if (stopSucceeded) {
-      steps.stopped = true
-    }
-    // Before starting anything, the state must be known to be "stopped". Starting beside a
-    // live instance would create the second writer this design exists to prevent, so an
-    // unknown state keeps the scene (release, inputs, current) for a human instead.
+    steps.stopSucceeded = stopSucceeded
+
+    // Establish real stop evidence *before* restoring inputs, repointing current, or starting.
+    // The evidence is either the stop hook reporting success, or a probe that answers
+    // "stopped" with certainty. Anything else is unknown, and unknown keeps the scene.
+    let evidence = stopSucceeded ? { known: true, stopped: true, source: 'stop-hook-succeeded' } : null
     if (hooks.isStopped) {
-      const state = await hooks.isStopped().catch(() => ({ known: false }))
-      steps.stopEvidence = state
-      if (!(state.known === true && state.stopped === true)) {
-        report.status = 'recovery-blocked-unverified-stop'
-        return { recovered: false, error: { message: `cannot establish that the previous writer stopped (${JSON.stringify(state)}); refused to start a second instance` } }
+      const probed = await hooks.isStopped().catch(() => ({ known: false }))
+      steps.evidence = probed
+      if (probed.known === true && probed.stopped === true) {
+        evidence = { ...probed, source: probed.source ?? 'state-probe' }
+      } else if (evidence === null || probed.known !== true) {
+        evidence = null
       }
-    } else if (!steps.stopped) {
-      report.status = 'recovery-blocked-no-state-probe'
-      return { recovered: false, error: { message: 'the stop failed and no stop state probe was supplied; refused to start a release that may already be running' } }
-    } else {
-      steps.stopEvidence = { known: true, stopped: true, source: 'stop-hook-succeeded' }
     }
+    if (evidence === null) {
+      report.status = hooks.isStopped ? 'recovery-blocked-unverified-stop' : 'recovery-blocked-no-state-probe'
+      return {
+        recovered: false,
+        error: {
+          message: hooks.isStopped
+            ? `cannot establish that the previous writer stopped (${JSON.stringify(steps.evidence ?? { known: false })}); refused to restore or start a release that may already be running`
+            : 'the stop did not succeed and no stop state probe was supplied; refused to restore or start a release that may already be running',
+        },
+      }
+    }
+    steps.stopped = true
+    report.stopState = evidence
     for (const name of PROFILE_INPUTS) {
       const from = join(snapshotDir, name)
       if (!existsSync(from)) continue
@@ -454,29 +460,54 @@ unknown, and an unknown stop state is never treated as stopped. Supply one of:
       hooks: {
         stop: () => run(values['stop-hook'], [], undefined),
         start: () => run(values['start-hook'], [], undefined),
-        // The state probe is the evidence the recovery path needs. A hook that exits 0 means
-        // stopped; a managed unit is asked through systemctl, whose answer is authoritative.
+        // The state probe is the evidence the recovery path needs. A systemd unit that
+        // reports inactive is not by itself proof that every process it started is gone, so
+        // the unit's whole cgroup is inspected: the unit must be inactive AND its cgroup
+        // must hold no processes. Anything that cannot be established stays unknown, and the
+        // shared cgroup is never stopped to satisfy this check.
         isStopped: async () => {
           if (values['state-hook']) {
-            try { await run(values['state-hook'], [], undefined); return { known: true, stopped: true } } catch { return { known: true, stopped: false } }
+            try { await run(values['state-hook'], [], undefined); return { known: true, stopped: true, source: 'state-hook' } } catch { return { known: true, stopped: false, source: 'state-hook' } }
           }
-          try {
-            await run('systemctl', ['is-active', '--quiet', values['managed-unit']], undefined)
-            return { known: true, stopped: false }
-          } catch {
-            // is-active exits non-zero for inactive *and* for a failed unit; only 'inactive'
-            // and 'failed' mean the writer is gone.
-            const { spawn: spawnChild } = await import('node:child_process')
-            const state = await new Promise(resolvePromise => {
-              const child = spawnChild('systemctl', ['is-active', values['managed-unit']], { stdio: ['ignore', 'pipe', 'ignore'] })
-              let out = ''
-              child.stdout.on('data', c => { out += c })
-              child.once('exit', () => resolvePromise(out.trim()))
-            })
-            return { known: state === 'inactive' || state === 'failed', stopped: state === 'inactive' || state === 'failed', state }
+          const unit = values['managed-unit']
+          const { spawn: spawnChild } = await import('node:child_process')
+          const exec = args => new Promise(resolvePromise => {
+            const child = spawnChild('systemctl', args, { stdio: ['ignore', 'pipe', 'ignore'] })
+            let out = ''
+            child.stdout.on('data', c => { out += c })
+            child.once('error', () => resolvePromise(null))
+            child.once('exit', () => resolvePromise(out.trim()))
+          })
+          const active = await exec(['is-active', unit])
+          if (active === null) return { known: false, stopped: false, reason: 'systemctl-unavailable', unit }
+          if (active !== 'inactive' && active !== 'failed') {
+            return { known: true, stopped: false, state: active, unit, source: 'systemctl-is-active' }
           }
+          // The unit is down. Verify nothing it started is still running in its cgroup.
+          const pids = await exec(['show', '-p', 'MainPID', '--value', unit])
+          const controlGroup = await exec(['show', '-p', 'ControlGroup', '--value', unit])
+          const members = []
+          if (controlGroup) {
+            const { readdir, readFile } = await import('node:fs/promises')
+            const cgroupPath = join('/sys/fs/cgroup', controlGroup.replace(/^\//, ''))
+            const walk = async dir => {
+              for (const entry of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
+                const full = join(dir, entry.name)
+                if (entry.isDirectory()) { await walk(full); continue }
+                if (entry.name === 'cgroup.procs') {
+                  const text = await readFile(full, 'utf8').catch(() => '')
+                  for (const line of text.split('\n')) if (line.trim()) members.push(Number(line.trim()))
+                }
+              }
+            }
+            await walk(cgroupPath)
+          }
+          const live = members.filter(pid => { try { process.kill(pid, 0); return true } catch { return false } })
+          if (live.length > 0) {
+            return { known: true, stopped: false, state: active, leftoverPids: live.slice(0, 5), unit, source: 'cgroup-members' }
+          }
+          return { known: true, stopped: true, state: active, mainPid: pids ?? null, cgroupMembers: members.length, unit, source: 'systemctl-is-active+cgroup-members' }
         },
-        reachable: values['reachable-url'] ? () => checkReachable({ origin: values['reachable-url'] }) : undefined,
         verify: async ({ expectedVersion }) => {
           const output = await new Promise((resolvePromise, reject) => {
             // The verifier receives the version under the same flag name the switch uses.
