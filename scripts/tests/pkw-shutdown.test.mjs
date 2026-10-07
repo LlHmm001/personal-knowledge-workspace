@@ -114,6 +114,8 @@ async function makeDataRoot({ stubUrl, spaceId }) {
 
 /** Run the listener as a child process and give the caller control over its life. */
 function startGateway({ profile, configPath, port, drainTimeoutMs }) {
+  // The port is passed explicitly: the listener's default is a production port, and
+  // a test must never depend on (or collide with) whatever is running there.
   const child = spawn(process.execPath, [
     join(scriptsDir, 'serve-collaboration.mjs'), '--profile', profile, '--config', configPath, '--port', String(port),
     ...(drainTimeoutMs === undefined ? [] : ['--drain-timeout-ms', String(drainTimeoutMs)]),
@@ -256,14 +258,16 @@ test('S3/T-EXIT graceful shutdown with a request in flight commits data and exit
     const read = await rpc('getNote', { noteId })
     const marker = `committed-before-shutdown-${randomUUID().slice(0, 8)}`
     const saved = await rpc('saveNoteBody', {
-      noteId, body: `# shutdown test\n\n${marker}\n`,
+      noteId, body: `# shutdown test\n\n${marker}
+`,
       expectedContentHash: read.body.value.note.contentHash,
       expectedRevision: read.body.value.note.observedRevision,
     })
     assert.equal(saved.status, 200, JSON.stringify(saved.body))
     // Fire another write that is still in flight when the signal arrives.
     const inFlight = rpc('saveNoteBody', {
-      noteId, body: `# shutdown test\n\n${marker}\nin-flight\n`,
+      noteId, body: `# shutdown test\n\n${marker}
+in-flight\n`,
       expectedContentHash: saved.body.value.contentHash,
       expectedRevision: saved.body.value.observedRevision,
     })
@@ -341,7 +345,8 @@ test('S3/T-EXIT restart after a forced exit needs no manual repair and keeps com
     const session = await loginWith(api)
     spaceId = session.spaces[0].id
     const rpc = (method, args) => api.call(`/pkw/spaces/${spaceId}/api`, { method: 'POST', body: { method, args }, csrf: session.csrf })
-    const created = await rpc('createNote', { relativePath: `persist-${randomUUID().slice(0, 8)}.md`, markdown: `# persist\n\n${marker}\n` })
+    const created = await rpc('createNote', { relativePath: `persist-${randomUUID().slice(0, 8)}.md`, markdown: `# persist\n\n${marker}
+` })
     assert.equal(created.status, 200, JSON.stringify(created.body))
     noteId = created.body.value.noteId
     first.child.kill('SIGTERM')
@@ -350,11 +355,12 @@ test('S3/T-EXIT restart after a forced exit needs no manual repair and keeps com
   } finally {
     first.child.kill('SIGKILL')
   }
-  // A forced exit may leave the lock behind: that is expected, and a restart must
-  // surface it rather than silently steal the root.
+  // A forced exit leaves the lock behind. The restart must recover it by itself:
+  // the recorded writer is gone, so no human intervention is allowed to be needed,
+  // and the test must not delete the lock on the product's behalf.
   const lockPath = join(root, 'gateway.lock')
   const lockLeftBehind = existsSync(lockPath)
-  if (lockLeftBehind) await rm(lockPath, { force: true })
+  const lockBefore = lockLeftBehind ? JSON.parse(await readFile(lockPath, 'utf8')) : null
   const second = startGateway({ profile, configPath, port })
   try {
     await second.ready()
@@ -368,7 +374,7 @@ test('S3/T-EXIT restart after a forced exit needs no manual repair and keeps com
     second.child.kill('SIGTERM')
     const { code } = await second.exited
     assert.equal(code, 0, 'the restart must shut down gracefully')
-    console.log(`  lock left behind by the forced exit: ${lockLeftBehind}`)
+    assert.ok(second.stdout.includes('"status":"stale-lock-recovered"'), `the stale lock must be reported as recovered: ${second.stdout}`)
   } finally {
     second.child.kill('SIGKILL')
     await rm(root, { recursive: true, force: true })
@@ -382,6 +388,7 @@ test('S3/T-EXIT graceful shutdown during a slow remote sync keeps committed data
   // the drain budget genuinely has to be respected rather than bypassed.
   const stub = await startStub({ delayMs: 8000 })
   const spaceId = await firstSpaceId()
+  const { root, configPath } = await makeDataRoot({ stubUrl: stub.url, spaceId })
   const config = JSON.parse(await readFile(configPath, 'utf8'))
   config.publicOrigin = `http://127.0.0.1:${port}`
   await writeFile(configPath, JSON.stringify(config, null, 2))
@@ -417,6 +424,107 @@ test('S3/T-EXIT graceful shutdown during a slow remote sync keeps committed data
   } finally {
     boot.gateway.child.kill('SIGKILL')
     await stub.close()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+test('S3/lock a stale lock from a dead writer is recovered automatically', { skip: skipReason || !dataRootAvailable }, async () => {
+  const profile = profileUnderTest()
+  const port = await freePort()
+  const { root, configPath } = await makeDataRoot({ stubUrl: null, spaceId: 'sp-none' })
+  const config = JSON.parse(await readFile(configPath, 'utf8'))
+  config.publicOrigin = `http://127.0.0.1:${port}`
+  await writeFile(configPath, JSON.stringify(config, null, 2))
+  // A lock whose writer is provably gone: start a throwaway process, let it exit,
+  // and record its pid. Nothing else is done on the product's behalf.
+  const dead = spawn(process.execPath, ['-e', 'process.exit(0)'], { stdio: 'ignore' })
+  const deadPid = dead.pid
+  await new Promise(r => dead.once('exit', r))
+  const lockPath = join(root, 'gateway.lock')
+  await writeFile(lockPath, JSON.stringify({ pid: deadPid, createdAt: new Date().toISOString() }) + '\n', { mode: 0o600 })
+  const gateway = startGateway({ profile, configPath, port })
+  try {
+    await gateway.ready()
+    assert.ok(gateway.stdout.includes('"status":"stale-lock-recovered"'), `expected recovery report: ${gateway.stdout}`)
+    assert.equal(JSON.parse(await readFile(lockPath, 'utf8')).pid, gateway.child.pid, 'the lock must now belong to the new process')
+    gateway.child.kill('SIGTERM')
+    assert.equal((await gateway.exited).code, 0)
+  } finally {
+    gateway.child.kill('SIGKILL')
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('S3/lock a lock held by a live writer is refused, not stolen', { skip: skipReason || !dataRootAvailable }, async () => {
+  const profile = profileUnderTest()
+  const port = await freePort()
+  const { root, configPath } = await makeDataRoot({ stubUrl: null, spaceId: 'sp-none' })
+  const config = JSON.parse(await readFile(configPath, 'utf8'))
+  config.publicOrigin = `http://127.0.0.1:${port}`
+  await writeFile(configPath, JSON.stringify(config, null, 2))
+  const lockPath = join(root, 'gateway.lock')
+  // A live process (this test) with a matching start time is a live writer.
+  await writeFile(lockPath, JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }) + '\n', { mode: 0o600 })
+  const gateway = startGateway({ profile, configPath, port })
+  try {
+    const { code } = await gateway.exited
+    assert.equal(code, 3, `a live writer must be refused with exit 3, got ${code}; stderr=${gateway.stderr}`)
+    assert.ok(gateway.stderr.includes('"reason":"live-writer"'), `expected a live-writer refusal: ${gateway.stderr}`)
+    const still = JSON.parse(await readFile(lockPath, 'utf8'))
+    assert.equal(still.pid, process.pid, 'the live writer must keep its lock')
+  } finally {
+    gateway.child.kill('SIGKILL')
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('S3/lock a malformed lock is refused rather than deleted', { skip: skipReason || !dataRootAvailable }, async () => {
+  const profile = profileUnderTest()
+  const port = await freePort()
+  const { root, configPath } = await makeDataRoot({ stubUrl: null, spaceId: 'sp-none' })
+  const config = JSON.parse(await readFile(configPath, 'utf8'))
+  config.publicOrigin = `http://127.0.0.1:${port}`
+  await writeFile(configPath, JSON.stringify(config, null, 2))
+  const lockPath = join(root, 'gateway.lock')
+  await writeFile(lockPath, 'not-json-at-all\n', { mode: 0o600 })
+  const gateway = startGateway({ profile, configPath, port })
+  try {
+    const { code } = await gateway.exited
+    assert.equal(code, 4, `an uninterpretable lock must be refused with exit 4, got ${code}`)
+    assert.ok(existsSync(lockPath), 'an uninterpretable lock must be left in place as evidence')
+  } finally {
+    gateway.child.kill('SIGKILL')
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('S3/lock two concurrent starters against one root leave exactly one writer', { skip: skipReason || !dataRootAvailable }, async () => {
+  const profile = profileUnderTest()
+  const port = await freePort()
+  const { root, configPath } = await makeDataRoot({ stubUrl: null, spaceId: 'sp-none' })
+  const config = JSON.parse(await readFile(configPath, 'utf8'))
+  config.publicOrigin = `http://127.0.0.1:${port}`
+  await writeFile(configPath, JSON.stringify(config, null, 2))
+  // Two processes, same root, same port: exactly one may end up owning the root.
+  const a = startGateway({ profile, configPath, port })
+  const b = startGateway({ profile, configPath, port })
+  try {
+    const results = await Promise.all([
+      Promise.race([a.exited, new Promise(r => setTimeout(() => r({ code: 'running' }), 8000))]),
+      Promise.race([b.exited, new Promise(r => setTimeout(() => r({ code: 'running' }), 8000))]),
+    ])
+    const running = results.filter(r => r.code === 'running').length
+    const refused = results.filter(r => r.code === 3).length
+    assert.equal(running, 1, `exactly one starter may run: ${JSON.stringify(results)}`)
+    assert.ok(refused >= 1, `the other starter must be refused: ${JSON.stringify(results)}`)
+    const lock = JSON.parse(await readFile(join(root, 'gateway.lock'), 'utf8'))
+    assert.ok([a.child.pid, b.child.pid].includes(lock.pid), 'the lock must belong to the surviving starter')
+    const winner = results[0].code === 'running' ? a : b
+    winner.child.kill('SIGTERM')
+    assert.equal((await winner.exited).code, 0, 'the winner must shut down gracefully')
+    console.log(`  concurrent starters: running=${running}, refused=${refused}`)
+  } finally {
+    a.child.kill('SIGKILL')
+    b.child.kill('SIGKILL')
     await rm(root, { recursive: true, force: true })
   }
 })

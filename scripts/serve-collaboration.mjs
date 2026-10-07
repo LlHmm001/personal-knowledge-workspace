@@ -22,6 +22,10 @@
  *
  * The drain budget defaults to 25s, below the unit's TimeoutStopSec=30, so the
  * process has a chance to fail loudly before systemd escalates to SIGKILL.
+ *
+ * Startup lock handling is in `root-lock.mjs`: a lock whose recorded writer is
+ * provably gone is cleared so a forced exit does not need manual repair, while a
+ * live writer is never raced (exit 3).
  */
 import { createServer } from 'node:http'
 import { createRequire } from 'node:module'
@@ -29,6 +33,7 @@ import { readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
+import { prepareRootLock } from './root-lock.mjs'
 
 const { values } = parseArgs({ options: {
   profile: { type: 'string' }, config: { type: 'string' }, port: { type: 'string', default: '3081' },
@@ -47,6 +52,17 @@ if (!Number.isFinite(drainTimeoutMs) || drainTimeoutMs < 1) throw new Error('--d
 const require = createRequire(join(resolve(values.profile), 'package.json'))
 const { CollaborationGateway } = await import(pathToFileURL(require.resolve('@deepseek-ai/dsh-pkw-web/lib/collaboration/index.js')).href)
 const config = JSON.parse(await readFile(resolve(values.config), 'utf8'))
+
+// Clear a provably stale lock before the gateway claims it atomically. A lock whose
+// writer is still alive is never touched: refuse instead of racing for the root.
+const lock = await prepareRootLock(config.dataPath)
+if (!lock.ready) {
+  const detail = { status: 'lock-refused', reason: lock.reason, pid: lock.pid ?? null, lockPath: lock.lockPath ?? null }
+  console.error(JSON.stringify(detail))
+  process.exit(lock.reason === 'live-writer' ? 3 : 4)
+}
+if (lock.recoveredFrom) console.log(JSON.stringify({ status: 'stale-lock-recovered', ...lock.recoveredFrom }))
+
 const gateway = await CollaborationGateway.open(config)
 let closing = false
 let inflight = 0
