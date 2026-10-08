@@ -192,6 +192,10 @@ test('e2e: new release writes, verification fails, rollback restores the old rel
         login: () => call('/pkw/login', { method: 'POST', body: { username: 'owner', password: SYNTHETIC_PASSWORD } }),
         session: async () => (await call('/pkw/session')).json(),
         spaceVersion: async spaceId => (await call(`/pkw/spaces/${spaceId}`)).headers.get('x-pkw-version'),
+        spacePage: async spaceId => {
+          const response = await call(`/pkw/spaces/${spaceId}`)
+          return { status: response.status, location: response.headers.get('location'), contentType: response.headers.get('content-type'), bodyHead: (await response.text()).slice(0, 160) }
+        },
         rpc: async (spaceId, method, args, csrf) => (await call(`/pkw/spaces/${spaceId}/api`, { method: 'POST', body: { method, args }, csrf })).json(),
         upload: async (spaceId, formData, csrf) => {
           const response = await call(`/pkw/spaces/${spaceId}/api`, { method: 'POST', body: formData, csrf, raw: true })
@@ -226,6 +230,12 @@ test('e2e: new release writes, verification fails, rollback restores the old rel
             const session = await api.session()
             const space = session.value.spaces[0]
             const serving = await api.spaceVersion(space.id)
+            if (serving !== expectedVersion) {
+              // The page did not carry the version header. Record what it did answer, so the reason
+              // is visible instead of being reported as "null".
+              const probe = await api.spacePage(space.id)
+              console.error(JSON.stringify({ e2e: 'space-page', expectedVersion, serving, status: probe.status, location: probe.location, contentType: probe.contentType, bodyHead: probe.bodyHead }))
+            }
             assert.equal(serving, expectedVersion, 'the service must report the version being verified')
             if (expectedVersion !== NEW_VERSION) {
               // Recovery path: reachability is enough here; acceptance is the caller's job.
