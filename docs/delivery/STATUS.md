@@ -5,6 +5,7 @@ Everything here is bound to one commit. Where an item is not finished, it says s
 ## Current state
 
 * Branch `feat/pkw-independent-runtime`, PR #2, still **draft**, base `chore/pkw-delivery`.
+* Final SHA for this table: `a59f1362dd532ad8dd69693c53f7566092c23812`.
 * Live services untouched: no restart, no configuration change, no `current` repoint, no deletion of
   recovery material. Production DSH and `pkw-collaboration` keep their original main PIDs.
 * Closed findings stay closed: generator (log read live, outcome gate, real-entry tests), trace
@@ -25,8 +26,9 @@ Everything here is bound to one commit. Where an item is not finished, it says s
 | 8 | Old artifact set inventoried | pass | `ls /LlHmm9527/.pkw-deployments/0.1.7-pkw.1/{packages,receipt.json}` | 0 | receipt in that directory | it is the material the running site was deployed from; read-only here |
 | 9 | New artifact set packed, unpacked contents beside each tarball | pass (10 packages) | `node scripts/pack-release.mjs --artifact-dir /LlHmm9527/.pkw-deployments/0.1.8-pkw.2/packages --version 0.1.8-pkw.2 --json …/receipt.json` | 0 | `/LlHmm9527/.pkw-deployments/0.1.8-pkw.2/receipt.json` | peers are not bundled in the tarballs; the closure is provided by the profile they are installed into |
 | 9b | Old and new release profiles assembled, each from its own artifacts | pass (35 packages, 25 pinned peers, 0 unresolved each) | `node scripts/pkw-independent-profile.mjs --profile e2e/{old,new}-profile --version … --release-source … --harness /opt/deepseek-harness --store …` | 0 | `/tmp/old-profile.log`, `/tmp/new-profile.log` | reads the harness declarations at `/opt/deepseek-harness`; writes only under `e2e/` |
-| 10 | Real switch → injected acceptance failure → rollback | partial: switch, failure, stop, restore all verified; rollback acceptance still failing on a credential mismatch | `node deploy/rehearse-release.mjs --work-dir e2e/rollback … --force-verify-failure --store-dir /LlHmm9527/pkw-independent/store/v11` | 1 | `e2e/rollback/report.json` | see open item 3 |
+| 10 | Real switch → injected acceptance failure → rollback → restored release reads the data | pass | `node deploy/rehearse-release.mjs --work-dir e2e/rollback8 --profile-source e2e/old-profile --data-source fixtures/lifecycle-1 --artifact-dir /LlHmm9527/.pkw-deployments/0.1.8-pkw.2/packages --version 0.1.8-pkw.2 --old-version 0.1.7-pkw.1 --owner-password … --set-owner-password --store-dir /LlHmm9527/pkw-independent/store/v11 --force-verify-failure --write-during-serve` | 0 | `e2e/rollback8/report.json` | the remote stub is a loopback fixture; peers come from the profile, not the tarballs |
 | 11 | Isolated target-server acceptance with a temporary unit | **not run** | `deploy/switch-release.mjs --managed-unit …` | — | — | needs a test-only unit and install root; not attempted yet |
+| 13 | Acceptances 1-10 re-run on this SHA | pass | see rows above | 0 | `/tmp/all5.log` | 430 tests, 418 pass, 0 fail, 12 skipped |
 | 12 | Real Harness CI job (`typecheck + test + build + packed runtime`) | **not run** | GitHub Actions | — | — | blocked: see missing inputs |
 
 ## Open item 1 — the original lifecycle write test
@@ -49,28 +51,33 @@ made to see a partial lock by the writer (it claims the root with `open(path, 'w
 atomic), so the next step is to log which branch of `prepareRootLock` produced 4 before touching
 either the assertion or the protocol.
 
-## Open item 3 — the rollback acceptance credential
+## The rollback, in full
 
-The switch, the injected failure, the confirmed stop of the candidate, the restore of the old
-release and its reachability are all verified in `e2e/rollback/report.json`:
+`e2e/rollback8/report.json` records the whole sequence, and every step in it was observed rather
+than assumed:
 
 ```
-status                        PKW_DEPLOYMENT_ROLLED_BACK
-phases                        seedRelease, copyData, stop, start, injectedFault, reachability
-rollback.restoredVersion      0.1.7-pkw.1
-previousRestore.steps         stop confirmed, currentRepointed, started, versionConfirmed
-rollbackEvidence.reachability verified (HTTP 200)
-rollbackEvidence.acceptance   failed
-rollbackAcceptanceError       login was refused with HTTP 401
+status                      PKW_DEPLOYMENT_ROLLED_BACK
+phases                      seedRelease, copyData, setOwnerPassword, stop, start,
+                            injectedFault, writtenDuringServe, reachability, readBackAfterRollback
+stop                        graceful (the release in service)
+start                       the old release, then the new one after promotion
+injectedFault               post-activation verification
+writtenDuringServe          note + attachment written through the real API, with ids and sha256
+rollback.restoredVersion    0.1.7-pkw.1
+previousRestore.steps       stop confirmed, currentRepointed, started, versionConfirmed
+rollbackEvidence            reachability verified, acceptance verified
+readBackAfterRollback       login 200, getNote 200, marker found (revision 1),
+                            attachment sha256 match, 51 bytes, mode 644
 ```
 
-The restored release answers, but the owner credential the verifier presents is not the one the
-data root carries: the fixture was generated with `--username owner` while its config bootstraps
-from `PKW_FIXTURE_BOOTSTRAP`, and a direct login attempt against the restored data root with the
-rehearsal's password is refused (`403`). The rehearsal therefore needs the data root's own
-credentials — either a fixture generated for that user, or the rehearsal overriding the copy's
-account password the way the lifecycle tests do (`setCopyPassword`). Until that is wired, the
-rollback is restored but not accepted, and this table says so rather than counting it as a pass.
+The read-back is asked of the process the rollback itself started, through the same API a user
+would use, and it compares the stored attachment byte for byte against what was uploaded. Two
+scaffolding defects had to be fixed for it to be answerable at all, and both were in the
+rehearsal, not the product: the seed profile's `.npmrc` pinned a one-off loopback registry that
+no longer exists (every install hung on it), and the driver used the bootstrap password as the
+verifier's credential (the copy's own account has its own password, which
+`--set-owner-password` now sets explicitly).
 
 ## Missing inputs (listed once, with what they are for)
 
