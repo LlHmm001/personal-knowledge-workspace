@@ -16,9 +16,6 @@
 import { register } from 'node:module'
 
 const OUT = '/tmp/pkw-gateway-error.json'
-const TRACE = '/tmp/pkw-gateway-trace.jsonl'
-const TRACE_MARKER = 'async handle(req, res) {'
-const TRACE_PATCHED = 'async handle(req, res) {\n        try { writeFileSync(' + JSON.stringify(TRACE) + ', JSON.stringify({ at: new Date().toISOString(), url: req.url, method: req.method }) + "\\n", { flag: "a" }) } catch { /* best effort */ }'
 const MARKER = 'if (res.headersSent) {\n                res.destroy();\n                return;\n            }\n            const code = error?.code;'
 const REPORT = 'try { writeFileSync(' + JSON.stringify(OUT) + ', JSON.stringify({ at: new Date().toISOString(), name: error?.constructor?.name ?? null, code: error?.code ?? null, message: error?.message ?? String(error), stack: (error?.stack ?? "").split("\\n").slice(0, 12) }, null, 2)) } catch { /* best effort */ }'
 const PATCHED = 'if (res.headersSent) {\n                res.destroy();\n                return;\n            }\n            ' + REPORT + '\n            const code = error?.code;'
