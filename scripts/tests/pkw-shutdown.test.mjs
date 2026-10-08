@@ -648,7 +648,7 @@ test('S3/lock two concurrent starters against one root leave exactly one writer'
     const running = results.filter(r => r.code === 'running').length
     const refused = results.filter(r => r.code === 3).length
     assert.equal(running, 1, `exactly one starter may run: ${JSON.stringify(results)}`)
-    assert.ok(refused >= 1, `the other starter must be refused: ${JSON.stringify(results)}`)
+    assert.ok(refused >= 1, `the other starter must be refused: ${JSON.stringify(results)}\nA(stderr)=${a.stderr.slice(-600)}\nB(stderr)=${b.stderr.slice(-600)}\nA(stdout)=${a.stdout.slice(-300)}\nB(stdout)=${b.stdout.slice(-300)}`)
     const lock = JSON.parse(await readFile(join(root, 'gateway.lock'), 'utf8'))
     assert.ok([a.child.pid, b.child.pid].includes(lock.pid), 'the lock must belong to the surviving starter')
     const winner = results[0].code === 'running' ? a : b

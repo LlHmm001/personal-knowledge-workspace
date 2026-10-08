@@ -34,7 +34,7 @@ import { appendFileSync, existsSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
-import { prepareRootLock } from './root-lock.mjs'
+import { LOCK_EXIT, prepareRootLock } from './root-lock.mjs'
 
 const { values } = parseArgs({ options: {
   profile: { type: 'string' }, config: { type: 'string' }, port: { type: 'string', default: '3081' },
@@ -58,13 +58,19 @@ const config = JSON.parse(await readFile(resolve(values.config), 'utf8'))
 // writer is still alive is never touched: refuse instead of racing for the root.
 function refuseLock(lock) {
   // Refuse rather than guess. The exit code says which rule was hit, and the file is
-  // left exactly as found so a human can inspect the writer it names.
+  // left exactly as found so a human can inspect the writer it names. The exit code is set and the
+  // process returns rather than exiting immediately: a write to a pipe is asynchronous, and
+  // `process.exit()` does not wait for it, so the reason was being discarded and the refusal reached
+  // the caller as a bare exit code — the same shape as a crash.
   console.error(JSON.stringify({ status: 'lock-refused', reason: lock.reason, pid: lock.pid ?? null, detail: lock.detail ?? null, lockPath: lock.lockPath ?? null }))
-  process.exit(lock.exitCode ?? 5)
+  process.exitCode = lock.exitCode ?? 5
 }
 
 const lock = await prepareRootLock(config.dataPath)
-if (!lock.ready) refuseLock(lock)
+if (!lock.ready) {
+  refuseLock(lock)
+  process.exit(process.exitCode ?? 5)
+}
 if (lock.recoveredFrom) console.log(JSON.stringify({ status: 'stale-lock-recovered', ...lock.recoveredFrom }))
 
 /**
@@ -95,7 +101,10 @@ async function openGateway() {
       // Everything else is a decision: a live writer, a malformed lock, or an identity that cannot be
       // established.
       const undecided = again.ready === true || again.reason === 'lock-without-owner' || again.reason === 'empty-lock'
-      if (!undecided) refuseLock(again)
+      // A decision ends the loop here. `refuseLock` sets the exit code and returns instead of exiting
+      // — a write to a pipe is asynchronous and `process.exit()` would discard it — so the code has to
+      // be carried out to the caller rather than assumed to have terminated this function.
+      if (!undecided) { refuseLock(again); return { refused: again.exitCode ?? 5 } }
       blocked += 1
       // Long enough for a winner that has claimed the lock to get as far as writing its record —
       // that is module loading and opening the data root, not a microsecond — and still bounded, so a
@@ -103,15 +112,25 @@ async function openGateway() {
       // that never ends. What the wait saw is reported: a refusal that cannot say whether the lock was
       // empty, ownerless or unreadable for fifteen seconds cannot say what happened either.
       if (blocked > 300) {
+        // A stream write to a pipe is asynchronous, and `process.exit()` does not wait for it: the
+        // diagnostic below was being discarded, which is why this refusal arrived as a bare exit code
+        // with no output at all — indistinguishable from a crash. Setting the exit code and returning
+        // lets the write drain, and Node exits with that code once the loop is empty.
         console.error(JSON.stringify({ status: 'lock-refused', reason: 'claim-not-confirmed', detail: again.reason, lockPath: again.lockPath ?? null, waitedMs: blocked * 50 }))
-        process.exit(LOCK_EXIT.UNREADABLE)
+        process.exitCode = LOCK_EXIT.UNREADABLE
+        return null
       }
       await new Promise(resolve => setTimeout(resolve, 50))
     }
   }
 }
 
-const gateway = await openGateway()
+const opened = await openGateway()
+// The refusal's own code is what the process exits with: a live writer is LIVE_WRITER, an unreadable
+// lockfile is UNREADABLE. Collapsing them into one code would throw away the answer the protocol just
+// gave, which is how a correct refusal came to be reported as the wrong one.
+if (opened?.refused !== undefined) process.exit(opened.refused)
+const gateway = opened
 let closing = false
 let inflight = 0
 
@@ -182,7 +201,20 @@ server.headersTimeout = 15_000
 server.maxConnections = 100
 try {
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve) })
-} catch (error) { await gateway.close(); throw error }
+} catch (error) {
+  await gateway.close()
+  // The port is the one resource the lock cannot speak for: two starters can each decide the data
+  // root is theirs to claim (one wins the lock, the other is refused) while the *port* is what
+  // actually decides who serves. A bind that failed because the port is taken is the same situation
+  // as a lock refusal — another writer is in service — so it leaves with the same documented code,
+  // and it says so on stderr. Without this the process ended with a bare non-zero status and no
+  // output at all, which is indistinguishable from a crash.
+  if (error?.code === 'EADDRINUSE') {
+    console.error(JSON.stringify({ status: 'bind-refused', reason: 'port-in-use', port, detail: error.message }))
+    process.exit(LOCK_EXIT.LIVE_WRITER)
+  }
+  throw error
+}
 console.log(JSON.stringify({ status: 'listening', bind: `127.0.0.1:${port}`, publicOrigin: config.publicOrigin, mode: 'collaboration', drainTimeoutMs, productionAcceptance: 'not_run' }))
 
 // ── test-only escape hatch, never set by the product ─────────────────────────────
