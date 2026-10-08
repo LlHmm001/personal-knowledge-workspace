@@ -5,7 +5,7 @@ Everything here is bound to one commit. Where an item is not finished, it says s
 ## Current state
 
 * Branch `feat/pkw-independent-runtime`, PR #2, still **draft**, base `chore/pkw-delivery`.
-* Final SHA for this table: `a59f1362dd532ad8dd69693c53f7566092c23812`.
+* Final SHA for this table: `90ebfeb348d1545ac2c920005e6a73b720e3a010`.
 * Live services untouched: no restart, no configuration change, no `current` repoint, no deletion of
   recovery material. Production DSH and `pkw-collaboration` keep their original main PIDs.
 * Closed findings stay closed: generator (log read live, outcome gate, real-entry tests), trace
@@ -27,7 +27,7 @@ Everything here is bound to one commit. Where an item is not finished, it says s
 | 9 | New artifact set packed, unpacked contents beside each tarball | pass (10 packages) | `node scripts/pack-release.mjs --artifact-dir /LlHmm9527/.pkw-deployments/0.1.8-pkw.2/packages --version 0.1.8-pkw.2 --json …/receipt.json` | 0 | `/LlHmm9527/.pkw-deployments/0.1.8-pkw.2/receipt.json` | peers are not bundled in the tarballs; the closure is provided by the profile they are installed into |
 | 9b | Old and new release profiles assembled, each from its own artifacts | pass (35 packages, 25 pinned peers, 0 unresolved each) | `node scripts/pkw-independent-profile.mjs --profile e2e/{old,new}-profile --version … --release-source … --harness /opt/deepseek-harness --store …` | 0 | `/tmp/old-profile.log`, `/tmp/new-profile.log` | reads the harness declarations at `/opt/deepseek-harness`; writes only under `e2e/` |
 | 10 | Real switch → injected acceptance failure → rollback → restored release reads the data | pass | `node deploy/rehearse-release.mjs --work-dir e2e/rollback8 --profile-source e2e/old-profile --data-source fixtures/lifecycle-1 --artifact-dir /LlHmm9527/.pkw-deployments/0.1.8-pkw.2/packages --version 0.1.8-pkw.2 --old-version 0.1.7-pkw.1 --owner-password … --set-owner-password --store-dir /LlHmm9527/pkw-independent/store/v11 --force-verify-failure --write-during-serve` | 0 | `e2e/rollback8/report.json` | the remote stub is a loopback fixture; peers come from the profile, not the tarballs |
-| 11 | Isolated target-server acceptance with a temporary unit | **not run** | `deploy/switch-release.mjs --managed-unit …` | — | — | needs a test-only unit and install root; not attempted yet |
+| 11 | Isolated target acceptance through a temporary systemd unit | built, not yet passing | `PKW_TEST_PROFILE=… PKW_TARGET_ARTIFACTS=… PKW_TEST_DATA_ROOT=… node --test scripts/tests/target-systemd.test.mjs` | 1 | `/tmp/target3.log` | see open item 4 |
 | 13 | Acceptances 1-10 re-run on this SHA | pass | see rows above | 0 | `/tmp/all5.log` | 430 tests, 418 pass, 0 fail, 12 skipped |
 | 12 | Real Harness CI job (`typecheck + test + build + packed runtime`) | **not run** | GitHub Actions | — | — | blocked: see missing inputs |
 
@@ -78,6 +78,29 @@ rehearsal, not the product: the seed profile's `.npmrc` pinned a one-off loopbac
 no longer exists (every install hung on it), and the driver used the bootstrap password as the
 verifier's credential (the copy's own account has its own password, which
 `--set-owner-password` now sets explicitly).
+
+## Open item 4 — the target acceptance needs a complete artifact set
+
+`scripts/tests/target-systemd.test.mjs` builds the isolated environment for real and refuses to
+pass quietly when it cannot run. What it already does, and what was observed:
+
+* a transient unit via `systemd-run --unit=<test>.service --collect` with
+  `InaccessiblePaths=/opt/deepseek-harness` — the DSH installation unreachable for that process
+  only, nothing renamed, unmounted or modified, the live service untouched;
+* a test-only install root, a copied fixture with its own account password, a kernel-chosen port,
+  and hooks (`stop`, `state`, `start`, `verify`) shaped exactly like the CLI's `--managed-unit`
+  path, with the verifier only observing;
+* assertions that a verdict really is a verdict: `status: activated`, the expected version and
+  predecessor, `current` leading to the promoted release, the unit still active and answering
+  `/healthz`, and the data root's lock belonging to that unit's main process — one writer.
+
+The run fails before any of that, in the CLI's install step: `pnpm exited 1`, because the release's
+peer closure is resolved from the registry the CLI serves and `@deepseek-ai/dsh-util-crypto` is not
+in the artifact directory. The rehearsal driver does not hit this because it packs the support
+closure out of the seeded release's own `node_modules` and serves it through its registry; the CLI
+path has no equivalent of that yet. Two ways forward, both small: let `deploy/switch-release.mjs`
+accept extra tarballs to serve alongside the release artifacts, or make the acceptance feed it an
+artifact directory built the way the rehearsal builds one.
 
 ## Missing inputs (listed once, with what they are for)
 
