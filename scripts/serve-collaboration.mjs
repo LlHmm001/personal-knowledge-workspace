@@ -56,16 +56,51 @@ const config = JSON.parse(await readFile(resolve(values.config), 'utf8'))
 
 // Clear a provably stale lock before the gateway claims it atomically. A lock whose
 // writer is still alive is never touched: refuse instead of racing for the root.
-const lock = await prepareRootLock(config.dataPath)
-if (!lock.ready) {
+function refuseLock(lock) {
   // Refuse rather than guess. The exit code says which rule was hit, and the file is
   // left exactly as found so a human can inspect the writer it names.
   console.error(JSON.stringify({ status: 'lock-refused', reason: lock.reason, pid: lock.pid ?? null, detail: lock.detail ?? null, lockPath: lock.lockPath ?? null }))
   process.exit(lock.exitCode ?? 5)
 }
+
+const lock = await prepareRootLock(config.dataPath)
+if (!lock.ready) refuseLock(lock)
 if (lock.recoveredFrom) console.log(JSON.stringify({ status: 'stale-lock-recovered', ...lock.recoveredFrom }))
 
-const gateway = await CollaborationGateway.open(config)
+/**
+ * Open the gateway, or refuse with the lock protocol's own exit code.
+ *
+ * The check above and the gateway's `open(lockPath, 'wx')` are two steps, and two starters that
+ * arrive together can both pass the check before either claims the lock. The claim is atomic, so
+ * exactly one of them wins — but the loser then fails on a plain `Error`, which would leave the
+ * process exiting 1: the same code as a crash, with a message about a locked root that says
+ * nothing about which rule applies. Re-deciding through the lock protocol turns that race into the
+ * answer the protocol already defines (a live writer is `LIVE_WRITER`, an unreadable lockfile is
+ * `UNREADABLE`), and keeps "refused" distinguishable from "broke" in the exit code.
+ */
+async function openGateway() {
+  let blocked = 0
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await CollaborationGateway.open(config)
+    } catch (error) {
+      // Ask the protocol, never the message: the same rules that decide whether a lock may be
+      // cleared also say who owns the root now.
+      const again = await prepareRootLock(config.dataPath)
+      // Two states are worth waiting through, and only these two. A lockfile can be read while the
+      // winner has created it but has not yet written its record, which reads as "free" or as
+      // "owned by nobody"; seconds later it names its writer. Everything else is a decision:
+      // a live writer, an unreadable lockfile, or an identity that cannot be established.
+      const undecided = again.ready === true || again.reason === 'lock-without-owner'
+      if (!undecided) refuseLock(again)
+      blocked += 1
+      if (blocked > 40) throw error
+      await new Promise(resolve => setTimeout(resolve, 25))
+    }
+  }
+}
+
+const gateway = await openGateway()
 let closing = false
 let inflight = 0
 

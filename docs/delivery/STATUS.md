@@ -5,7 +5,7 @@ Everything here is bound to one commit. Where an item is not finished, it says s
 ## Current state
 
 * Branch `feat/pkw-independent-runtime`, PR #2, still **draft**, base `chore/pkw-delivery`.
-* Final SHA for this table: `6483229` (see `git rev-parse HEAD` for the full id).
+* Final SHA for this table: `bf54c33` (see `git rev-parse HEAD` for the full id).
 * Live services untouched: no restart, no configuration change, no `current` repoint, no deletion of
   recovery material. Production DSH and `pkw-collaboration` keep their original main PIDs.
 * Closed findings stay closed: generator (log read live, outcome gate, real-entry tests), trace
@@ -20,7 +20,7 @@ Everything here is bound to one commit. Where an item is not finished, it says s
 | 2 | Nine original lifecycle tests execute (0 skip) with that fixture | pass (9/9) | `PKW_TEST_PROFILE=… PKW_TEST_DATA_ROOT=… PKW_TEST_USERNAME=owner node --test scripts/tests/pkw-shutdown.test.mjs` | 0 | `/tmp/life-full-*.log` | two of them still decide "in flight" with a fixed sleep — see open item 1 |
 | 3 | Explicit enter/release signal proven end to end | pass (1/1) | `… node --test scripts/tests/inflight-signal.test.mjs` | 0 | `docs/delivery/repro-inflight/explicit-signal-first.log` | new test, 0 skip only with `PKW_TEST_DATA_ROOT` |
 | 4 | Docker-free reproduction of the parked-request experiment | pass (15 runs) | `node docs/delivery/repro-inflight/repro.mjs --mode parked --hold-ms 250 --stub-delay 1500` | 0 | `docs/delivery/repro-inflight/stages-parked.json` | none: temporary directories only |
-| 5 | Whole tooling suite on this commit | pass (430 tests, 0 fail, 12 skipped) | `PKW_TEST_PROFILE=… node --test scripts/tests/*.test.mjs` | 0 | `/tmp/all2.log` | the 12th skip is the new test without `PKW_TEST_DATA_ROOT`; CI has no profile, so it skips there |
+| 5 | Whole tooling suite on this commit | pass (432 tests, 0 fail, 3 skipped) | `PKW_TEST_PROFILE=… node --test scripts/tests/*.test.mjs` | 0 | `/tmp/all-fix2.log` | the E2E and the target acceptance skip without their inputs; CI has no profile, so the lifecycle test skips there too |
 | 6 | Typecheck | pass | `pnpm run typecheck` | 0 | `/tmp/build.log` | resolves the harness seam at `/opt/deepseek-harness` (read-only) |
 | 7 | PKW build from this commit | pass | `node scripts/build.mjs` | 0 | `/tmp/build.log` | writes `packages/pkw/*/lib` in the working checkout only |
 | 8 | Old artifact set inventoried | pass | `ls /LlHmm9527/.pkw-deployments/0.1.7-pkw.1/{packages,receipt.json}` | 0 | receipt in that directory | it is the material the running site was deployed from; read-only here |
@@ -28,9 +28,9 @@ Everything here is bound to one commit. Where an item is not finished, it says s
 | 9b | Old and new release profiles assembled, each from its own artifacts | pass (35 packages, 25 pinned peers, 0 unresolved each) | `node scripts/pkw-independent-profile.mjs --profile e2e/{old,new}-profile --version … --release-source … --harness /opt/deepseek-harness --store …` | 0 | `/tmp/old-profile.log`, `/tmp/new-profile.log` | reads the harness declarations at `/opt/deepseek-harness`; writes only under `e2e/` |
 | 10 | Real switch → injected acceptance failure → rollback → restored release reads the data | pass | `node deploy/rehearse-release.mjs --work-dir e2e/rollback8 --profile-source e2e/old-profile --data-source fixtures/lifecycle-1 --artifact-dir /LlHmm9527/.pkw-deployments/0.1.8-pkw.2/packages --version 0.1.8-pkw.2 --old-version 0.1.7-pkw.1 --owner-password … --set-owner-password --store-dir /LlHmm9527/pkw-independent/store/v11 --force-verify-failure --write-during-serve` | 0 | `e2e/rollback8/report.json` | the remote stub is a loopback fixture; peers come from the profile, not the tarballs |
 | 11 | Isolated target acceptance through a temporary systemd unit | pass | `PKW_TEST_PROFILE=… PKW_TARGET_ARTIFACTS=… PKW_TARGET_SUPPORT=… PKW_TEST_DATA_ROOT=… node --test scripts/tests/target-systemd.test.mjs` | 0 | `/tmp/target17.log` | transient unit on a test port; DSH unreachable only for that process |
-| 13 | Acceptances 1-10 re-run on this SHA | pass | see rows above | 0 | `/tmp/all5.log` | 430 tests, 418 pass, 0 fail, 12 skipped |
+| 13 | Acceptances 1-10 re-run on this SHA | pass | see rows above | 0 | `/tmp/all-fix2.log` | 432 tests, 429 pass, 0 fail, 3 skipped |
 | 12 | Real Harness CI job (`typecheck + test + build + packed runtime`) | **not run** | GitHub Actions | — | — | blocked: see missing inputs |
-| 14 | Real-artifact switch/rollback E2E (`e2e-switch.test.mjs`) with its three inputs wired | **ran for the first time, red** | `PKW_E2E_SUPPORT_PROFILE=… PKW_E2E_STORE=… PKW_E2E_OLD_ARTIFACTS=… PKW_E2E_OLD_VERSION=0.1.7-pkw.1 node --test scripts/tests/e2e-switch.test.mjs` | 1 | `/tmp/e2e-test2.log` | see open item 5 |
+| 14 | Real-artifact switch/rollback E2E (`e2e-switch.test.mjs`) with its four inputs wired | pass | `PKW_E2E_SUPPORT_PROFILE=… PKW_E2E_STORE=… PKW_E2E_OLD_ARTIFACTS=… PKW_E2E_OLD_VERSION=0.1.7-pkw.1 node --test scripts/tests/e2e-switch.test.mjs` | 0 | `/tmp/probe400/e2e-fixed13.log` | the staged release is this checkout; the old release is the real `0.1.7-pkw.1` artifact set |
 
 ## Open item 1 — the original lifecycle write test
 
@@ -104,13 +104,14 @@ the acceptance refusal carried no detail, the acceptance observations were refer
 before their declaration, and the CLI's verdict was read from the last stdout line when the install
 prints a line per artifact first.
 
-## Open item 5 — the real-artifact E2E, now actually running
+## Closed item 5 — the real-artifact E2E, and what its 400 actually was
 
 This test had only ever been skipped: it needs a staged old artifact set, a support profile and a
-pnpm store, and none were wired. With them wired it runs — and fails, which is the useful part.
-It stages the old release from `/LlHmm9527/.pkw-deployments/0.1.7-pkw.1/packages`, stages this
-checkout as `0.1.9-pkw.1`, installs, promotes, injects a post-activation verification failure after
-writing real content, and rolls back. The failure is in the verifier hook:
+pnpm store. Wired, it ran — and failed, which was the useful part. It stages the old release from
+`/LlHmm9527/.pkw-deployments/0.1.7-pkw.1/packages`, stages this checkout as `0.1.9-pkw.1`, installs,
+promotes, injects a post-activation verification failure after writing real content, and rolls back.
+It is now **green**, and every one of its failures was in the test rather than in the code under
+test. The generic 400 is what hid them:
 
 ```
 e2e: space-page   expectedVersion 0.1.9-pkw.1   serving null
@@ -118,36 +119,68 @@ e2e: space-page   expectedVersion 0.1.9-pkw.1   serving null
                   body {"ok":false,"code":"PKW_REQUEST_FAILED","error":"操作未完成…"}
 ```
 
-Narrowed further, with the product's own schema as the reference:
+A loader hook (`docs/delivery/probe-gateway-error.mjs`) rewrites the gateway's one catch block in
+memory, for one process, and reports the error that block is holding. Under it the page's 400 was
+`DomainError: domain 'pkw': stored record 'note.created:…' in table 'commits' does not match its
+schema` — a fixture defect, named instead of guessed at. Getting even that far needed one
+correction of its own: the hook had been instrumenting a listener whose stderr the probe was not
+draining, so after ~64 KB the listener blocked on a full pipe and stopped answering. Each finding
+below was then confirmed by the error the hook named, not by inference.
 
-* an A/B run of the *same copied data root* against two releases — the staged `0.1.9-pkw.1` and the
-  packed `0.1.8-pkw.2` — answers 400 in both, so this is not a change in the code under test.
-* calling the gateway directly (a valid session, the space in it, the same request) reaches the
-  space route and gets the same opaque 400: the failure is inside the page route handler, after the
-  session and authorization checks.
-* the synthetic store was also missing `unit_globals`, the row the workspace registry reads its
-  workspace ids from — a store whose workspace table the registry never hears about. It is now
-  created and the workspace id is indexed there; the page still answers 400, so this was a
-  necessary correction and not the whole difference.
-* the synthetic store was missing nine tables the product's own store carries
-  (`u_pkw_notes_note_order`, `u_pkw_notes_folder_trash`, `u_pkw_tasks_matrices`, and the six
-  `u_pkw_weknora_sync_*` tables). The helper now creates them, taken from a store the product
-  itself created rather than invented — but the page still fails, so the difference is something
-  else in this store's contents.
+**The fixture was not a store the runtime can open** (`scripts/tests/helpers/synthetic.mjs`), in
+four independent ways:
 
-Reproduced outside the test, on the scene the run kept: the staged `0.1.9-pkw.1` release serving
-this copied data root logs in (`200`), exposes the space in its session, and then answers the space
-page with `400 PKW_REQUEST_FAILED`. The data root is internally consistent — the workspace path its
-own store records points at the copy's workspace, and the note it indexes is on disk — so this is
-"the release cannot serve this page for this data root", not "the page or its header is broken".
-The same endpoint on a profile built from the packed release answers `200` with
-`x-pkw-version: 0.1.8-pkw.2` — and, checked separately, so does the staged `0.1.9-pkw.1` release
-this test builds, when it serves a fixture data root. So the endpoint, the header and the staged
-release are all sound, and what differs is this test's own scene. Two things now make that scene
-inspectable rather than guessed at: the test records the page's status, Location, content type and
-body head when the header is missing, and a failing run keeps its staged releases, copied data root
-and listener logs (`/tmp/pkw-e2e-*` plus the data root it names in its own output). Nothing was
-widened to pass and no 400 was swallowed.
+* the note file carried no frontmatter, so the runtime could not read its own note identity back out
+  of the file and reported the note as missing;
+* the note lived at `synthetic/note.md`, while a note path is workspace-relative and resolves as
+  `<workspace>/notes/<relativePath>`;
+* the `u_pkw_commits` row held three of the six fields `OperationCommit` requires — and the domain
+  facility rejects a record it cannot parse rather than skipping it, which is why one bad row took
+  the whole page down;
+* the attachment row used invented field names (`title`/`contentHash`/`revision`) instead of the
+  product's `AttachmentRecord` (`filename`/`sha256`/`sizeBytes`/`observedRevision`/`indexedAt`/
+  `indexable`).
+
+Every shape now comes from a store the product itself wrote. Verified against the product's own
+listener: login `200`, space page `200` with the version header, `listNotes` `200`, `getNote` `200`,
+and **no error reaches the gateway catch at all**.
+
+**The test itself was wrong in five more places**, each of which had been concealed by the first
+failure:
+
+* the old release's profile was assembled from its ten tarballs alone. A release profile is its
+  packages *and* the Harness peers it declares, so the restored release could not boot at all
+  (`ERR_MODULE_NOT_FOUND`) — the rollback was rolling back to a release that was never runnable,
+  and "the old release still runs" was an assumption. The peers are now staged as a tree from their
+  own packed contents and laid into the profile beside its own packages; only the peers move, so an
+  old package is never overwritten by a peer's newer copy;
+* it asserted on `<workspace>/notes/rollback-X.md` while `createNote` was given
+  `notes/rollback-X.md`, which the runtime resolves to `<workspace>/notes/notes/rollback-X.md`;
+* it asserted the note file mode was `0o644`; the product writes `0o600`, and the store the live
+  site serves from carries `0o600` on every note;
+* it uploaded the attachment as multipart form data, which `/api` does not accept: the upload was
+  refused, `attachmentId` stayed null, and "the rollback carries an attachment" was never tested at
+  all. It is uploaded as base64 JSON and then linked from the note body — `getNote` reports the
+  attachments a note *references*, scanning the markdown for managed link targets, not what happens
+  to share an owner id;
+* it demanded the rollback status `rolled-back` while supplying no `verifyPrevious` hook, so the
+  transaction was right to record `rolled-back-unverified`. The hook now supplies the observation —
+  an authenticated session on the restored release reporting the restored version — instead of the
+  test asserting a status its own evidence could not support.
+
+**Green run** (`/tmp/probe400/e2e-fixed13.log`, exit 0, 41 s): the new release is staged from this
+checkout, installed, promoted, writes a note and an attachment, has its post-activation verification
+failed on purpose, and the restored `0.1.7-pkw.1` serves an authenticated session, reports its own
+version, reads the note back, resolves the attachment it linked and returns its bytes.
+
+```
+rollback verified: note=note_65080be792b1 attachment=att_5031ff444e29 version=0.1.7-pkw.1
+```
+
+Two earlier hypotheses in this document are withdrawn rather than left standing: "the release cannot
+serve this page for this data root" and "a persistence difference specific to that test's setup".
+The first was a fixture defect; the second, in open item 1 below, is the same class of mistake in a
+different place and has since been root-caused as well.
 
 ## Superseded: the target acceptance's earlier stopping point
 
