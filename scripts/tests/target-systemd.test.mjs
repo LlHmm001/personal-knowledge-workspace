@@ -58,34 +58,36 @@ function run(command, args, options = {}) {
   })
 }
 
-const hasSystemd = async () => {
-  const probe = await run('systemctl', ['--version'])
-  const runner = await run('systemd-run', ['--version'])
-  return probe.code === 0 && runner.code === 0
+/**
+ * Whether this host can run the acceptance at all, decided without spawning anything: a systemd
+ * host has `/run/systemd/system`, and the runner has to be on PATH.
+ */
+function systemdAvailable() {
+  if (!existsSync('/run/systemd/system')) return false
+  const path = (process.env.PATH ?? '').split(':')
+  return path.some(dir => existsSync(join(dir, 'systemd-run')))
 }
 
-test('target: the CLI runs its whole chain through a temporary systemd unit [needs a complete artifact set]', async () => {
-  const systemd = await hasSystemd()
-  const profileSource = process.env.PKW_TEST_PROFILE ?? ''
-  const artifactDir = process.env.PKW_TARGET_ARTIFACTS ?? ''
-  const dataSource = process.env.PKW_TEST_DATA_ROOT ?? ''
-  if (!systemd) return // declared below by the skip variant
-  // The install resolves the release's whole peer closure from the registry the CLI serves. A
-  // `--artifact-dir` that carries the PKW packages but not every peer they resolve (the Harness
-  // closure of 35 packages) cannot install offline, and the run says so instead of failing with a
-  // registry error that looks like a product fault.
-  const peersNeeded = process.env.PKW_TARGET_PEER_CLOSURE ?? ''
-  if (peersNeeded && !existsSync(join(peersNeeded, 'node_modules/@deepseek-ai'))) {
-    console.error(`target acceptance skipped: PKW_TARGET_PEER_CLOSURE has no node_modules/@deepseek-ai at ${peersNeeded}`)
-    return
-  }
-  const missing = [
-    profileSource ? null : 'PKW_TEST_PROFILE (profile to seed the release from)',
-    artifactDir ? null : 'PKW_TARGET_ARTIFACTS (release artifacts to install)',
-    dataSource ? null : 'PKW_TEST_DATA_ROOT (fixture to copy as the data root)',
+/**
+ * The inputs this acceptance needs, named one by one. A test that cannot run declares the skip and
+ * says what is missing; it never passes quietly and never fails for a missing environment.
+ */
+function missingInputs() {
+  return [
+    systemdAvailable() ? null : 'systemd with systemd-run on PATH',
+    process.env.PKW_TEST_PROFILE ? null : 'PKW_TEST_PROFILE (profile to seed the release from)',
+    process.env.PKW_TARGET_ARTIFACTS ? null : 'PKW_TARGET_ARTIFACTS (release artifacts, including the peer closure)',
+    process.env.PKW_TEST_DATA_ROOT ? null : 'PKW_TEST_DATA_ROOT (generated fixture to copy as the data root)',
   ].filter(Boolean)
-  assert.deepEqual(missing, [], `target acceptance is missing inputs: ${missing.join(', ')}`)
+}
 
+test('target: the CLI runs its whole chain through a temporary systemd unit', {
+  // Every missing input is named, so a skip here is a statement about this host, not a silent pass.
+  skip: missingInputs().length > 0 ? `target acceptance needs: ${missingInputs().join('; ')}` : false,
+}, async () => {
+  const profileSource = process.env.PKW_TEST_PROFILE
+  const artifactDir = process.env.PKW_TARGET_ARTIFACTS
+  const dataSource = process.env.PKW_TEST_DATA_ROOT
   const version = process.env.PKW_TARGET_VERSION ?? '0.1.8-pkw.2'
   const oldVersion = process.env.PKW_TARGET_OLD_VERSION ?? '0.1.7-pkw.1'
   const workDir = await mkdtemp(join(tmpdir(), 'pkw-target-'))
@@ -255,18 +257,10 @@ exec /usr/local/bin/node ${join(repoRoot, 'deploy/site/verify-collaboration.mjs'
   }
 })
 
-test('target: the isolated acceptance declares the inputs it needs', async () => {
-  const systemd = await hasSystemd()
-  const missing = [
-    systemd ? null : 'systemd with systemd-run',
-    process.env.PKW_TEST_PROFILE ? null : 'PKW_TEST_PROFILE',
-    process.env.PKW_TARGET_ARTIFACTS ? null : 'PKW_TARGET_ARTIFACTS',
-    process.env.PKW_TEST_DATA_ROOT ? null : 'PKW_TEST_DATA_ROOT',
-  ].filter(Boolean)
-  if (missing.length === 0) {
-    assert.ok(true, 'every input is present; the acceptance test above runs for real')
-    return
-  }
-  assert.ok(missing.length > 0)
-  console.error(`target acceptance skipped: ${missing.join(', ')}`)
+test('target: the acceptance input list is honest', () => {
+  // The skip above is built from this function, so its list is the contract: every entry names an
+  // input and what it is for.
+  const missing = missingInputs()
+  assert.ok(Array.isArray(missing))
+  for (const entry of missing) assert.match(entry, /\(|on PATH/)
 })
