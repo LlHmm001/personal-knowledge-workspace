@@ -16,6 +16,9 @@
 import { register } from 'node:module'
 
 const OUT = '/tmp/pkw-gateway-error.json'
+const TRACE = '/tmp/pkw-gateway-trace.jsonl'
+const TRACE_MARKER = 'async handle(req, res) {'
+const TRACE_PATCHED = 'async handle(req, res) {\n        try { writeFileSync(' + JSON.stringify(TRACE) + ', JSON.stringify({ at: new Date().toISOString(), url: req.url, method: req.method }) + "\\n", { flag: "a" }) } catch { /* best effort */ }'
 const MARKER = 'if (res.headersSent) {\n                res.destroy();\n                return;\n            }\n            const code = error?.code;'
 const REPORT = 'try { writeFileSync(' + JSON.stringify(OUT) + ', JSON.stringify({ at: new Date().toISOString(), name: error?.constructor?.name ?? null, code: error?.code ?? null, message: error?.message ?? String(error), stack: (error?.stack ?? "").split("\\n").slice(0, 12) }, null, 2)) } catch { /* best effort */ }'
 const PATCHED = 'if (res.headersSent) {\n                res.destroy();\n                return;\n            }\n            ' + REPORT + '\n            const code = error?.code;'
@@ -32,7 +35,9 @@ const loaderSource = [
 
   "  writeFileSync('/tmp/pkw-gateway-hook.json', JSON.stringify({ url, matched: text.includes(marker) }))",
   "  if (!text.includes(marker)) return { ...result, source: text, format: 'module' }",
-  "  return { ...result, source: text.replace(marker, " + JSON.stringify(PATCHED) + "), format: 'module' }",
+  "  let patched = text.replace(marker, " + JSON.stringify(PATCHED) + ")",
+  "  if (patched.includes(" + JSON.stringify(TRACE_MARKER) + ")) patched = patched.replace(" + JSON.stringify(TRACE_MARKER) + ", " + JSON.stringify(TRACE_PATCHED) + ")",
+  "  return { ...result, source: patched, format: 'module' }",
   '}',
 ].join('\n')
 
