@@ -5,7 +5,7 @@ Everything here is bound to one commit. Where an item is not finished, it says s
 ## Current state
 
 * Branch `feat/pkw-independent-runtime`, PR #2, still **draft**, base `chore/pkw-delivery`.
-* Final SHA for this table: `29e162d` (see `git rev-parse HEAD` for the full id).
+* Final SHA for this table: `523a025cd348703fd88caff7a8e35807375ece67`.
 * Live services untouched: no restart, no configuration change, no `current` repoint, no deletion of
   recovery material. Production DSH and `pkw-collaboration` keep their original main PIDs.
 * Closed findings stay closed: generator (log read live, outcome gate, real-entry tests), trace
@@ -27,7 +27,7 @@ Everything here is bound to one commit. Where an item is not finished, it says s
 | 9 | New artifact set packed, unpacked contents beside each tarball | pass (10 packages) | `node scripts/pack-release.mjs --artifact-dir /LlHmm9527/.pkw-deployments/0.1.8-pkw.2/packages --version 0.1.8-pkw.2 --json …/receipt.json` | 0 | `/LlHmm9527/.pkw-deployments/0.1.8-pkw.2/receipt.json` | peers are not bundled in the tarballs; the closure is provided by the profile they are installed into |
 | 9b | Old and new release profiles assembled, each from its own artifacts | pass (35 packages, 25 pinned peers, 0 unresolved each) | `node scripts/pkw-independent-profile.mjs --profile e2e/{old,new}-profile --version … --release-source … --harness /opt/deepseek-harness --store …` | 0 | `/tmp/old-profile.log`, `/tmp/new-profile.log` | reads the harness declarations at `/opt/deepseek-harness`; writes only under `e2e/` |
 | 10 | Real switch → injected acceptance failure → rollback → restored release reads the data | pass | `node deploy/rehearse-release.mjs --work-dir e2e/rollback8 --profile-source e2e/old-profile --data-source fixtures/lifecycle-1 --artifact-dir /LlHmm9527/.pkw-deployments/0.1.8-pkw.2/packages --version 0.1.8-pkw.2 --old-version 0.1.7-pkw.1 --owner-password … --set-owner-password --store-dir /LlHmm9527/pkw-independent/store/v11 --force-verify-failure --write-during-serve` | 0 | `e2e/rollback8/report.json` | the remote stub is a loopback fixture; peers come from the profile, not the tarballs |
-| 11 | Isolated target acceptance through a temporary systemd unit | built, not yet passing | `PKW_TEST_PROFILE=… PKW_TARGET_ARTIFACTS=… PKW_TEST_DATA_ROOT=… node --test scripts/tests/target-systemd.test.mjs` | 1 | `/tmp/target3.log` | see open item 4 |
+| 11 | Isolated target acceptance through a temporary systemd unit | pass | `PKW_TEST_PROFILE=… PKW_TARGET_ARTIFACTS=… PKW_TARGET_SUPPORT=… PKW_TEST_DATA_ROOT=… node --test scripts/tests/target-systemd.test.mjs` | 0 | `/tmp/target17.log` | transient unit on a test port; DSH unreachable only for that process |
 | 13 | Acceptances 1-10 re-run on this SHA | pass | see rows above | 0 | `/tmp/all5.log` | 430 tests, 418 pass, 0 fail, 12 skipped |
 | 12 | Real Harness CI job (`typecheck + test + build + packed runtime`) | **not run** | GitHub Actions | — | — | blocked: see missing inputs |
 
@@ -79,7 +79,31 @@ no longer exists (every install hung on it), and the driver used the bootstrap p
 verifier's credential (the copy's own account has its own password, which
 `--set-owner-password` now sets explicitly).
 
-## Open item 4 — the target acceptance needs a complete artifact set
+## The target acceptance (closed)
+
+`scripts/tests/target-systemd.test.mjs` passes with its three inputs. On this host, with the live
+installation untouched:
+
+* a transient unit (`systemd-run --unit=<test>.service --collect`) running with
+  `InaccessiblePaths=/opt/deepseek-harness`, so the DSH installation is unreachable for that process
+  only — nothing renamed, unmounted or modified;
+* a test-only install root, a copied fixture with its own account password, a kernel-chosen port,
+  and hook scripts (`stop`, `state`, `start`, `verify`) shaped exactly like the CLI's
+  `--managed-unit` path, with the verifier only observing;
+* the real CLI activates the release and is accepted: `reachable 200`, `auth verified`, verifier exit
+  0; `current` leads to the promoted release, the unit is still active and answering `/healthz`, and
+  the data root's lock belongs to that unit's main process — one writer;
+* a second CLI run goes through the same hooks, is refused because the release is already promoted,
+  and the release in service is still answering afterwards.
+
+Four defects had to be fixed for it to pass, and each was found by reading what a failing run
+reported rather than by guessing: `--reachable-url` named the origin's root (answered 404, so the
+probe reported unreachable before the verifier ran and the refusal read `authenticated=undefined`),
+the acceptance refusal carried no detail, the acceptance observations were referenced in a catch
+before their declaration, and the CLI's verdict was read from the last stdout line when the install
+prints a line per artifact first.
+
+## Superseded: the target acceptance's earlier stopping point
 
 `scripts/tests/target-systemd.test.mjs` builds the isolated environment for real and refuses to
 pass quietly when it cannot run. What it already does, and what was observed:
