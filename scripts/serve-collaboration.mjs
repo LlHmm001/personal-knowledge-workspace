@@ -30,6 +30,7 @@
 import { createServer } from 'node:http'
 import { createRequire } from 'node:module'
 import { readFile } from 'node:fs/promises'
+import { appendFileSync, existsSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
@@ -67,6 +68,45 @@ if (lock.recoveredFrom) console.log(JSON.stringify({ status: 'stale-lock-recover
 const gateway = await CollaborationGateway.open(config)
 let closing = false
 let inflight = 0
+
+// ── test-only observation gate, never configured by the product ──────────────────
+// A drain test has to know that an operation really is in flight when the signal arrives, and
+// has to be able to hold it there on purpose. Waiting a fixed number of milliseconds only makes
+// that likely. With `PKW_TEST_GATE_FILE` naming a small JSON configuration, every request that
+// matches the configured path and method is numbered, the chosen ordinal is recorded as entering
+// the handler, and that one request is held for `holdMs` before it continues to the product. The
+// request itself is passed on untouched, so a held request is an ordinary request that has not
+// finished yet. Nothing is set unless the variable is set, so an unconfigured listener runs no
+// gate code at all.
+const gate = (() => {
+  const configPath = process.env.PKW_TEST_GATE_FILE
+  if (!configPath) return null
+  let settings
+  try { settings = JSON.parse(readFileSync(configPath, 'utf8')) } catch { return null }
+  if (!settings?.log) return null
+  const releasePath = settings.release ?? null
+  const holdMs = Number.isFinite(settings.holdMs) ? Number(settings.holdMs) : 0
+  const holdFrom = Number.isInteger(settings.holdCount) ? settings.holdCount : 1
+  let matched = 0
+  const record = entry => { try { appendFileSync(settings.log, `${JSON.stringify({ at: new Date().toISOString(), ...entry })}\n`) } catch { /* the test stopped watching */ } }
+  return {
+    matches: (method, path) => settings.method ? (settings.method === method && settings.path === path) : (settings.path === path),
+    async wait(method, path) {
+      matched += 1
+      const ordinal = matched
+      if (ordinal !== holdFrom) return
+      record({ event: 'entered', method, path, ordinal })
+      // Held requests wait for the release file when one is configured, and for `holdMs` either
+      // way. A hold of zero still records the entry, which is all a test needs to know that the
+      // operation was inside the handler.
+      const deadline = Date.now() + 60_000
+      while (releasePath && !existsSync(releasePath) && Date.now() < deadline) await new Promise(r => setTimeout(r, 5))
+      if (holdMs > 0) await new Promise(r => setTimeout(r, holdMs))
+      record({ event: 'released', method, path, ordinal })
+    },
+  }
+})()
+
 const server = createServer((req, res) => {
   if (closing) { res.writeHead(503); res.end('shutting down'); return }
   let path
@@ -81,6 +121,10 @@ const server = createServer((req, res) => {
   if (path !== '/pkw' && !path.startsWith('/pkw/')) { res.writeHead(404); res.end('not found'); return }
   inflight += 1
   res.once('close', () => { inflight -= 1 })
+  if (gate && gate.matches(req.method, path)) {
+    void gate.wait(req.method, path).then(() => gateway.handle(req, res))
+    return
+  }
   void gateway.handle(req, res)
 })
 server.requestTimeout = 30_000

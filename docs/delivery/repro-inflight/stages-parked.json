@@ -1,0 +1,105 @@
+[
+  {
+    "at": "2026-10-08T05:20:45.009Z",
+    "stage": "copy",
+    "target": "/tmp/pkw-repro/parked/data",
+    "databases": 2,
+    "rewritten": 1
+  },
+  {
+    "at": "2026-10-08T05:20:46.482Z",
+    "stage": "listening",
+    "port": 43121
+  },
+  {
+    "at": "2026-10-08T05:20:47.553Z",
+    "stage": "login",
+    "status": 200
+  },
+  {
+    "at": "2026-10-08T05:20:47.559Z",
+    "stage": "session",
+    "status": 200,
+    "csrf": true
+  },
+  {
+    "at": "2026-10-08T05:20:47.635Z",
+    "stage": "createNote",
+    "status": 200
+  },
+  {
+    "at": "2026-10-08T05:20:47.646Z",
+    "stage": "getNote",
+    "status": 200,
+    "revision": 1
+  },
+  {
+    "at": "2026-10-08T05:20:47.669Z",
+    "stage": "control-save",
+    "status": 200,
+    "committed": true,
+    "revision": 2
+  },
+  {
+    "at": "2026-10-08T05:20:47.676Z",
+    "stage": "getNote-before-flight",
+    "status": 200,
+    "revision": 2
+  },
+  {
+    "at": "2026-10-08T05:20:47.683Z",
+    "stage": "write-entered",
+    "gate": [
+      {
+        "event": "entered",
+        "ordinal": 5
+      }
+    ],
+    "settled": false
+  },
+  {
+    "at": "2026-10-08T05:20:47.683Z",
+    "stage": "signal",
+    "settled": false
+  },
+  {
+    "at": "2026-10-08T05:20:47.951Z",
+    "stage": "response-ended",
+    "status": 200,
+    "transport": null,
+    "cause": null,
+    "committed": true,
+    "elapsedMs": 268
+  },
+  {
+    "at": "2026-10-08T05:20:50.977Z",
+    "stage": "stopped",
+    "code": 0,
+    "signal": null,
+    "elapsedMs": 3294,
+    "graceful": true,
+    "forced": false
+  },
+  {
+    "at": "2026-10-08T05:20:50.978Z",
+    "stage": "indexed",
+    "revision": 3,
+    "hash": "61e8f9661d55"
+  },
+  {
+    "at": "2026-10-08T05:20:52.294Z",
+    "stage": "restart-read",
+    "login": 200,
+    "status": 200,
+    "code": null,
+    "revision": 3,
+    "hasControl": true,
+    "hasInFlight": true
+  },
+  {
+    "at": "2026-10-08T05:20:52.332Z",
+    "stage": "restart-stopped",
+    "code": 0,
+    "signal": null
+  }
+]
