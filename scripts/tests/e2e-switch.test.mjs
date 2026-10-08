@@ -82,34 +82,16 @@ test('e2e: new release writes, verification fails, rollback restores the old rel
   const children = new Set()
   let report_oldReleasePackages = 0
   try {
-    // ── the old release: real artifacts, copied out of the live installation ─────
-    // ── the old release: the real published artifacts, unpacked verbatim ─────────
-    // Both releases are real, traceable artifacts: the old one is a staged release of
-    // this project whose digests are recorded, the new one is staged from this checkout.
-    const oldRelease = join(root, 'releases', OLD_VERSION, 'profile')
-    await mkdir(oldRelease, { recursive: true })
-    const oldArtifactDir = process.env.PKW_E2E_OLD_ARTIFACTS
-    assert.ok(oldArtifactDir && existsSync(oldArtifactDir), 'PKW_E2E_OLD_ARTIFACTS must name a staged artifact directory')
-    for (const entry of await readdir(oldArtifactDir, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue
-      const dir = join(oldArtifactDir, entry.name)
-      const tgz = (await readdir(dir)).find(f => f.endsWith('.tgz'))
-      if (!tgz) continue
-      const manifest = JSON.parse(execFileSync('tar', ['-xOf', join(dir, tgz), 'package/package.json'], { encoding: 'utf8' }))
-      const target = join(oldRelease, 'node_modules', manifest.name)
-      await mkdir(target, { recursive: true })
-      execFileSync('tar', ['-xzf', join(dir, tgz), '-C', target, '--strip-components=1'])
-    }
-    await writeFile(join(oldRelease, 'package.json'), JSON.stringify({ name: 'pkw-release', private: true, type: 'module', version: OLD_VERSION }, null, 2) + '\n')
-    await writeFile(join(oldRelease, 'pnpm-workspace.yaml'), 'packages: []\n')
-    assert.equal(await profileVersion(oldRelease), OLD_VERSION, 'the old release must declare a traceable version')
-    await mkdir(join(root, 'releases'), { recursive: true })
-    await symlink(join('releases', OLD_VERSION), join(root, 'current'))
-
     // ── the new release: this checkout, staged at a new version ──────────────────
     const artifacts = await stagePackages(join(root, 'packages'), NEW_VERSION, registry.url)
     for (const artifact of artifacts) await registry.add(artifact.tarball)
-    // Serve the old release's own peer closure so the install only fetches this release.
+
+    // ── the peer closure both releases resolve against ───────────────────────────
+    // A release profile is its packages *and* the Harness peers they declare, pinned by that
+    // profile. Staging the peers first is what lets the old release be assembled into a profile
+    // that can actually run — a release whose peers are missing cannot serve, and a rollback to
+    // one that cannot serve is not a rollback. The same tarballs feed the new release's install
+    // through the loopback registry.
     const support = []
     const supportRoot = process.env.PKW_E2E_SUPPORT_PROFILE ?? LIVE_PROFILE
     for (const entry of (await readdir(join(supportRoot, PKW_SCOPE), { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
@@ -127,6 +109,61 @@ test('e2e: new release writes, verification fails, rollback restores the old rel
       support.push(item)
       await registry.add(item.tarball)
     }
+    // The peer closure laid out as an installed tree, so the release the switch never installs can
+    // still resolve the peers it declares. What goes in is each peer's own packed contents, not a
+    // stub: a profile that resolves a placeholder is a profile that proves nothing.
+    const supportTree = join(root, 'support-tree')
+    const supportScope = join(supportTree, PKW_SCOPE)
+    await mkdir(supportScope, { recursive: true })
+    await writeFile(join(supportTree, 'package.json'), JSON.stringify({ name: 'pkw-support', private: true, type: 'module', version: '0.0.0' }, null, 2) + '\n')
+    const scope = PKW_SCOPE.slice('node_modules/'.length)
+    for (const item of support) {
+      const target = join(supportScope, item.name.slice(scope.length + 1))
+      await mkdir(target, { recursive: true })
+      execFileSync('tar', ['-xzf', item.tarball, '-C', target, '--strip-components=1'])
+    }
+    assert.equal((await readdir(supportScope)).length, support.length, 'every staged peer must be laid out in the peer tree')
+
+    // ── the old release: the real published artifacts, unpacked verbatim, with its peers ─
+    // Both releases are real, traceable artifacts: the old one is a staged release of this project
+    // whose digests are recorded, the new one is staged from this checkout. The old profile is
+    // assembled exactly like the new one is installed — its own packages, plus the peer closure —
+    // so that "the old release still runs" is something the test can observe rather than assume.
+    const oldRelease = join(root, 'releases', OLD_VERSION, 'profile')
+    const oldModules = join(oldRelease, 'node_modules')
+    await mkdir(oldModules, { recursive: true })
+    const oldArtifactDir = process.env.PKW_E2E_OLD_ARTIFACTS
+    assert.ok(oldArtifactDir && existsSync(oldArtifactDir), 'PKW_E2E_OLD_ARTIFACTS must name a staged artifact directory')
+    for (const entry of await readdir(oldArtifactDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue
+      const dir = join(oldArtifactDir, entry.name)
+      const tgz = (await readdir(dir)).find(f => f.endsWith('.tgz'))
+      if (!tgz) continue
+      const manifest = JSON.parse(execFileSync('tar', ['-xOf', join(dir, tgz), 'package/package.json'], { encoding: 'utf8' }))
+      const target = join(oldModules, manifest.name)
+      await mkdir(target, { recursive: true })
+      execFileSync('tar', ['-xzf', join(dir, tgz), '-C', target, '--strip-components=1'])
+    }
+    // The peers are laid in beside the release's own packages. Only the peers move: a scope entry
+    // that is one of the release's own packages must never overwrite the artifact just unpacked.
+    const oldScope = join(oldRelease, PKW_SCOPE)
+    for (const entry of await readdir(supportScope, { withFileTypes: true })) {
+      if (entry.name.startsWith('dsh-pkw-')) continue
+      await cp(join(supportScope, entry.name), join(oldScope, entry.name), { recursive: true, dereference: false })
+    }
+    const flatRoot = join(supportRoot, 'node_modules')
+    for (const entry of await readdir(flatRoot, { withFileTypes: true })) {
+      if (entry.name.startsWith('@') || entry.name.startsWith('.')) continue
+      await cp(join(flatRoot, entry.name), join(oldModules, entry.name), { recursive: true, dereference: false })
+    }
+    assert.ok(existsSync(join(oldScope, 'cordis/package.json')), 'the old release profile must resolve the Harness peers it declares')
+    const oldWebManifest = JSON.parse(await readFile(join(oldScope, 'dsh-pkw-web', 'package.json'), 'utf8'))
+    assert.equal(oldWebManifest.version, OLD_VERSION, 'the old profile must resolve the old release own packages, never the peers copies of them')
+    await writeFile(join(oldRelease, 'package.json'), JSON.stringify({ name: 'pkw-release', private: true, type: 'module', version: OLD_VERSION }, null, 2) + '\n')
+    await writeFile(join(oldRelease, 'pnpm-workspace.yaml'), 'packages: []\n')
+    assert.equal(await profileVersion(oldRelease), OLD_VERSION, 'the old release must declare a traceable version')
+    await mkdir(join(root, 'releases'), { recursive: true })
+    await symlink(join('releases', OLD_VERSION), join(root, 'current'))
 
     // ── the data copy: consistent snapshot, fully self-contained ─────────────────
     const dataRoot = join(root, 'data')
@@ -159,7 +196,7 @@ test('e2e: new release writes, verification fails, rollback restores the old rel
       child.unref()
       children.add(child)
       const reachable = await checkReachable({ origin: `http://127.0.0.1:${port}`, timeoutMs: 30_000 })
-      if (!reachable.reachable) throw new Error(`listener for ${version} did not start: ${reachable.error}; ${output.slice(-300)}`)
+      if (!reachable.reachable) throw new Error(`listener for ${version} did not start: ${reachable.error}; ${output.slice(-1400)}`)
       listeners.set(version, child.pid)
       return { port, output: () => output }
     }
@@ -169,6 +206,13 @@ test('e2e: new release writes, verification fails, rollback restores the old rel
       for (let i = 0; i < 80; i++) { try { process.kill(pid, 0) } catch { return } await new Promise(r => setTimeout(r, 100)) }
       try { process.kill(pid, 'SIGKILL') } catch { /* gone */ }
     }
+
+    // Where a note body actually lives. A note's `relativePath` is workspace-relative and the
+    // runtime resolves it as `<workspace>/notes/<relativePath>`, so the `relativePath` handed to
+    // createNote is passed through whole — asserting on a path built any other way reports a
+    // missing file for a note the product just wrote.
+    const noteBodyFile = (spaceId, relativePath) => join(dataRoot, 'spaces', spaceId, 'workspace', 'notes', relativePath)
+    const writtenNotePath = () => noteBodyFile(data.spaceId, `notes/rollback-${marker}.md`)
 
     // ── a real HTTP client for the collaboration surface ────────────────────────
     const client = port => {
@@ -198,9 +242,9 @@ test('e2e: new release writes, verification fails, rollback restores the old rel
           return { status: response.status, location: response.headers.get('location'), contentType: response.headers.get('content-type'), bodyHead: (await response.text()).slice(0, 160) }
         },
         rpc: async (spaceId, method, args, csrf) => (await call(`/pkw/spaces/${spaceId}/api`, { method: 'POST', body: { method, args }, csrf })).json(),
-        upload: async (spaceId, formData, csrf) => {
-          const response = await call(`/pkw/spaces/${spaceId}/api`, { method: 'POST', body: formData, csrf, raw: true })
-          return response.json().catch(() => null)
+        download: async (spaceId, attachmentId) => {
+          const response = await call(`/pkw/spaces/${spaceId}/attachment/${attachmentId}`)
+          return { status: response.status, bytes: Buffer.from(await response.arrayBuffer()) }
         },
       }
     }
@@ -223,6 +267,21 @@ test('e2e: new release writes, verification fails, rollback restores the old rel
           start: async () => { /* started by the verification step below, which knows the version */ },
           reachable: async ({ previousVersion }) => {
             try { await startListener(previousVersion); return { reachable: true, status: 200 } } catch (error) { return { reachable: false, error: error.message } }
+          },
+          // The rollback has its own acceptance. Reachability alone says the old port answers;
+          // acceptance says an authenticated session on the restored release reports the restored
+          // version. Without this hook the transaction is right to record `rolled-back-unverified`,
+          // so the test supplies the observation rather than letting the status be weaker than the
+          // evidence it actually has.
+          verifyPrevious: async ({ expectedVersion }) => {
+            const listener = await startListener(expectedVersion)
+            const api = client(listener.port)
+            const login = await api.login()
+            if (login.status !== 200) return { ok: false, enforcing: true, checks: { authenticated: 'refused', servingVersion: null }, note: `login answered HTTP ${login.status}` }
+            const session = await api.session()
+            const space = session.value.spaces[0]
+            const serving = await api.spaceVersion(space.id)
+            return { ok: serving === expectedVersion, enforcing: true, checks: { authenticated: 'verified', servingVersion: serving } }
           },
           verify: async ({ expectedVersion }) => {
             const listener = await startListener(expectedVersion)
@@ -257,14 +316,33 @@ test('e2e: new release writes, verification fails, rollback restores the old rel
             const created = await api.rpc(space.id, 'createNote', { relativePath: `notes/rollback-${marker}.md`, markdown: `# ${marker}\n\nwritten by ${NEW_VERSION}\n` }, session.value.csrf)
             assert.equal(created.ok, true, `createNote must succeed: ${JSON.stringify(created).slice(0, 200)}`)
             noteId = created.value.noteId
+            // The attachment is uploaded first, then linked from the note body. `getNote` reports
+            // the attachments a note *references* — it scans the markdown for managed link targets,
+            // it does not list what happens to share an owner id — so an upload that is never
+            // referenced is an attachment no reader would ever see.
             const attachmentBytes = Buffer.from(`attachment written by ${NEW_VERSION}\n`)
-            const form = new FormData()
-            form.append('file', new Blob([attachmentBytes]), 'rollback-attachment.bin')
-            form.append('method', 'uploadAttachment')
-            form.append('args', JSON.stringify({ relativePath: `attachments/rollback-${marker}.bin` }))
-            const uploaded = await api.upload(space.id, form, session.value.csrf)
+            const attachmentName = `rollback-${marker}.bin`
+            // The RPC takes the bytes inline, base64, as JSON. This test previously sent multipart
+            // form data, which the gateway does not accept for `/api`: the upload was refused and
+            // the attachment silently stayed null, so the rollback was never proven to carry one.
+            const uploaded = await api.rpc(space.id, 'uploadAttachment', {
+              filename: attachmentName, mimeType: 'application/octet-stream',
+              contentBase64: attachmentBytes.toString('base64'), ownerNoteId: noteId,
+            }, session.value.csrf)
             attachmentId = uploaded?.value?.attachmentId ?? null
-            const bodyPath = join(dataRoot, 'spaces', data.spaceId, 'workspace', `notes/rollback-${marker}.md`)
+            assert.ok(attachmentId, `the new release must have uploaded an attachment: ${JSON.stringify(uploaded).slice(0, 200)}`)
+            const current = await api.rpc(space.id, 'getNote', { noteId }, session.value.csrf)
+            assert.equal(current.ok, true, `the note must be readable before it is linked: ${JSON.stringify(current).slice(0, 200)}`)
+            const linked = await api.rpc(space.id, 'saveNoteBody', {
+              noteId,
+              body: `${current.value.body}\n![${attachmentName}](attachments/${attachmentId}/${attachmentName})\n`,
+              expectedContentHash: current.value.note.contentHash,
+            }, session.value.csrf)
+            assert.equal(linked.ok, true, `the note must link the attachment it owns: ${JSON.stringify(linked).slice(0, 200)}`)
+            const relinked = await api.rpc(space.id, 'getNote', { noteId }, session.value.csrf)
+            assert.equal(relinked.value.attachments.some(a => a.attachmentId === attachmentId), true,
+              `the new release must report the attachment it linked: ${JSON.stringify(relinked.value.attachments)}`)
+            const bodyPath = writtenNotePath()
             assert.ok(existsSync(bodyPath), 'the note the new version wrote must be on disk')
             throw new Error('synthetic post-activation verification failure (after writing real content)')
           },
@@ -272,7 +350,14 @@ test('e2e: new release writes, verification fails, rollback restores the old rel
       })
     } catch (error) {
       if (error.code !== 'PKW_DEPLOYMENT_ROLLED_BACK') failedRun = true
-      assert.equal(error.code, 'PKW_DEPLOYMENT_ROLLED_BACK', `unexpected failure: ${error.code ?? error.message}\n${JSON.stringify(error.report?.activationError ?? {}, null, 1).slice(0, 400)}`)
+      // A rollback that did not complete has to say what stopped it: the reasons the transaction
+      // collected, the status it reached and the release it left behind, in one place.
+      assert.equal(error.code, 'PKW_DEPLOYMENT_ROLLED_BACK', `unexpected failure: ${error.code ?? error.message}\n${JSON.stringify({
+        reasons: (error.errors ?? []).map(e => e.message), status: error.report?.status ?? null,
+        rollback: error.report?.rollback ?? null, reachable: error.report?.rollbackReachable ?? null,
+        acceptanceError: error.report?.rollbackAcceptanceError ?? null,
+        activationError: error.report?.activationError ?? null,
+      }, null, 1).slice(0, 1200)}`)
       assert.equal(error.report?.status, 'rolled-back')
       assert.equal(error.report?.rollback?.restoredVersion, OLD_VERSION, 'the restored release must declare the old version')
       assert.match(error.message, /synthetic post-activation verification failure/, 'the original error must be preserved')
@@ -288,12 +373,23 @@ test('e2e: new release writes, verification fails, rollback restores the old rel
       assert.equal(await oldApi.spaceVersion(space.id), OLD_VERSION, 'the restored service must report the actual old version')
       const read = await oldApi.rpc(space.id, 'getNote', { noteId }, session.value.csrf)
       assert.equal(read.ok, true, `the old service must read the note the new release wrote: ${JSON.stringify(read).slice(0, 200)}`)
-      const onDisk = await readFile(join(dataRoot, 'spaces', data.spaceId, 'workspace', `notes/rollback-${marker}.md`), 'utf8')
+      // The attachment the new release uploaded has to survive the rollback as well: the restored
+      // service must still resolve it by id, not merely still hold a row for it.
+      assert.ok(attachmentId, 'the new release must have uploaded an attachment before the failure')
+      assert.equal(read.value.attachments.some(a => a.attachmentId === attachmentId), true,
+        `the restored service must resolve the attachment the new release uploaded: ${JSON.stringify(read.value.attachments)}`)
+      const fetched = await oldApi.download(space.id, attachmentId)
+      assert.equal(fetched.status, 200, `the restored service must serve the attachment bytes (HTTP ${fetched.status})`)
+      assert.deepEqual(fetched.bytes, Buffer.from(`attachment written by ${NEW_VERSION}\n`), 'the attachment bytes must be preserved')
+      const onDisk = await readFile(writtenNotePath(), 'utf8')
       assert.ok(onDisk.includes(marker), 'the written body must still be present')
-      assert.equal((await stat(join(dataRoot, 'spaces', data.spaceId, 'workspace', `notes/rollback-${marker}.md`))).mode & 0o777, 0o644, 'the file mode must be preserved')
+      // The product writes note bodies `0o600`, and the store the product's own site serves from
+      // carries that same mode on every note. Asserting `0o644` here would be asserting a
+      // permission the product never sets, and it would pass only on a root-owned rehearsal tree.
+      assert.equal((await stat(writtenNotePath())).mode & 0o777, 0o600, 'the file mode must be the one the product writes')
       const listed = await oldApi.rpc(space.id, 'listNotes', {}, session.value.csrf)
       assert.equal(listed.ok, true)
-      console.log(`  rollback verified: note=${noteId} attachment=${attachmentId ?? 'n/a'} version=${OLD_VERSION}`)
+      console.log(`  rollback verified: note=${noteId} attachment=${attachmentId} version=${OLD_VERSION}`)
       return
     }
     assert.equal(switched.status, 'activated')
