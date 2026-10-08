@@ -200,6 +200,10 @@ export function assertAcceptance(result, { expectedVersion, label = 'verificatio
   const refuse = message => {
     const error = new Error(message)
     error.code = 'PKW_ACCEPTANCE_INVALID'
+    // The result is attached, so a caller can say *why* acceptance was refused instead of only
+    // that it was: the report carries the observations, the verifier's own output and any run error.
+    error.result = result
+    error.verifierRun = result?.run ?? null
     throw error
   }
   if (!result || typeof result !== 'object') refuse(`${label} returned no structured result`)
@@ -219,7 +223,9 @@ export function assertAcceptance(result, { expectedVersion, label = 'verificatio
   const serving = checks ? (checks.servingVersion ?? result.servingVersion) : null
   if (!serving) unmet.push('did not report which release is serving')
   else if (expectedVersion && serving !== expectedVersion) unmet.push(`reports ${serving} serving, expected ${expectedVersion}`)
-  if (unmet.length > 0) refuse(`${label} is not acceptance: ${unmet.join('; ')}`)
+  if (unmet.length > 0) {
+    refuse(`${label} is not acceptance: ${unmet.join('; ')}`)
+  }
   return result
 }
 
@@ -826,6 +832,10 @@ export async function switchRelease({
   }
 }
 
+// The acceptance observations the CLI's own hooks produced. Declared here because both the try and
+// the catch use them: a refusal has to be able to say what the verifier actually reported.
+const acceptanceObserved = {}
+
 // ------------------------------------------------------------------ CLI entry
 if (process.argv[1] && import.meta.url === (await import('node:url')).pathToFileURL(resolve(process.argv[1])).href) {
   const { values } = parseArgs({ options: {
@@ -959,22 +969,36 @@ unknown, and an unknown stop state is never treated as stopped. Supply one of:
         },
         // Activation acceptance: reachability, authentication, the serving version and the note
         // read-back, observed separately and all four required.
-        verify: async ({ expectedVersion }) => probeAcceptance({
-          url: values['reachable-url'], hook: values['verify-hook'], expectedVersion, mode: 'activate',
-        }),
+        verify: async ({ expectedVersion }) => {
+          const acceptance = await probeAcceptance({
+            url: values['reachable-url'], hook: values['verify-hook'], expectedVersion, mode: 'activate',
+          })
+          acceptanceObserved.activation = acceptance
+          return acceptance
+        },
         // Rollback acceptance: the same four observations, made of the release that came back. A
         // restore that only answered on the socket is reported as unverified, never as accepted.
-        verifyPrevious: async ({ expectedVersion }) => probeAcceptance({
-          url: values['reachable-url'], hook: values['verify-hook'], expectedVersion, mode: 'rollback',
-        }),
+        verifyPrevious: async ({ expectedVersion }) => {
+          const acceptance = await probeAcceptance({
+            url: values['reachable-url'], hook: values['verify-hook'], expectedVersion, mode: 'rollback',
+          })
+          acceptanceObserved.rollback = acceptance
+          return acceptance
+        },
       },
     })
+    report.activationAcceptance = acceptanceObserved.activation ?? null
+    report.rollbackAcceptanceProbe = acceptanceObserved.rollback ?? null
     console.log(JSON.stringify({
       status: report.status, version: report.version, previousVersion: report.previousVersion,
       artifacts: artifacts.length, supportArtifacts: support.length,
+      acceptance: report.activationAcceptance ? { ok: report.activationAcceptance.ok, reach: report.activationAcceptance.reach, auth: report.activationAcceptance.auth, run: report.activationAcceptance.run } : null,
     }, null, 2))
   } catch (error) {
-    console.error(JSON.stringify({ status: error.code ?? 'failed', message: error.message, original: error.cause?.message ?? null }, null, 2))
+    console.error(JSON.stringify({
+      status: error.code ?? 'failed', message: error.message, original: error.cause?.message ?? null,
+      acceptance: acceptanceObserved.activation ?? null, rollbackAcceptance: acceptanceObserved.rollback ?? null,
+    }, null, 2))
     process.exit(1)
   } finally { await registry.close() }
 }

@@ -245,7 +245,10 @@ exit $code
       cli, '--root', root, '--version', version, '--artifact-dir', artifactDir,
       '--stop-hook', systemdStop, '--state-hook', systemdProbe, '--start-hook', systemdRun,
       '--verify-hook', verifyHook,
-      '--reachable-url', origin, '--public-origin', origin,
+      // A health endpoint on the same origin: reachability is observed before acceptance, and the
+      // origin's root answers 404 on this service, so naming it would report "unreachable" for a
+      // service that is answering.
+      '--reachable-url', `${origin}/healthz`, '--public-origin', origin,
       '--snapshot-dir', join(workDir, 'snapshots', version),
       '--store-dir', process.env.PKW_TARGET_STORE ?? '/LlHmm9527/pkw-independent/store/v11',
       '--expected-version', version,
@@ -267,7 +270,12 @@ exit $code
       assert.fail(`the CLI did not activate the release (exit ${result.code}); its verdict and the verifier log are in ${workDir}`)
     }
     let verdict = null
-    try { verdict = JSON.parse(result.stdout.trim().split('\n').filter(Boolean).slice(-1)[0]) } catch { verdict = null }
+    try {
+      // The install prints one line per artifact and the verdict is the JSON object after them, so
+      // the verdict is read from the first `{` rather than from the last line.
+      const start = result.stdout.indexOf('{')
+      verdict = start === -1 ? null : JSON.parse(result.stdout.slice(start))
+    } catch { verdict = null }
     assert.ok(verdict, `the CLI must print a structured verdict: ${result.stdout.slice(-300)}`)
     assert.equal(verdict.status, 'activated', `the CLI reported ${verdict.status}`)
     assert.equal(verdict.version, version)
@@ -292,7 +300,10 @@ exit $code
       cli, '--root', root, '--version', version, '--artifact-dir', artifactDir,
       '--stop-hook', systemdStop, '--state-hook', systemdProbe, '--start-hook', systemdRun,
       '--verify-hook', verifyHook,
-      '--reachable-url', origin, '--public-origin', origin,
+      // A health endpoint on the same origin: reachability is observed before acceptance, and the
+      // origin's root answers 404 on this service, so naming it would report "unreachable" for a
+      // service that is answering.
+      '--reachable-url', `${origin}/healthz`, '--public-origin', origin,
       '--snapshot-dir', join(workDir, 'snapshots', `${version}-again`),
       '--store-dir', process.env.PKW_TARGET_STORE ?? '/LlHmm9527/pkw-independent/store/v11',
       '--expected-version', version,
