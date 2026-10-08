@@ -87,11 +87,14 @@ async function openGateway() {
       // Ask the protocol, never the message: the same rules that decide whether a lock may be
       // cleared also say who owns the root now.
       const again = await prepareRootLock(config.dataPath)
-      // Two states are worth waiting through, and only these two. A lockfile can be read while the
-      // winner has created it but has not yet written its record, which reads as "free" or as
-      // "owned by nobody"; seconds later it names its writer. Everything else is a decision:
-      // a live writer, an unreadable lockfile, or an identity that cannot be established.
-      const undecided = again.ready === true || again.reason === 'lock-without-owner'
+      // Three states are worth waiting through, and only these three. A lockfile can be read while
+      // the winner has created it but has not yet written its record: it reads as "free", as "empty",
+      // or as "owned by nobody", and microseconds later it names its writer. Waiting through those is
+      // not the same as treating them as stopped — nothing is cleared, nothing is written, and the
+      // wait is bounded, so a file that never becomes readable is still refused with its own code.
+      // Everything else is a decision: a live writer, a malformed lock, or an identity that cannot be
+      // established.
+      const undecided = again.ready === true || again.reason === 'lock-without-owner' || again.reason === 'empty-lock'
       if (!undecided) refuseLock(again)
       blocked += 1
       if (blocked > 40) throw error
@@ -126,6 +129,10 @@ const gate = (() => {
   const record = entry => { try { appendFileSync(settings.log, `${JSON.stringify({ at: new Date().toISOString(), ...entry })}\n`) } catch { /* the test stopped watching */ } }
   return {
     matches: (method, path) => settings.method ? (settings.method === method && settings.path === path) : (settings.path === path),
+    // A test that releases a held request has to know the service is already draining: releasing
+    // first would let the request finish before the signal arrived, and the drain would then be an
+    // empty one that passed for the wrong reason. This is the receipt that the graceful path began.
+    markDrain: (signal, at) => record({ event: 'drain', signal, inflight: at }),
     async wait(method, path) {
       matched += 1
       const ordinal = matched
@@ -205,6 +212,8 @@ function stop(signal) {
     closing = true
     const started = Date.now()
     let timedOut = false
+    // Announced before the drain starts, so a test can wait for it instead of guessing: see the gate.
+    gate?.markDrain(signal, inflight)
     // A single budget covers draining AND the runtime/database close, because a
     // slow close is just as ungraceful as a slow drain.
     const deadline = setTimeout(() => {

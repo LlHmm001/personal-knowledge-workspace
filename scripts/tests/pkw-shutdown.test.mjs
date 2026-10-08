@@ -27,6 +27,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import test from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
+import { portHolder } from '../../deploy/site/process-stop-state.mjs'
 
 const scrypt = promisify(scryptCallback)
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -472,6 +473,90 @@ test('S3/T-EXIT graceful shutdown during a slow remote sync keeps committed data
     await rm(root, { recursive: true, force: true })
   }
 })
+test('S3/lock an empty lock is undecided: the starter refuses with 4 and leaves it in place', { skip: skipReason || !dataRootAvailable }, async () => {
+  const profile = profileUnderTest()
+  const port = await freePort()
+  const { root, configPath } = await makeDataRoot({ stubUrl: null, spaceId: 'sp-none' })
+  const config = JSON.parse(await readFile(configPath, 'utf8'))
+  config.publicOrigin = `http://127.0.0.1:${port}`
+  await writeFile(configPath, JSON.stringify(config, null, 2))
+  // An empty lockfile is what a writer leaves between creating the lock and writing its record. It
+  // names no writer, so no writer was ruled out: the answer is *not knowledge*, and a starter that
+  // read it as "free" would race the process that is in the middle of claiming the root. The
+  // conservative answer is a refusal with its own exit code, and the file left exactly as found so a
+  // human can see what was there.
+  const lockPath = join(root, 'gateway.lock')
+  await writeFile(lockPath, '', { mode: 0o600 })
+  const gateway = startGateway({ profile, configPath, port })
+  try {
+    const { code } = await gateway.exited
+    assert.equal(code, 4, `an empty lock must be refused as unreadable (UNREADABLE), not as anything else: stdout=${gateway.stdout} stderr=${gateway.stderr}`)
+    assert.ok(gateway.stderr.includes('"status":"lock-refused"'), `the refusal must be reported: ${gateway.stderr}`)
+    assert.ok(gateway.stderr.includes('"reason":"empty-lock"'), `the refusal must name the rule it hit: ${gateway.stderr}`)
+    // Untouched: the file is evidence, and a starter that deleted it would destroy the only record
+    // of the window it was in.
+    assert.equal(await readFile(lockPath, 'utf8'), '', 'the lock must be left exactly as it was found')
+    // And nothing was started: no second writer, and the port was never bound.
+    const heldAfterRefusal = await portHolder(port)
+    assert.equal(heldAfterRefusal.known, true, `the port probe must answer: ${JSON.stringify(heldAfterRefusal)}`)
+    assert.equal(heldAfterRefusal.held, false, 'a refused starter must not leave a listener behind')
+    assert.ok(!gateway.stdout.includes('"status":"listening"'), `a refused starter must never report listening: ${gateway.stdout}`)
+  } finally {
+    gateway.child.kill('SIGKILL')
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('S3/lock a lock that names no writer is undecided: the starter refuses with 4', { skip: skipReason || !dataRootAvailable }, async () => {
+  const profile = profileUnderTest()
+  const port = await freePort()
+  const { root, configPath } = await makeDataRoot({ stubUrl: null, spaceId: 'sp-none' })
+  const config = JSON.parse(await readFile(configPath, 'utf8'))
+  config.publicOrigin = `http://127.0.0.1:${port}`
+  await writeFile(configPath, JSON.stringify(config, null, 2))
+  // Valid JSON, no pid: the record cannot say who holds the root, so nobody was ruled out.
+  const lockPath = join(root, 'gateway.lock')
+  const ownerless = JSON.stringify({ note: 'no pid here', createdAt: new Date().toISOString() }) + '\n'
+  await writeFile(lockPath, ownerless, { mode: 0o600 })
+  const gateway = startGateway({ profile, configPath, port })
+  try {
+    const { code } = await gateway.exited
+    assert.equal(code, 4, `a lock naming no writer must be refused as unreadable: stdout=${gateway.stdout} stderr=${gateway.stderr}`)
+    assert.ok(gateway.stderr.includes('"reason":"lock-without-owner"'), `the refusal must name the rule it hit: ${gateway.stderr}`)
+    assert.equal(await readFile(lockPath, 'utf8'), ownerless, 'the lock must be left as evidence')
+    const held = await portHolder(port)
+    assert.equal(held.held, false, 'a refused starter must not leave a listener behind')
+  } finally {
+    gateway.child.kill('SIGKILL')
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('S3/lock a malformed lock is undecided: the starter refuses with 4 and does not race it', { skip: skipReason || !dataRootAvailable }, async () => {
+  const profile = profileUnderTest()
+  const port = await freePort()
+  const { root, configPath } = await makeDataRoot({ stubUrl: null, spaceId: 'sp-none' })
+  const config = JSON.parse(await readFile(configPath, 'utf8'))
+  config.publicOrigin = `http://127.0.0.1:${port}`
+  await writeFile(configPath, JSON.stringify(config, null, 2))
+  const lockPath = join(root, 'gateway.lock')
+  const garbage = 'this is not a lock record\n'
+  await writeFile(lockPath, garbage, { mode: 0o600 })
+  const gateway = startGateway({ profile, configPath, port })
+  try {
+    const { code } = await gateway.exited
+    assert.equal(code, 4, `a malformed lock must be refused as unreadable: stdout=${gateway.stdout} stderr=${gateway.stderr}`)
+    assert.ok(gateway.stderr.includes('malformed-lock'), `the refusal must name the rule it hit: ${gateway.stderr}`)
+    assert.equal(await readFile(lockPath, 'utf8'), garbage, 'the malformed lock must be left as evidence')
+    const heldAfterRefusal = await portHolder(port)
+    assert.equal(heldAfterRefusal.known, true, `the port probe must answer: ${JSON.stringify(heldAfterRefusal)}`)
+    assert.equal(heldAfterRefusal.held, false, 'a refused starter must not leave a listener behind')
+  } finally {
+    gateway.child.kill('SIGKILL')
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 test('S3/lock a stale lock from a dead writer is recovered automatically', { skip: skipReason || !dataRootAvailable }, async () => {
   const profile = profileUnderTest()
   const port = await freePort()
@@ -566,7 +651,11 @@ test('S3/lock two concurrent starters against one root leave exactly one writer'
     const winner = results[0].code === 'running' ? a : b
     winner.child.kill('SIGTERM')
     assert.equal((await winner.exited).code, 0, 'the winner must shut down gracefully')
-    console.log(`  concurrent starters: running=${running}, refused=${refused}`)
+    // The refusal code itself is recorded, not only that a refusal happened: these two errors mean
+    // different things (a live writer versus an unreadable lockfile), and a run that cannot say which
+    // one it got cannot say what was proved.
+    const refusalCodes = results.filter(r => r.code !== 'running').map(r => r.code)
+    console.log(`  concurrent starters: running=${running}, refused=${refused}, codes=${JSON.stringify(refusalCodes)}`)
   } finally {
     a.child.kill('SIGKILL')
     b.child.kill('SIGKILL')
