@@ -118,6 +118,19 @@ e2e: space-page   expectedVersion 0.1.9-pkw.1   serving null
                   body {"ok":false,"code":"PKW_REQUEST_FAILED","error":"操作未完成…"}
 ```
 
+Narrowed further, with the product's own schema as the reference:
+
+* an A/B run of the *same copied data root* against two releases — the staged `0.1.9-pkw.1` and the
+  packed `0.1.8-pkw.2` — answers 400 in both, so this is not a change in the code under test.
+* calling the gateway directly (a valid session, the space in it, the same request) reaches the
+  space route and gets the same opaque 400: the failure is inside the page route handler, after the
+  session and authorization checks.
+* the synthetic store was missing nine tables the product's own store carries
+  (`u_pkw_notes_note_order`, `u_pkw_notes_folder_trash`, `u_pkw_tasks_matrices`, and the six
+  `u_pkw_weknora_sync_*` tables). The helper now creates them, taken from a store the product
+  itself created rather than invented — but the page still fails, so the difference is something
+  else in this store's contents.
+
 Reproduced outside the test, on the scene the run kept: the staged `0.1.9-pkw.1` release serving
 this copied data root logs in (`200`), exposes the space in its session, and then answers the space
 page with `400 PKW_REQUEST_FAILED`. The data root is internally consistent — the workspace path its

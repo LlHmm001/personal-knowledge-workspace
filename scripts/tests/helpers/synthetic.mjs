@@ -68,6 +68,19 @@ export async function makeSyntheticDataRoot({ owner = 'owner', noteBody = '# syn
     CREATE TABLE u_pkw_commits (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
     CREATE TABLE u_pkw_attachments_attachments (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
     CREATE TABLE u_pkw_tasks_tasks (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
+    -- The product's own store carries these units' tables from the start. A fixture that omits one
+    -- is a store the runtime cannot serve: the space page reads the order it keeps there, and a
+    -- missing table turns a page request into an opaque 400. The list is taken from a store the
+    -- product itself created, not invented.
+    CREATE TABLE u_pkw_notes_note_order (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
+    CREATE TABLE u_pkw_notes_folder_trash (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
+    CREATE TABLE u_pkw_tasks_matrices (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
+    CREATE TABLE u_pkw_weknora_sync_mappings (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
+    CREATE TABLE u_pkw_weknora_sync_dirty (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
+    CREATE TABLE u_pkw_weknora_sync_intents (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
+    CREATE TABLE u_pkw_weknora_sync_reverse (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
+    CREATE TABLE u_pkw_weknora_sync_processing (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
+    CREATE TABLE u_pkw_weknora_sync_processing_kb (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
   `)
   for (const [name, version] of [['workspace', 2], ['pkw', 1], ['pkw_notes', 3], ['pkw_attachments', 1], ['pkw_tasks', 1], ['pkw_weknora_sync', 3]]) {
     state.prepare('INSERT INTO units VALUES(?,?)').run(name, version)
