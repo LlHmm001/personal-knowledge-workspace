@@ -96,7 +96,6 @@ test('target: the CLI runs its whole chain through a temporary systemd unit', {
   const unit = `pkw-target-${randomUUID().slice(0, 8)}.service`
   const systemdRun = join(workDir, 'systemd-run-start.sh')
   const systemdStop = join(workDir, 'systemd-stop.sh')
-  const systemdProbe = join(workDir, 'systemd-is-stopped.sh')
   const port = 3361
   const origin = `http://127.0.0.1:${port}`
   const log = (...parts) => console.error(JSON.stringify({ at: new Date().toISOString(), ...Object.assign({}, ...parts) }))
@@ -132,11 +131,22 @@ test('target: the CLI runs its whole chain through a temporary systemd unit', {
     await run('ln', ['-sfn', join('releases', oldVersion), join(root, 'current')])
 
     // ── the hooks the CLI is given: a transient unit, never the live one ──
+    // ── the start hook: start the release `current` names, and only if it is not already up ──
+    // Idempotent on purpose. systemd refuses `systemd-run --unit` for a unit that already exists, so
+    // an unconditional start turns "start the release that is already serving" into a failure. A
+    // deployment's start hook is asked to make the release be running, not to prove it was stopped
+    // first — the transaction has already proved that, with the stop probe.
     await writeFile(systemdRun, `#!/bin/sh
-# Start the release in service as a transient unit. The live pkw-collaboration.service is a
-# different unit name and is never touched. Starting and being ready are different things, so this
-# waits for the unit to answer before it returns: a start hook that returns before the service
-# serves would make the acceptance step observe a service that has not started yet.
+set -u
+state=$(systemctl is-active ${unit} 2>/dev/null || true)
+if [ "$state" = "active" ]; then
+  # Already running. Confirm it answers, then report success: a start hook that restarted a healthy
+  # release would take the service down and up again for nothing, and only the acceptance step
+  # would notice.
+  serving=$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 http://127.0.0.1:${port}/healthz 2>/dev/null || echo 000)
+  [ "$serving" = "200" ] || { echo "the unit is active but does not answer on ${origin}" >&2; exit 1; }
+  exit 0
+fi
 systemd-run --unit=${unit} --collect --quiet \\
   --property=InaccessiblePaths=/opt/deepseek-harness \\
   --property=Environment=PKW_TARGET_BOOTSTRAP=${PASSWORD} \\
@@ -157,11 +167,20 @@ done
 echo "the unit did not answer on http://127.0.0.1:${port}/healthz" >&2
 exit 1
 `, { mode: 0o700 })
+
+    // ── the stop hook: stop the unit, and fail if it did not stop ──
+    // The exit status is the whole point. `systemctl stop` returning non-zero means the stop was not
+    // carried out; swallowing it with `|| true` would let the transaction believe a service it never
+    // stopped, which is how a second writer gets started over a live one. The stop evidence itself is
+    // read by the CLI from the unit's own identity (--managed-unit), not from this script.
     await writeFile(systemdStop, `#!/bin/sh
-systemctl stop ${unit} >/dev/null 2>&1 || true
-# Wait until the unit is gone *and* the port is free. A unit that is inactive can still be closing
-# its listener, and the next start hook would then fail to bind the port — a race that looks like a
-# service that will not start.
+set -u
+if ! systemctl stop ${unit} >/dev/null 2>&1; then
+  echo "systemctl stop ${unit} failed" >&2
+  exit 1
+fi
+# A unit that is inactive can still be closing its listener, and the next start would then fail to
+# bind. Wait for both, and fail loudly rather than returning into a race.
 i=0
 while [ $i -lt 600 ]; do
   state=$(systemctl is-active ${unit} 2>/dev/null || true)
@@ -169,28 +188,22 @@ while [ $i -lt 600 ]; do
   if { [ "$state" = "inactive" ] || [ "$state" = "failed" ] || [ -z "$state" ]; } && [ "$busy" = "0" ]; then exit 0; fi
   i=$((i+1)); sleep 0.1
 done
-echo "the unit or its port is still busy after stop" >&2
-exit 1
-`, { mode: 0o700 })
-    await writeFile(systemdProbe, `#!/bin/sh
-# The probe answers with the unit's own state; the CLI reads MainPID and the cgroup as well.
-state=$(systemctl is-active ${unit} 2>/dev/null || true)
-[ -z "$state" ] && exit 0
-[ "$state" = "inactive" ] || [ "$state" = "failed" ] && exit 0
+echo "the unit or its port is still busy after stop (state=$state, port_listeners=$busy)" >&2
 exit 1
 `, { mode: 0o700 })
 
-    // A verifier hook with the arguments the site's verifier needs: the CLI passes the version and
-    // the mode, and the rest comes from the environment of the run, exactly as a site would wire it.
+    // ── the verifier hook ──
+    // It only observes. It finds the release *by version* under this test's own installation root
+    // rather than through `current`: during a switch the acceptance belongs to the release being
+    // verified, and a hook that reads `current` describes whichever release is linked at that instant.
+    //
+    // With PKW_TARGET_INJECT_VERIFY_FAILURE=1 the hook answers for the new release while the release
+    // is asked to report the old version. The verifier then refuses on the version it actually
+    // observed — an acceptance failure that is real in the only sense that matters here: the
+    // transaction's own acceptance step rejected the release, and the rollback has to run.
     const verifyHook = join(workDir, 'verify.sh')
     await writeFile(verifyHook, `#!/bin/sh
-# Receives --expected-version and --mode from the CLI, and supplies the rest from this test's own
-# configuration: the release the transaction is verifying, the origin, and the owner credential.
-#
-# The release is found by version under this test's own installation root, not through \`current\`:
-# during a switch the acceptance step belongs to the release being verified, and a hook that reads
-# \`current\` can end up describing whichever release is linked at that instant. The rehearsal driver
-# passes the candidate for the same reason.
+set -u
 expected=""
 prev=""
 for arg in "$@"; do
@@ -207,14 +220,17 @@ if [ -z "$release" ]; then
   echo "no release for version $expected under ${root}/releases" >&2
   exit 1
 fi
-# The verifier writes its report to stdout and its reason to stderr; both are kept, so a refusal
-# can be read rather than guessed.
-out=$(/usr/local/bin/node ${join(repoRoot, 'deploy/site/verify-collaboration.mjs')} "$@" \
-  --profile "$release/profile" --public-origin ${origin} --gateway-url ${origin} \
-  --credentials-file ${credentialsFile} --username owner 2>&1)
+target="$expected"
+if [ -n "\${PKW_TARGET_INJECT_VERIFY_FAILURE:-}" ]; then
+  target="${oldVersion}"
+fi
+out=$(/usr/local/bin/node ${join(repoRoot, 'deploy/site/verify-collaboration.mjs')} "$@" \\
+  --profile "$release/profile" --public-origin ${origin} --gateway-url ${origin} \\
+  --credentials-file \${PKW_TARGET_VERIFY_CREDENTIALS} --username owner \\
+  --expected-version "$target" 2>&1)
 code=$?
-printf '%s\n' "$out" >> ${join(workDir, 'verify.log')}
-printf '%s\n' "$out"
+printf '%s\\n' "$out" >> ${join(workDir, 'verify.log')}
+printf '%s\\n' "$out"
 exit $code
 `, { mode: 0o700 })
 
@@ -246,10 +262,36 @@ exit $code
       return { login: login.status, session: session.status, csrf: body?.value?.csrf, jar, spaces: body?.value?.spaces ?? [] }
     }
 
-    // ── the real CLI: stop probe, start hook, acceptance, injected failure, rollback ──
+    // ── the release in service, started for real before anything else happens ──
+    // The chain only means something if it starts from a service that is actually serving. So the
+    // old release is started first, through the same start hook the CLI will use, and its state is
+    // observed: the unit is active, the origin answers, and the data root's lock belongs to the
+    // unit's own main process. Every later step is a transition away from *this*, not from nothing.
+    const firstStart = await run(systemdRun, [])
+    assert.equal(firstStart.code, 0, `the old release must start for real: ${firstStart.stderr.slice(-400)}`)
+    const servingBefore = await fetch(`${origin}/healthz`).then(response => response.status).catch(() => 0)
+    assert.equal(servingBefore, 200, 'the old release must be serving before the switch')
+    const currentBefore = await run('readlink', ['-f', join(root, 'current')])
+    assert.equal(currentBefore.stdout.trim(), join(root, 'releases', oldVersion), 'the old release must be the one in service')
+    const lockBefore = JSON.parse(await readFile(join(dataRoot, 'gateway.lock'), 'utf8'))
+    const mainBefore = await run('systemctl', ['show', '-p', 'MainPID', '--value', unit])
+    assert.equal(String(lockBefore.pid), mainBefore.stdout.trim(), 'the lock must belong to the old release\u2019s unit')
+    const oldSession = await loginAndSession()
+    assert.equal(oldSession.login, 200, 'the old release must accept a real login')
+    log({ stage: 'old-serving', unit, pid: mainBefore.stdout.trim(), version: oldVersion })
+
+    // ── the real CLI: stop probe, start hook, acceptance, real failure, rollback ──
+    // The acceptance for the candidate is made to fail for a real reason: the verify hook reports a
+    // version the transaction did not ask for, because the release is asked to report the previous
+    // version. The transaction then has to stop the candidate, restore the previous release, start it
+    // through the same start hook, verify it again and report the outcome.
     const result = await run(process.execPath, [
       cli, '--root', root, '--version', version, '--artifact-dir', artifactDir,
-      '--stop-hook', systemdStop, '--state-hook', systemdProbe, '--start-hook', systemdRun,
+      '--stop-hook', systemdStop, '--start-hook', systemdRun,
+      // The stop state is read from the unit's own identity: ActiveState, MainPID, ControlPID and the
+      // processes in its cgroup. A `--state-hook` that exits 0 says only that a script succeeded; it
+      // cannot report a live main process, and an unreadable state would not refuse.
+      '--managed-unit', unit,
       '--verify-hook', verifyHook,
       // A health endpoint on the same origin: reachability is observed before acceptance, and the
       // origin's root answers 404 on this service, so naming it would report "unreachable" for a
@@ -261,45 +303,61 @@ exit $code
       // The peers the release resolves against, so the install can complete in an isolated
       // environment without reaching a public registry.
       ...(process.env.PKW_TARGET_SUPPORT ? ['--support-dir', process.env.PKW_TARGET_SUPPORT] : []),
-    ], { env: { ...process.env, PKW_TARGET_VERIFY_CREDENTIALS: credentialsFile } })
+    ], { env: { ...process.env, PKW_TARGET_VERIFY_CREDENTIALS: credentialsFile, PKW_TARGET_INJECT_VERIFY_FAILURE: '1' } })
     await writeFile(join(workDir, 'cli-report.json'), JSON.stringify({ code: result.code, stdout: result.stdout, stderr: result.stderr }, null, 2) + '\n', { mode: 0o600 })
     log({ stage: 'cli-exit', code: result.code, stdout: result.stdout.slice(-300), stderr: result.stderr.slice(-600) })
-    // The verdict is asserted, not merely observed: this is an acceptance run, so the release has
-    // to be activated, and the CLI's own report has to say so.
-    if (result.code !== 0) failedRun = true
-    // The acceptance step is what this run is for, and it is not passing yet. Rather than weaken the
-    // assertion or delete the evidence, the run records what happened and fails: the CLI's verdict,
-    // the verifier's own log when it wrote one, and the hook scripts are all kept for the next
-    // investigation. A run that cannot reach `activated` is not an acceptance.
-    if (result.code !== 0) {
-      log({ stage: 'verdict-not-activated', code: result.code })
-      assert.fail(`the CLI did not activate the release (exit ${result.code}); its verdict and the verifier log are in ${workDir}`)
-    }
-    let verdict = null
-    try {
-      // The install prints one line per artifact and the verdict is the JSON object after them, so
-      // the verdict is read from the first `{` rather than from the last line.
-      const start = result.stdout.indexOf('{')
-      verdict = start === -1 ? null : JSON.parse(result.stdout.slice(start))
-    } catch { verdict = null }
-    assert.ok(verdict, `the CLI must print a structured verdict: ${result.stdout.slice(-300)}`)
-    assert.equal(verdict.status, 'activated', `the CLI reported ${verdict.status}`)
-    assert.equal(verdict.version, version)
-    assert.equal(verdict.previousVersion, oldVersion)
-    log({ stage: 'activated', version, previousVersion: verdict.previousVersion, unit })
 
-    // The unit is serving the release that was promoted, through the entry point the transaction
-    // moved, and it answers on the origin the acceptance used.
-    const current = await run('readlink', ['-f', join(root, 'current')])
-    assert.equal(current.stdout.trim(), join(root, 'releases', version), 'current must lead to the promoted release')
+    // The verdict is asserted, not merely observed. This run's acceptance fails on purpose, so the
+    // transaction must reach exactly one conclusion: it rolled back to the previous release and the
+    // previous release passed the same verifier. Anything else is a failure of the chain, and the
+    // scene is kept for it.
+    // On a rollback the CLI writes its verdict to stderr and exits non-zero — the JSON on stdout is
+    // the success path. Both are the CLI's own verdict, so both are read, and which stream carried it
+    // is recorded rather than assumed.
+    let verdict = null
+    let verdictStream = null
+    for (const [stream, text] of [['stdout', result.stdout], ['stderr', result.stderr]]) {
+      const at = text.indexOf('{')
+      if (at === -1) continue
+      try { verdict = JSON.parse(text.slice(at)); verdictStream = stream } catch { /* not this stream */ }
+      if (verdict) break
+    }
+    log({ stage: 'verdict-stream', stream: verdictStream })
+    assert.ok(verdict, `the CLI must report a structured verdict on one of its streams: ${result.stderr.slice(-400)}`)
+    // The verdict of a rollback names the code, not a status string, and carries both acceptances:
+    // the one that failed for the candidate and the one that passed for the restored release. Both
+    // are asserted, because "the release came back" and "the release came back verified" differ.
+    assert.equal(verdict.status, 'PKW_DEPLOYMENT_ROLLED_BACK', `the CLI must report a rollback: ${JSON.stringify({ status: verdict.status })}`)
+    assert.equal(verdict.acceptance?.expectedVersion, version, 'the failed acceptance must be the candidate release')
+    assert.equal(verdict.acceptance?.ok, false, 'the candidate acceptance must have failed')
+    assert.equal(verdict.rollbackAcceptance?.expectedVersion, oldVersion, 'the rollback acceptance must be the restored release')
+    assert.equal(verdict.rollbackAcceptance?.ok, true, `the rollback acceptance must have passed: ${JSON.stringify(verdict.rollbackAcceptance ?? null).slice(0, 300)}`)
+    assert.equal(verdict.rollbackAcceptance?.checks?.authenticated, 'verified', 'the rollback acceptance must have authenticated')
+    assert.equal(verdict.rollbackAcceptance?.checks?.servingVersion, oldVersion, 'the rollback acceptance must have observed the restored version')
+    assert.equal(result.code, 1, 'a rollback exits non-zero: it is a failure that was contained, not a success')
+    log({ stage: 'rolled-back', verdict: { status: verdict.status, failed: verdict.acceptance?.expectedVersion, restored: verdict.rollbackAcceptance?.expectedVersion, authenticated: verdict.rollbackAcceptance?.checks?.authenticated, exit: result.code } })
+
+    // The install really happened: the candidate was promoted, then replaced. Both releases exist and
+    // `current` leads back to the old one.
+    assert.ok(existsSync(join(root, 'releases', version, 'profile')), 'the candidate must have been installed')
+    const currentAfter = await run('readlink', ['-f', join(root, 'current')])
+    assert.equal(currentAfter.stdout.trim(), join(root, 'releases', oldVersion), 'current must lead back to the restored release')
+
+    // ── the release in service again: same unit, answering, and the only writer ──
     const served = await fetch(`${origin}/healthz`).then(response => response.status).catch(() => 0)
-    assert.equal(served, 200, 'the transient unit must be answering after activation')
+    assert.equal(served, 200, 'the restored release must be answering after the rollback')
     const state = await run('systemctl', ['is-active', unit])
-    assert.equal(state.stdout.trim(), 'active', 'the transient unit must still be active')
-    // Exactly one writer: the unit is the only process serving this data root.
-    const lock = JSON.parse(await readFile(join(dataRoot, 'gateway.lock'), 'utf8'))
-    const unitMain = await run('systemctl', ['show', '-p', 'MainPID', '--value', unit])
-    assert.equal(String(lock.pid), unitMain.stdout.trim(), 'the lock must belong to the unit that is serving')
+    assert.equal(state.stdout.trim(), 'active', 'the transient unit must be active after the rollback')
+    const lockAfter = JSON.parse(await readFile(join(dataRoot, 'gateway.lock'), 'utf8'))
+    const mainAfter = await run('systemctl', ['show', '-p', 'MainPID', '--value', unit])
+    assert.equal(String(lockAfter.pid), mainAfter.stdout.trim(), 'the lock must belong to the unit that is serving')
+    // Single writer: the candidate's process is gone, and the unit is what holds the root. The unit
+    // was restarted by the transaction's own start hook, so this is a new main process.
+    assert.notEqual(mainAfter.stdout.trim(), mainBefore.stdout.trim(), 'the rollback must have started the release again, in the unit the transaction owns')
+    // And the restored release still accepts a real login: the rollback is not just a socket answer.
+    const afterSession = await loginAndSession()
+    assert.equal(afterSession.login, 200, 'the restored release must accept a real login')
+    log({ stage: 'restored-serving', unit, pid: mainAfter.stdout.trim(), version: oldVersion })
 
     // ── isolation: the DSH installation is unreachable for this process, and only for it ──
     // The start hook recorded what systemd reported for the unit while it was serving. The property
@@ -307,33 +365,54 @@ exit $code
     // are different claims, and only the second one makes this environment isolated.
     const isolation = (await readFile(join(workDir, 'isolation.txt'), 'utf8')).trim()
     assert.match(isolation, /deepseek-harness/, `the unit must run with the DSH installation inaccessible (reported: ${JSON.stringify(isolation)})`)
+    // A property is a request, so the isolation is observed where it would matter: inside the unit's
+    // own mount namespace, which is where a release tries to load the live installation from.
+    // `InaccessiblePaths` is implemented as an empty read-only mount over the path, so the check is
+    // that the directory holds *nothing* for this process — while the same directory, read from
+    // outside, still holds the live installation. Reading the path from the host would prove nothing
+    // either way, which is why this enters the unit's namespace rather than inspecting it.
+    const mainPid = mainAfter.stdout.trim()
+    const insideListing = await run('nsenter', ['-t', mainPid, '-m', 'ls', '-A', '/opt/deepseek-harness'])
+    const outsideListing = await run('ls', ['-A', '/opt/deepseek-harness'])
+    const insideCount = insideListing.stdout.split('\n').filter(Boolean).length
+    const outsideCount = outsideListing.stdout.split('\n').filter(Boolean).length
+    log({ stage: 'isolation-inside', mainPid, insideCount, outsideCount, insideExit: insideListing.code })
+    // The unit cannot see into the installation, and the installation is still there for everyone
+    // else. Both halves matter: the first is the isolation, the second is that it is a property of
+    // this unit rather than something done to the machine.
+    assert.equal(insideListing.code, 0, `the isolation check could not be made inside the unit: ${insideListing.stderr.slice(-200)}`)
+    assert.equal(insideCount, 0, `the DSH installation must be unreadable inside the unit, but it listed ${insideCount} entries`)
+    assert.ok(outsideCount > 0, 'the live DSH installation must be untouched outside the unit')
     // And the live installation is untouched: it is a different unit, and it is still running.
     const liveState = await run('systemctl', ['is-active', 'deepseek-harness'])
     assert.equal(liveState.stdout.trim(), 'active', 'the live DSH service must be untouched by the isolated acceptance')
     log({ stage: 'isolation', inaccessiblePaths: isolation, liveDsh: liveState.stdout.trim() })
-
-    // ── the rollback: a stop that the probe confirms, then the release in service again ──
-    const rollback = await run(process.execPath, [
-      cli, '--root', root, '--version', version, '--artifact-dir', artifactDir,
-      '--stop-hook', systemdStop, '--state-hook', systemdProbe, '--start-hook', systemdRun,
-      '--verify-hook', verifyHook,
-      // A health endpoint on the same origin: reachability is observed before acceptance, and the
-      // origin's root answers 404 on this service, so naming it would report "unreachable" for a
-      // service that is answering.
-      '--reachable-url', `${origin}/healthz`, '--public-origin', origin,
-      '--snapshot-dir', join(workDir, 'snapshots', `${version}-again`),
-      '--store-dir', process.env.PKW_TARGET_STORE ?? '/LlHmm9527/pkw-independent/store/v11',
-      '--expected-version', version,
-      ...(process.env.PKW_TARGET_SUPPORT ? ['--support-dir', process.env.PKW_TARGET_SUPPORT] : []),
-    ])
-    // The candidate is already promoted, so this refuses before promotion; what matters is that the
-    // refusal is reached through the same hooks and that the release in service is left serving.
-    log({ stage: 'second-cli-exit', code: rollback.code, stderr: rollback.stderr.slice(-300) })
-    assert.ok([0, 1].includes(rollback.code), `the second attempt must reach a verdict: ${rollback.stderr.slice(-400)}`)
-    assert.equal(await fetch(`${origin}/healthz`).then(response => response.status).catch(() => 0), 200,
-      'the release in service must still be answering after the second attempt')
   } finally {
+    // Cleanup is confirmed, not assumed. Stopping the unit is one thing; the unit being gone, its
+    // cgroup empty and nothing left on the port is another. A run that deletes its installation
+    // while a process of ours is still holding the data root would leave a writer behind with
+    // nothing pointing at it, so the directory is only removed once our own processes are ruled out.
     await run('systemctl', ['stop', unit])
+    let residue = { unit: unit, activeState: null, members: null, portBusy: null, ruledOut: false }
+    for (let i = 0; i < 100; i++) {
+      const state = await run('systemctl', ['is-active', unit])
+      const mainPid = await run('systemctl', ['show', '-p', 'MainPID', '--value', unit])
+      const busy = await run('sh', ['-c', `ss -ltn 2>/dev/null | grep -c ":${port} " || true`])
+      residue = {
+        unit, activeState: state.stdout.trim() || '(gone)', mainPid: mainPid.stdout.trim() || '0',
+        portBusy: Number(busy.stdout.trim() || '0'), ruledOut: false,
+      }
+      const inactive = ['inactive', 'failed', ''].includes(residue.activeState)
+      if (inactive && residue.mainPid === '0' && residue.portBusy === 0) { residue.ruledOut = true; break }
+      await new Promise(resolvePromise => setTimeout(resolvePromise, 100))
+    }
+    if (!residue.ruledOut) {
+      // Still ours, still running: refuse to delete, and say what is still there.
+      failedRun = true
+      log({ stage: 'cleanup-not-confirmed', residue })
+    } else {
+      log({ stage: 'cleanup-confirmed', residue })
+    }
     // A failing run keeps its scene: the hooks, the verifier log and the installation are what the
     // next investigation needs, and deleting them would destroy the evidence.
     const failed = failedRun
