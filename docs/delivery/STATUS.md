@@ -5,7 +5,7 @@ Everything here is bound to one commit. Where an item is not finished, it says s
 ## Current state
 
 * Branch `feat/pkw-independent-runtime`, PR #2, still **draft**, base `chore/pkw-delivery`.
-* Final SHA for this table: `bf85fb12b80a92d523f2ace44c0c11f690b1dcc0`.
+* Final SHA for this table: `29e162d` (see `git rev-parse HEAD` for the full id).
 * Live services untouched: no restart, no configuration change, no `current` repoint, no deletion of
   recovery material. Production DSH and `pkw-collaboration` keep their original main PIDs.
 * Closed findings stay closed: generator (log read live, outcome gate, real-entry tests), trace
@@ -124,3 +124,72 @@ honest status of the lifecycle work and the reproduction evidence needed to be r
 because starting the artifact E2E without the time to finish it would leave the next session
 guessing about state. Nothing was merged, nothing was cut over, and no recovery material was
 deleted.
+
+## Cutover plan (reviewable, not executed)
+
+The transaction is `deploy/switch-release.mjs`; it is the only supported path. Nothing here has
+been run against the live installation.
+
+1. **Freeze and record.** Note the serving release (`readlink -f <root>/current`), its version, and
+   the digests of the profile inputs (`package.json`, `pnpm-lock.yaml`, `.npmrc`). Note both
+   services' main PIDs and `NRestarts`.
+2. **Back up.** Take a collaboration backup with `scripts/collaboration-backup.mjs` (it claims the
+   root lock itself, so the writer must be stopped or the backup refuses). Record the archive's
+   path and sha256. The backup is recovery material: never deleted, never edited.
+3. **Stage the release.** Put the new artifacts and the peer closure where the CLI reads them
+   (`--artifact-dir`, `--support-dir`), and record each tarball's sha256 from the receipt.
+4. **Dry run on a copy.** The rehearsal is the dry run: same artifacts, a copied data root and a
+   copied profile, the driver's own port and a transient unit. `e2e/rollback8/report.json` is that
+   run, including the injected failure and the verified rollback.
+5. **Switch.** `deploy/switch-release.mjs --root … --version … --artifact-dir … --support-dir …
+   --stop-hook … --managed-unit <unit> --start-hook … --verify-hook … --reachable-url …
+   --public-origin … --expected-version …`. The transaction stops and proves the stop, snapshots
+   the old inputs, promotes, repoints `current`, starts, verifies — and on any failure restores the
+   previous release, verifies it, and reports both errors.
+6. **Accept.** The verifier is enforcing: login, serving version, note read-back. Reachability alone
+   is never acceptance.
+7. **Watch.** After acceptance, check the unit's `NRestarts`, the lock's owner, and one read through
+   the public origin.
+
+## Rollback
+
+Two levels, and the first is the one the transaction already does by itself:
+
+* **Automatic.** A failed start, a failed acceptance, or a drift refusal restores the previous
+  release inside the same transaction: stop the candidate (probe-confirmed), write the snapshot's
+  inputs back only if they changed, repoint `current` atomically, start the old release, verify it.
+  The result is `rolled-back` or `rolled-back-unverified`, and the original error is preserved.
+* **Manual.** Point `current` back at the previous release directory and start the unit — but only
+  after stopping the candidate and confirming it stopped, exactly as the transaction does. The
+  previous release tree is never deleted by a switch, so this needs no restore step.
+
+Never delete recovery material (snapshots, backups, preserved copies) before a rollback has been
+verified. A preserved copy that failed the isolation gate is re-verified before it is reused, and
+refused again if it still fails — that path is covered by tests.
+
+## Disk budget
+
+Measured on this host (`/dev/vdb1`, 49G total, 24G free):
+
+| Item | Size | Note |
+|---|---|---|
+| release artifacts (new, with peer closure) | 1.6M + 1.6M | PKW tarballs plus the 25 peer tarballs |
+| release profiles (old, new) | ~250M each | the closure a release runs against |
+| collaboration backup | ~260M | grows with the data root |
+| rehearsal work directory | ~500M | copies of profile + data root + snapshots |
+| independent profile (working copy) | ~136M | `store/v11` is the pnpm store, shared |
+
+A switch itself needs room for one new release directory plus its snapshot (a few MB of inputs),
+not for a second data root. The rehearsal copies are the large items and belong to a work area,
+not to an installation.
+
+## Old-version retention and cleanup candidates
+
+* **Retention.** Keep the release that was in service until the new one has been accepted *and* one
+  read through the public origin has succeeded; keep the one before that until the first backup
+  after acceptance exists. Nothing is cleaned automatically, and no cleanup happens before a
+  rollback has been verified.
+* **Cleanup candidates (nothing removed yet).** `e2e/rollback*` work directories (superseded runs,
+  each superseded by `e2e/rollback8`), `/tmp/pkw-repro`, `/tmp/pkw-target-*`, the transient
+  `pkw-target-*` units (all stopped), and `e2e/support` once a release carries its own closure.
+  The backup directories under `/LlHmm9527/.pkw-deployments/*/backup` are **not** candidates.
