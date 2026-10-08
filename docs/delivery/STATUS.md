@@ -5,7 +5,7 @@ Everything here is bound to one commit. Where an item is not finished, it says s
 ## Current state
 
 * Branch `feat/pkw-independent-runtime`, PR #2, still **draft**, base `chore/pkw-delivery`.
-* Final SHA for this table: `1577264` (see `git rev-parse HEAD` for the full id).
+* Final SHA for this table: `cd7776d` (see `git rev-parse HEAD` for the full id).
 * Live services untouched: no restart, no configuration change, no `current` repoint, no deletion of
   recovery material. Production DSH and `pkw-collaboration` keep their original main PIDs.
 * Closed findings stay closed: generator (log read live, outcome gate, real-entry tests), trace
