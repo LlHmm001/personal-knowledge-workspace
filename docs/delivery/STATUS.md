@@ -5,7 +5,7 @@ Everything here is bound to one commit. Where an item is not finished, it says s
 ## Current state
 
 * Branch `feat/pkw-independent-runtime`, PR #2, still **draft**, base `chore/pkw-delivery`.
-* Final SHA for this table: `90ebfeb348d1545ac2c920005e6a73b720e3a010`.
+* Final SHA for this table: `bf85fb12b80a92d523f2ace44c0c11f690b1dcc0`.
 * Live services untouched: no restart, no configuration change, no `current` repoint, no deletion of
   recovery material. Production DSH and `pkw-collaboration` keep their original main PIDs.
 * Closed findings stay closed: generator (log read live, outcome gate, real-entry tests), trace
@@ -94,13 +94,21 @@ pass quietly when it cannot run. What it already does, and what was observed:
   predecessor, `current` leading to the promoted release, the unit still active and answering
   `/healthz`, and the data root's lock belonging to that unit's main process — one writer.
 
-The run fails before any of that, in the CLI's install step: `pnpm exited 1`, because the release's
-peer closure is resolved from the registry the CLI serves and `@deepseek-ai/dsh-util-crypto` is not
-in the artifact directory. The rehearsal driver does not hit this because it packs the support
-closure out of the seeded release's own `node_modules` and serves it through its registry; the CLI
-path has no equivalent of that yet. Two ways forward, both small: let `deploy/switch-release.mjs`
-accept extra tarballs to serve alongside the release artifacts, or make the acceptance feed it an
-artifact directory built the way the rehearsal builds one.
+Progress, and where it stands now:
+
+* the install step is fixed — `deploy/switch-release.mjs` takes `--support-dir` and serves every
+  tarball under it, so an offline install resolves the release's peer closure instead of failing
+  with a registry error. The rehearsal driver had its own version of this; the CLI now has one too.
+* the start hook now waits for the unit to answer `/healthz` before returning: starting and being
+  ready are different things, and an early return made the acceptance observe a service that had
+  not started.
+* what remains is the acceptance step itself. The CLI's run ends in `PKW_ROLLBACK_FAILED` with
+  `activation verification is not acceptance: did not report ok:true (got false); did not verify an
+  authenticated session (authenticated=undefined)` — the verifier was refused on activation, not on
+  the rollback. The verifier's own log from that run has to be read next (the wrapper now writes it
+  to `verify.log` in the work directory) to settle whether it is observing the release it should:
+  the same wrapper run by hand against the started unit reports `installed release is 0.1.7-pkw.1,
+  expected 0.1.8-pkw.2`, which is either a stale `current` from the hand-run or the real finding.
 
 ## Missing inputs (listed once, with what they are for)
 
