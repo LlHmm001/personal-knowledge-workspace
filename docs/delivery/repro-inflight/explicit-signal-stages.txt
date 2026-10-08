@@ -1,0 +1,25 @@
+# One explicit-signal run, kept as evidence (stage stream, then the gate log).
+# Recorded by: PKW_KEEP_WORKDIR=1 node --test scripts/tests/inflight-signal.test.mjs
+# Timestamps are UTC (Z). The API path carries the fixture space id, shown as <fixture-space>.
+
+# ── first.log: the first listener process ──
+{"at": "2026-10-08T09:40:54.284Z", "tag": "first", "stage": "http-POST-/pkw/login", "status": 200, "ok": true}
+{"at": "2026-10-08T09:40:54.290Z", "tag": "first", "stage": "http-GET-/pkw/session", "status": 200, "ok": true}
+{"at": "2026-10-08T09:40:54.460Z", "tag": "first", "stage": "http-POST-/pkw/spaces/sp_<fixture-space>/api", "status": 200, "ok": true}
+{"at": "2026-10-08T09:40:54.480Z", "tag": "first", "stage": "http-POST-/pkw/spaces/sp_<fixture-space>/api", "status": 200, "ok": true}
+{"at": "2026-10-08T09:40:54.507Z", "tag": "first", "stage": "http-POST-/pkw/spaces/sp_<fixture-space>/api", "status": 200, "ok": true}
+{"at": "2026-10-08T09:40:54.515Z", "tag": "first", "stage": "http-POST-/pkw/spaces/sp_<fixture-space>/api", "status": 200, "ok": true}
+{"at": "2026-10-08T09:40:54.525Z", "tag": "first", "stage": "signalled", "settled": false, "releasedCount": 0}
+{"at": "2026-10-08T09:40:54.557Z", "tag": "first", "stage": "http-POST-/pkw/spaces/sp_<fixture-space>/api", "status": 200, "ok": true}
+{"at": "2026-10-08T09:40:57.587Z", "tag": "first", "stage": "stopped", "code": 0, "signal": null, "graceful": true, "forced": false}
+{"at": "2026-10-08T09:40:57.588Z", "tag": "first", "stage": "indexed", "revision": 3, "hash": "02e62ee20141"}
+# ── second.log: the second listener process ──
+{"at": "2026-10-08T09:40:58.883Z", "tag": "second", "stage": "http-POST-/pkw/login", "status": 200, "ok": true}
+{"at": "2026-10-08T09:40:58.889Z", "tag": "second", "stage": "http-GET-/pkw/session", "status": 200, "ok": true}
+{"at": "2026-10-08T09:40:58.986Z", "tag": "second", "stage": "http-POST-/pkw/spaces/sp_<fixture-space>/api", "status": 200, "ok": true}
+{"at": "2026-10-08T09:40:58.986Z", "tag": "second", "stage": "restart-read", "revision": 3, "control": true, "inFlight": true}
+{"at": "2026-10-08T09:40:59.058Z", "tag": "second", "stage": "stopped", "code": 0, "signal": null, "graceful": true, "forced": false}
+
+# ── gate.log: what the observation gate recorded ──
+{"at": "2026-10-08T09:40:54.518Z", "event": "entered", "method": "POST", "path": "/pkw/spaces/sp_<fixture-space>/api", "ordinal": 5}
+{"at": "2026-10-08T09:40:54.529Z", "event": "released", "method": "POST", "path": "/pkw/spaces/sp_<fixture-space>/api", "ordinal": 5}

@@ -2,8 +2,8 @@
 
 This directory holds the reproduction and the logs for the two questions the review asked to settle
 before the lifecycle tests may be called deterministic. Nothing here is part of the product; it is
-the evidence behind `scripts/tests/inflight-signal.test.mjs` and the reason one lifecycle test still
-uses a fixed sleep.
+the evidence behind `scripts/tests/inflight-signal.test.mjs`. Both questions are settled and both
+drain tests now use explicit signals — no lifecycle test decides "in flight" with a sleep.
 
 ## The test-only observation gate
 
@@ -34,7 +34,8 @@ Stages recorded, each with a timestamp: `copy`, `listening`, `login`, `session`,
 `getNote`, `control-save`, `getNote-before-flight`, `write-entered`, `signal`, `response-ended`,
 `stopped`, `indexed`, `restart-read`, `restart-stopped`, `stub`.
 
-Results (sanitized logs in `stages-parked.json` and `explicit-signal-*.log`):
+Results (sanitized logs in `stages-parked.json`, `explicit-signal-*.log` and
+`explicit-signal-stages.txt`):
 
 | run | hold | stub latency | response | stop | restart read |
 |---|---|---|---|---|---|
@@ -88,6 +89,31 @@ PKW_TEST_PROFILE=<profile> PKW_TEST_DATA_ROOT=<fixture> PKW_TEST_USERNAME=owner 
   node --test scripts/tests/pkw-shutdown.test.mjs scripts/tests/inflight-signal.test.mjs
 → 10 tests, 10 pass, 0 fail, 0 skip   (five consecutive runs)
 ```
+
+## One kept run, stage by stage
+
+`explicit-signal-stages.txt` is a single run recorded on the SHA this table is bound to
+(`PKW_KEEP_WORKDIR=1` keeps the work directory instead of deleting it). Read top to bottom it is the
+whole chain, in order, with the signal landing in the middle of it:
+
+```
+54.460  POST /api  200     the control write, committed before the signal
+54.480  POST /api  200     the write that will be in flight
+54.507  POST /api  200     its precondition read
+54.515  POST /api  200
+54.518  gate: entered, ordinal 5      the watched write is inside the handler
+54.525  signalled  settled=false, releasedCount=0    the client's promise has NOT settled
+54.529  gate: released                let it continue, after the signal
+54.557  POST /api  200                the drained write's response
+57.587  stopped    code=0 graceful=true forced=false
+57.588  indexed    revision=3
+58.986  restart-read  revision=3 control=true inFlight=true
+59.058  stopped    code=0 graceful=true forced=false
+```
+
+`control=true inFlight=true` is the read-back of *both* halves: the write committed before the signal
+and the write that was in flight across it. `settled=false` at the signal is what makes "in flight"
+a fact rather than a hope — a run that finished the write early fails instead of passing by luck.
 
 ## Commands
 

@@ -145,7 +145,13 @@ systemd-run --unit=${unit} --collect --quiet \\
 i=0
 while [ $i -lt 300 ]; do
   code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 http://127.0.0.1:${port}/healthz 2>/dev/null || echo 000)
-  [ "$code" = "200" ] && exit 0
+  # The unit is up here, and a running unit is the only place the isolation can be observed: systemd
+  # drops the property once the unit stops, so this is recorded now and asserted by the test. Asking
+  # for InaccessiblePaths is not the same as having it applied.
+  if [ "$code" = "200" ]; then
+    systemctl show -p InaccessiblePaths --value ${unit} > ${join(workDir, 'isolation.txt')} 2>/dev/null || true
+    exit 0
+  fi
   i=$((i+1)); sleep 0.1
 done
 echo "the unit did not answer on http://127.0.0.1:${port}/healthz" >&2
@@ -294,6 +300,17 @@ exit $code
     const lock = JSON.parse(await readFile(join(dataRoot, 'gateway.lock'), 'utf8'))
     const unitMain = await run('systemctl', ['show', '-p', 'MainPID', '--value', unit])
     assert.equal(String(lock.pid), unitMain.stdout.trim(), 'the lock must belong to the unit that is serving')
+
+    // ── isolation: the DSH installation is unreachable for this process, and only for it ──
+    // The start hook recorded what systemd reported for the unit while it was serving. The property
+    // is read back rather than assumed: asking a unit for `InaccessiblePaths` and having it applied
+    // are different claims, and only the second one makes this environment isolated.
+    const isolation = (await readFile(join(workDir, 'isolation.txt'), 'utf8')).trim()
+    assert.match(isolation, /deepseek-harness/, `the unit must run with the DSH installation inaccessible (reported: ${JSON.stringify(isolation)})`)
+    // And the live installation is untouched: it is a different unit, and it is still running.
+    const liveState = await run('systemctl', ['is-active', 'deepseek-harness'])
+    assert.equal(liveState.stdout.trim(), 'active', 'the live DSH service must be untouched by the isolated acceptance')
+    log({ stage: 'isolation', inaccessiblePaths: isolation, liveDsh: liveState.stdout.trim() })
 
     // ── the rollback: a stop that the probe confirms, then the release in service again ──
     const rollback = await run(process.execPath, [

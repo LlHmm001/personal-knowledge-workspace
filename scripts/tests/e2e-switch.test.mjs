@@ -214,6 +214,22 @@ test('e2e: new release writes, verification fails, rollback restores the old rel
     const noteBodyFile = (spaceId, relativePath) => join(dataRoot, 'spaces', spaceId, 'workspace', 'notes', relativePath)
     const writtenNotePath = () => noteBodyFile(data.spaceId, `notes/rollback-${marker}.md`)
 
+    /** Whether anything still holds a local port. A stopped listener must leave its port free. */
+    const portHeld = async port => {
+      const server = createServer()
+      try {
+        await new Promise((resolve, reject) => {
+          server.once('error', reject)
+          server.listen(port, '127.0.0.1', resolve)
+        })
+        return false
+      } catch {
+        return true
+      } finally {
+        await new Promise(resolve => server.close(resolve))
+      }
+    }
+
     // ── a real HTTP client for the collaboration surface ────────────────────────
     const client = port => {
       const jar = new Map()
@@ -252,6 +268,8 @@ test('e2e: new release writes, verification fails, rollback restores the old rel
     // ── run the switch; verification of the NEW version is failed on purpose ─────
     let noteId = null, attachmentId = null, marker = null
     let switched = null
+    /** Whether the candidate really served before the transaction stopped it, and where. */
+    const candidate = { observed: null, port: null, stoppedAt: null }
     try {
       switched = await switchRelease({
         root, version: NEW_VERSION, artifacts, registry: registry.url, storeDir: process.env.PKW_E2E_STORE,
@@ -263,11 +281,20 @@ test('e2e: new release writes, verification fails, rollback restores the old rel
           },
         },
         hooks: {
-          stop: async () => { for (const [, pid] of listeners) await stopListener(pid); listeners.clear() },
+          // The transaction owns the candidate's life: it stops it here and then proves the stop
+          // with the state hook. This hook records the process it was handed, so the check below can
+          // say the candidate was serving and is gone, rather than only that the port is free.
+          stop: async () => {
+            candidate.stoppedAt = [...listeners.keys()].sort()
+            for (const [, pid] of listeners) await stopListener(pid)
+            listeners.clear()
+          },
           start: async () => { /* started by the verification step below, which knows the version */ },
           reachable: async ({ previousVersion }) => {
             try { await startListener(previousVersion); return { reachable: true, status: 200 } } catch (error) { return { reachable: false, error: error.message } }
           },
+          // The verifier only observes: it starts the release under test and reports what it saw.
+          // It never promotes, never repoints `current`, and never writes to the data root.
           // The rollback has its own acceptance. Reachability alone says the old port answers;
           // acceptance says an authenticated session on the restored release reports the restored
           // version. Without this hook the transaction is right to record `rolled-back-unverified`,
@@ -307,6 +334,10 @@ test('e2e: new release writes, verification fails, rollback restores the old rel
               console.error(JSON.stringify({ e2e: 'space-page', expectedVersion, serving, status: probe.status, location: probe.location, contentType: probe.contentType, bodyHead: probe.bodyHead }))
             }
             assert.equal(serving, expectedVersion, 'the service must report the version being verified')
+            if (expectedVersion === NEW_VERSION) {
+              candidate.observed = serving
+              candidate.port = listener.port
+            }
             if (expectedVersion !== NEW_VERSION) {
               // Recovery path: reachability is enough here; acceptance is the caller's job.
               return { serving }
@@ -364,6 +395,20 @@ test('e2e: new release writes, verification fails, rollback restores the old rel
       assert.ok(noteId, 'the new release must have written a note before the failure')
       failedRun = false
 
+      // ── the candidate was stopped, and the stop is confirmed before anything replaces it ──
+      // "The candidate was serving" and "the candidate is gone" are two observations, and the
+      // rollback is only meaningful if both hold: a second listener still holding the port would
+      // make the restored release's start hook fail to bind, which is a stopped service, not a
+      // rolled-back one.
+      assert.equal(candidate.observed, NEW_VERSION, 'the candidate must have served before the transaction stopped it')
+      assert.deepEqual(candidate.stoppedAt, [NEW_VERSION], `the transaction must stop the release it started, not another one: ${JSON.stringify(candidate.stoppedAt)}`)
+      assert.ok(candidate.port, 'the candidate must have been serving on a port')
+      assert.equal(await portHeld(candidate.port), false, `the stopped candidate must leave its port free (${candidate.port})`)
+      // Only the candidate is checked here. The transaction starts the previous release itself, both
+      // to observe reachability and to run the rollback acceptance, so a listener for that version
+      // may still be in service at this point — and it is stopped in the `finally` block below.
+      assert.equal(listeners.has(NEW_VERSION), false, 'the candidate this test started must not survive the rollback')
+
       // ── rollback verification: the OLD service must read the NEW data back ────
       const oldListener = await startListener(OLD_VERSION)
       const oldApi = client(oldListener.port)
@@ -381,6 +426,18 @@ test('e2e: new release writes, verification fails, rollback restores the old rel
       const fetched = await oldApi.download(space.id, attachmentId)
       assert.equal(fetched.status, 200, `the restored service must serve the attachment bytes (HTTP ${fetched.status})`)
       assert.deepEqual(fetched.bytes, Buffer.from(`attachment written by ${NEW_VERSION}\n`), 'the attachment bytes must be preserved')
+      // The bytes are compared through the restored service above and on disk here, together with
+      // the file mode: an attachment that comes back with different bytes, or with a mode the
+      // product never sets, is not the same attachment.
+      const attachmentPath = join(dataRoot, 'spaces', data.spaceId, 'workspace', 'attachments', attachmentId, `rollback-${marker}.bin`)
+      const stored = await readFile(attachmentPath)
+      assert.deepEqual(stored, Buffer.from(`attachment written by ${NEW_VERSION}\n`), 'the attachment on disk must hold the bytes the new release uploaded')
+      // The two paths differ on purpose and the difference is asserted rather than smoothed over:
+      // a note body is written `0o600` by the notes service, while attachment bytes go through
+      // `writeBytes` without a mode and take the process umask. Both are the product's own modes —
+      // the rehearsal report for the release in service records `attachment.mode = "644"` from the
+      // same upload path — so this asserts what the product does, not what one might prefer.
+      assert.equal((await stat(attachmentPath)).mode & 0o777, 0o644, 'the attachment mode must be the one the product writes through its upload path')
       const onDisk = await readFile(writtenNotePath(), 'utf8')
       assert.ok(onDisk.includes(marker), 'the written body must still be present')
       // The product writes note bodies `0o600`, and the store the product's own site serves from
