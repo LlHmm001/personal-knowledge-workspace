@@ -84,7 +84,7 @@ service restart is performed by this command:
 
 ```sh
 node scripts/inspect-profile.mjs \
-  --profile /root/.dsh/profiles/web \
+  --profile <installed-profile> \
   --harness /opt/deepseek-harness
 ```
 
@@ -170,7 +170,7 @@ DSH_HARNESS_ROOT=/opt/deepseek-harness \
 PKW_STOP_HOOK=/absolute/path/stop-dsh-web \
 PKW_START_HOOK=/absolute/path/start-dsh-web \
 pnpm run deploy \
-  --profile /root/.dsh/profiles/web \
+  --profile <installed-profile> \
   --version 0.1.1-pkw.1 \
   --registry http://localhost:4873 \
   --url http://127.0.0.1:3080 \
@@ -222,3 +222,111 @@ exact `HARNESS_REF` matching deployment. It installs/builds that checkout, then
 runs typecheck, tests, repeat-build and installed-package verification. A failed
 test is no longer tolerated. If the Harness repository is unconfigured, that
 job is visibly **skipped**, not a compilation/runtime pass.
+
+## Independent PKW runtime (recommended target)
+
+A PKW installation must not depend on a DSH installation to start, and a PKW release
+must not be able to change DSH. Both properties come from one decision: PKW owns its
+package tree.
+
+### Why the shared-profile install is not used
+
+Inside a DSH profile the PKW packages' Harness peers (`"*"` ranges) are resolved
+through ancestor directories. On a real host those ancestors are symlink farms
+pointing into the installed DSH release, so:
+
+- a PKW install writes `package.json`, `pnpm-lock.yaml`, `.npmrc` and
+  `node_modules` of a profile that DSH also loads;
+- the peers PKW actually loads change whenever DSH is upgraded or restored;
+- a failed install can leave DSH unable to load its own plugins.
+
+Installing into a shared profile — including with `--frozen-lockfile` or with
+optional dependencies disabled — keeps every one of those properties. It is
+therefore not an accepted fallback.
+
+### Building the independent profile
+
+```
+node scripts/pkw-independent-profile.mjs   --profile /srv/pkw/releases/<version>/profile   --version <version>   --store /srv/pkw/store --cache /srv/pkw/npm-cache --tmp /srv/pkw/tmp
+```
+
+The script resolves every reachable `@deepseek-ai/*` peer from the **pinned Harness
+source tree** (`--harness`, default `$DSH_HARNESS_ROOT`), packs it with `workspace:`
+ranges rewritten, publishes the tarballs to a one-off loopback registry, and installs
+them next to the ten PKW packages. Afterwards it proves with Node's own resolver
+that every package resolves inside the profile and that none resolves under the DSH
+release root or a DSH profile farm; a violation exits 5.
+
+`hoisted` layout is not a requirement in itself — what matters is that the closure is
+pinned, the resolution never borrows the live DSH tree, and the real install plus the
+business tests pass. The script uses `nodeLinker: hoisted` because that is what the
+plugin runtime expects, not as a gate.
+
+### Registry notes
+
+Optional cross-platform binaries in a DSH profile's lockfile (for example
+`@openai/codex-*`, >100 MB each) are pulled in whenever pnpm re-resolves the whole
+graph. A loopback registry with a short uplink timeout turns those into retry loops
+that can stall an installation, so `deploy/site/loopback-registry.mjs` defaults to
+20 s for the primary uplink and 60 s for the fallback, both configurable
+(`PKW_REGISTRY_TIMEOUT_MS`, `PKW_REGISTRY_FALLBACK_TIMEOUT_MS`). Pre-warming the
+store is a last resort, not a prerequisite. An independent profile does not contain
+those packages at all, which removes the problem at the source.
+
+### Install first, switch second
+
+`prepareInstall()` performs the exact-version install **while the previous release is
+still serving**, then runs the strict import check. `activate({ prepared })` snapshots
+the restored profile, verifies that the profile inputs are unchanged since
+preparation, stops the service, switches, restarts and verifies. A preparation
+failure therefore never leaves a stopped service, which is what happened when install
+and stop were one step.
+
+### Shutdown contract
+
+`scripts/serve-collaboration.mjs` reports exactly one of two outcomes:
+
+- `graceful-shutdown` + exit 0: in-flight responses finished, space runtimes closed
+  (committed writes complete, databases closed), identity store closed, data-root lock
+  released by `gateway.close()`;
+- `forced-exit` + exit 1: the drain budget expired, closing failed, or a second signal
+  arrived. The lock is deliberately **not** removed on this path, because something may
+  still hold the root.
+
+`PKW_DRAIN_TIMEOUT_MS` (default 25 s) must stay below the unit's `TimeoutStopSec`
+(30 s) so a non-graceful stop is reported before systemd escalates to `SIGKILL`.
+
+### Verifying a deployment
+
+`deploy/site/verify-collaboration.mjs` is designed to be passed as the third argument
+of `activate()`, so the same contract applies to activation and rollback. It refuses a
+login page, a bare HTTP 200, a gateway that is not started from the profile being
+deployed, and a version mismatch. When no owner credential file is supplied it says
+`not_verified_no_credentials` instead of implying that business behaviour was checked.
+
+### Classifying an installed profile
+
+`scripts/check-declared-vs-installed.mjs` answers whether an installed tree is
+`CURRENT`, `BEHIND_REPO`, `AHEAD_OF_REPO`, `CORRUPT` or `UNVERIFIED`. It reports
+`CORRUPT` only when a trusted release manifest with per-file hashes is supplied;
+a version string alone is never evidence, and the tool never fails a gate. The strict
+`check-runtime-imports.mjs` stays exactly as it is: an installed older release is
+expected to fail it, and that failure is a classification problem, not something to
+relax.
+
+### Service unit
+
+`deploy/pkw.service` is a template (fill `@PKW_ROOT@` and `@PKW_VERSION@`). It
+contains no DSH path and no hook that stops or starts another service. Prefer keeping
+the existing unit name and changing only `ExecStart`; if a rename is genuinely needed,
+stop and disable the old unit and confirm the port is free and `gateway.lock` is
+released **before** enabling the new one, so two auto-restarting services never race
+for the same data root.
+
+### Data roots
+
+The production data root stays where it is. Any migration out of `DSH_HOME` is a
+separate change with its own consistency snapshot, checksum list, absolute-path
+rewrite verification and rollback plan. A rehearsal copy must also drop the retrieval
+configuration (or point it at a loopback stub) and rewrite absolute workspace paths
+found in the copied databases before the copy is started.

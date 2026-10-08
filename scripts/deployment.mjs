@@ -172,11 +172,72 @@ export function deploymentErrorDetails(error, seen = new Set(), depth = 0) {
   return result
 }
 
+/**
+ * Fingerprint the *content* of the packages a release install replaces.
+ *
+ * `package.json` and the lockfile are deliberately not part of this: an install is
+ * supposed to rewrite them, so including them would make every legitimate install
+ * look like external drift. What must not change behind the deployment's back is the
+ * package content itself, which is what this hashes.
+ */
+export async function profileInputDigest(profile, packageNames) {
+  const names = packageNames ?? (await readdir(join(profile, 'node_modules/@deepseek-ai')).catch(() => [])).filter(n => n.startsWith('dsh-pkw-'))
+  const parts = []
+  for (const name of [...names].sort()) {
+    const dir = join(profile, 'node_modules/@deepseek-ai', name)
+    const files = []
+    async function walk(current, base) {
+      for (const entry of await readdir(current, { withFileTypes: true }).catch(() => [])) {
+        const full = join(current, entry.name)
+        if (entry.isDirectory()) await walk(full, base)
+        else if (entry.isFile()) files.push(`${full.slice(base.length + 1)}:${sha256(await readFile(full))}`)
+      }
+    }
+    await walk(dir, dir)
+    if (files.length === 0) { parts.push(`${name}:absent`); continue }
+    parts.push(`${name}:${sha256(files.sort().join('\n'))}`)
+  }
+  return sha256(parts.join('\n'))
+}
+
+/**
+ * Install the release into the profile *without* stopping the service first.
+ *
+ * Rationale: stopping the service and only then discovering that the profile
+ * cannot be installed leaves a stopped service and no rollback material. Doing the
+ * install first keeps the previous release serving for the whole preparation
+ * phase; a failure here is reported and nothing is stopped.
+ *
+ * The result is adopted by `activate()` only if the profile inputs are unchanged
+ * between preparation and adoption, so the snapshot still captures a comparable
+ * state and a concurrent writer cannot slip an unnoticed change past the check.
+ */
+export async function prepareInstall({ profile, artifacts, registry, storeDir, packageNames, allowFreshRelease = false }, execute = run) {
+  const before = await profileInputDigest(profile, packageNames)
+  const args = ['add', '--save-exact', '--ignore-scripts', '--config.auto-install-peers=false', `--registry=${registry}`, `--@deepseek-ai:registry=${registry}`]
+  if (storeDir) args.push(`--store-dir=${storeDir}`)
+  // A fresh release is newer than any release-age policy can satisfy. A site that
+  // enforces such a policy opts out explicitly for the release it is deploying,
+  // rather than the deployment quietly ignoring the policy for everything.
+  if (allowFreshRelease) args.push('--config.minimum-release-age=0')
+  args.push(...artifacts.map(p => `${p.name}@${p.version}`))
+  await execute('pnpm', args, profile)
+  await execute(process.execPath, [join(repoRoot, 'scripts/check-runtime-imports.mjs'), '--profile', profile, '--version', artifacts[0].version], profile)
+  // Sampled AFTER the install: the install is expected to change the packages, and
+  // what adoption has to detect is a change made *since* this point.
+  const preparedDigest = await profileInputDigest(profile, packageNames)
+  return { inputDigest: before, preparedDigest, installedAt: new Date().toISOString() }
+}
+
 /** Rollback installation on failure, and do not report success if recovery fails.
  * A custom verifier must enforce the deployment's real page/business contract
  * for BOTH activation and rollback; the default remains the strict HTTP probe.
+ *
+ * options.prepared, when present, is the result of `prepareInstall()`: the install
+ * has already happened with the service still up, so this call snapshots the
+ * restored profile first and then only switches.
  */
-export async function activate({ profile, backup, artifacts, registry, stop, start, url, beforeHost, verify: configuredVerify }, execute = run, verify = configuredVerify === undefined ? verifyHttp : configuredVerify) {
+export async function activate({ profile, backup, artifacts, registry, stop, start, url, beforeHost, prepared, verify: configuredVerify }, execute = run, verify = configuredVerify === undefined ? verifyHttp : configuredVerify) {
   // Existing deployment adapters supply options.verify. Never silently ignore
   // their authenticated probe or choose between two different verifiers.
   if (configuredVerify !== undefined && verify !== configuredVerify) throw new TypeError('Conflicting deployment verifiers: use options.verify or the third argument')
@@ -186,10 +247,19 @@ export async function activate({ profile, backup, artifacts, registry, stop, sta
     await execute(stop, [], profile)
     await snapshotProfile(profile, backup)
     snapshotted = true
-    await execute('pnpm', ['add', '--save-exact', '--ignore-scripts', '--config.auto-install-peers=false', `--registry=${registry}`, `--@deepseek-ai:registry=${registry}`, ...artifacts.map(p => `${p.name}@${p.version}`)], profile)
+    if (prepared) {
+      // The install ran while the service was still serving. If the package content
+      // changed after that point, something wrote the profile behind our back, and
+      // adopting it would snapshot an unknown state.
+      const now = await profileInputDigest(profile, prepared.packageNames)
+      const expected = prepared.preparedDigest ?? prepared.inputDigest
+      if (now !== expected) throw new Error('Package content changed between preparation and adoption; refusing to adopt an unknown snapshot')
+    } else {
+      await execute('pnpm', ['add', '--save-exact', '--ignore-scripts', '--config.auto-install-peers=false', `--registry=${registry}`, `--@deepseek-ai:registry=${registry}`, ...artifacts.map(p => `${p.name}@${p.version}`)], profile)
+    }
     const afterHost = await hostFingerprint(profile)
     if (JSON.stringify(beforeHost) !== JSON.stringify(afterHost)) throw new Error('Harness peer entries changed during profile install')
-    await execute(process.execPath, [join(repoRoot, 'scripts/check-runtime-imports.mjs'), '--profile', profile, '--version', artifacts[0].version], profile)
+    if (!prepared) await execute(process.execPath, [join(repoRoot, 'scripts/check-runtime-imports.mjs'), '--profile', profile, '--version', artifacts[0].version], profile)
     await execute(start, [], profile)
     return await verify(url, 15, artifacts[0].version)
   } catch (error) {

@@ -110,10 +110,78 @@ jobs:
       - name: Packed registry install and plain Node runtime
         run: pnpm verify:packed
 
+      - name: Independent profile with a real closure
+        run: |
+          pnpm run build
+          node scripts/pkw-independent-profile.mjs \
+            --profile "$PWD/.ci/profile" --version 0.9.9-ci \
+            --harness "$DSH_HARNESS_ROOT" \
+            --store "$PWD/.ci/store" --cache "$PWD/.ci/cache" --tmp "$PWD/.ci/tmp"
+          node scripts/check-profile-selfcontained.mjs --profile "$PWD/.ci/profile" --require-runtime-import
+
+      # The deployment tests that need real artifacts and a built profile run HERE,
+      # where a Harness checkout exists and `pnpm run build` has produced lib/. The
+      # tooling job keeps only self-contained tests, so no gate is replaced by a skip.
+      - name: Deployment tooling with real artifacts
+        env:
+          PKW_TEST_PROFILE: ${{ github.workspace }}/.pkw-ci/profile
+          PKW_E2E_SUPPORT_PROFILE: ${{ github.workspace }}/.pkw-ci/profile
+        run: |
+          pnpm run build
+          node scripts/pkw-independent-profile.mjs \
+            --profile "${{ github.workspace }}/.pkw-ci/profile" \
+            --version 0.9.9-ci \
+            --harness "$DSH_HARNESS_ROOT" \
+            --store "${{ github.workspace }}/.pkw-ci/store" \
+            --cache "${{ github.workspace }}/.pkw-ci/cache" \
+            --tmp "${{ github.workspace }}/.pkw-ci/tmp"
+          node --test scripts/tests/root-lock.test.mjs scripts/tests/release-switch.test.mjs \
+            scripts/tests/deployment-gate.test.mjs scripts/tests/copy-isolation.test.mjs \
+            scripts/tests/profile-builder.test.mjs scripts/tests/pkw-shutdown.test.mjs \
+            scripts/tests/systemd-stop-state.test.mjs scripts/tests/collaboration-acceptance.test.mjs \
+            scripts/tests/cli-wiring.test.mjs scripts/tests/generator-trace-gates.test.mjs
+
+  # Self-contained deployment checks: no Harness, no network, no private artifacts.
+  # Profile-builder guards generate their own synthetic Harness tree, so a green run
+  # here is real coverage rather than a skip.
+  # Builds and installs a release with no private Harness and no network beyond the
+  # public registry, then proves the profile is self-contained. This is a real run of the
+  # artifact path, not a skip: the harness peers come from a fixture the job generates.
+  artifact-deployment:
+    name: artifact build and self-contained profile
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: pnpm install --frozen-lockfile
+      # Compiling the real sources needs the Harness declaration files, which only the
+      # job above has. Release mechanics do not, so this job uses a fixture release and a
+      # fixture Harness and still exercises the assembly and the isolation check for real.
+      - name: Generate the fixture release and Harness tree
+        run: |
+          node scripts/tests/helpers/fixture-release.mjs "$PWD/.ci/packages" 0.9.9-ci
+          node scripts/tests/helpers/fixture-harness.mjs "$PWD/.ci/harness"
+      - name: Assemble a self-contained profile from the staged release
+        run: |
+          node scripts/pkw-independent-profile.mjs \
+            --profile "$PWD/.ci/profile" \
+            --release-source "$PWD/.ci/packages" \
+            --version 0.9.9-ci \
+            --harness "$PWD/.ci/harness" \
+            --store "$PWD/.ci/store" --cache "$PWD/.ci/cache" --tmp "$PWD/.ci/tmp" 
+      - name: Self-contained resolution (proves no dependency on a host installation)
+        run: node scripts/check-profile-selfcontained.mjs --profile "$PWD/.ci/profile"
+
   tooling:
     name: deployment tooling (no private Harness required)
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
