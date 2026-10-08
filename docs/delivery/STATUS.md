@@ -118,6 +118,11 @@ e2e: space-page   expectedVersion 0.1.9-pkw.1   serving null
                   body {"ok":false,"code":"PKW_REQUEST_FAILED","error":"操作未完成…"}
 ```
 
+Reproduced outside the test, on the scene the run kept: the staged `0.1.9-pkw.1` release serving
+this copied data root logs in (`200`), exposes the space in its session, and then answers the space
+page with `400 PKW_REQUEST_FAILED`. The data root is internally consistent — the workspace path its
+own store records points at the copy's workspace, and the note it indexes is on disk — so this is
+"the release cannot serve this page for this data root", not "the page or its header is broken".
 The same endpoint on a profile built from the packed release answers `200` with
 `x-pkw-version: 0.1.8-pkw.2` — and, checked separately, so does the staged `0.1.9-pkw.1` release
 this test builds, when it serves a fixture data root. So the endpoint, the header and the staged
