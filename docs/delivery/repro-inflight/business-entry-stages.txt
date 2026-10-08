@@ -1,0 +1,32 @@
+# In-flight proved inside the business method, kept as evidence.
+#
+# Recorded by: PKW_KEEP_WORKDIR=1 PKW_TEST_PROFILE=<profile> PKW_TEST_DATA_ROOT=<fixture> \
+#   node --test scripts/tests/business-entry.test.mjs
+# Timestamps are UTC (Z). The API path carries the fixture space id, shown as <fixture-space>.
+#
+# The hold is inside the service's own call(), not in front of the gateway, so `inside-business-method`
+# is the business operation starting rather than a request being queued. `drain-receipt` is the
+# listener announcing that its graceful path began — the release only happens after it, so a request
+# that finished early fails the test instead of passing it for the wrong reason.
+
+# ── test 1: a note body held inside saveNoteBody across the signal ──
+{"at": "2026-10-08T15:51:39.697Z", "tag": "first", "stage": "http-POST-/pkw/login", "status": 200, "ok": true}
+{"at": "2026-10-08T15:51:39.704Z", "tag": "first", "stage": "http-GET-/pkw/session", "status": 200, "ok": true}
+{"at": "2026-10-08T15:51:39.784Z", "tag": "first", "stage": "http-POST-/pkw/spaces/sp_<fixture-space>/api", "status": 200, "ok": true}
+{"at": "2026-10-08T15:51:39.797Z", "tag": "first", "stage": "http-POST-/pkw/spaces/sp_<fixture-space>/api", "status": 200, "ok": true}
+{"at": "2026-10-08T15:51:39.807Z", "tag": "first", "stage": "inside-business-method", "noteId": "note_68beb5fe4b9b", "method": "saveNoteBody"}
+{"at": "2026-10-08T15:51:39.814Z", "tag": "first", "stage": "drain-receipt", "inflight": 1}
+{"at": "2026-10-08T15:51:39.836Z", "tag": "first", "stage": "http-POST-/pkw/spaces/sp_<fixture-space>/api", "status": 200, "ok": true}
+{"at": "2026-10-08T15:51:42.860Z", "tag": "first", "stage": "stopped", "code": 0, "signal": null, "graceful": true, "forced": false}
+{"at": "2026-10-08T15:51:42.861Z", "tag": "first", "stage": "indexed", "revision": 2}
+
+# ── test 2: a slow sync held until the remote stub holds it ──
+{"at": "2026-10-08T15:51:46.734Z", "tag": "only", "stage": "http-POST-/pkw/login", "status": 200, "ok": true}
+{"at": "2026-10-08T15:51:46.741Z", "tag": "only", "stage": "http-GET-/pkw/session", "status": 200, "ok": true}
+{"at": "2026-10-08T15:51:46.836Z", "tag": "only", "stage": "http-POST-/pkw/spaces/sp_<fixture-space>/api", "status": 200, "ok": true}
+{"at": "2026-10-08T15:51:46.849Z", "tag": "only", "stage": "stub-received", "url": "/knowledge-bases/kb-business-entry/knowledge/file", "bytes": 288}
+{"at": "2026-10-08T15:51:46.855Z", "tag": "only", "stage": "drain-receipt", "inflight": 1}
+{"at": "2026-10-08T15:51:48.364Z", "tag": "only", "stage": "http-POST-/pkw/spaces/sp_<fixture-space>/api", "status": 400, "ok": false}
+{"at": "2026-10-08T15:51:51.392Z", "tag": "only", "stage": "stopped", "code": 0, "signal": null, "graceful": true, "forced": false}
+{"at": "2026-10-08T15:51:51.393Z", "tag": "only", "stage": "sync-outcome", "status": 400}
+{"at": "2026-10-08T15:51:51.394Z", "tag": "only", "stage": "committed", "noteId": "note_28ee7daa9432", "remoteRequests": 3}

@@ -97,8 +97,12 @@ async function openGateway() {
       const undecided = again.ready === true || again.reason === 'lock-without-owner' || again.reason === 'empty-lock'
       if (!undecided) refuseLock(again)
       blocked += 1
-      if (blocked > 40) throw error
-      await new Promise(resolve => setTimeout(resolve, 25))
+      // Long enough for a winner that has claimed the lock to get as far as writing its record —
+      // that is module loading and opening the data root, not a microsecond — and still bounded, so a
+      // lockfile that never becomes readable ends as a refusal with its own code rather than as a wait
+      // that never ends.
+      if (blocked > 300) throw error
+      await new Promise(resolve => setTimeout(resolve, 50))
     }
   }
 }

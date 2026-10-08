@@ -746,7 +746,11 @@ export class PkwWebService extends Service {
         const content = Buffer.from(String(args.contentBase64), 'base64')
         const rec = await this.attachments.importFile({
           content,
-          filename: String(args.filename),
+          // Passed through as it arrived, not coerced: `String(undefined)` is the string
+          // "undefined", and that is how an upload with no filename came to be stored, indexed and
+          // served under that literal name. The attachments service is the place that decides
+          // whether a name is usable.
+          filename: args.filename as string,
           mimeType: String(args.mimeType),
           ...(args.indexable !== undefined ? { indexable: args.indexable === true } : {}),
           ...(args.knowledgeMode === 'note-scoped' || args.knowledgeMode === 'local-only' ? { knowledgeMode: args.knowledgeMode as 'note-scoped' | 'local-only' } : {}),

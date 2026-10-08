@@ -638,9 +638,12 @@ test('S3/lock two concurrent starters against one root leave exactly one writer'
   const a = startGateway({ profile, configPath, port })
   const b = startGateway({ profile, configPath, port })
   try {
+    // The winner never exits, so waiting on both would wait forever: each race has a *bound* that
+    // only a process that is still serving can reach. The loser refuses on its own — that is what is
+    // being measured — so the bound is generous and says nothing about how long the refusal took.
     const results = await Promise.all([
-      Promise.race([a.exited, new Promise(r => setTimeout(() => r({ code: 'running' }), 8000))]),
-      Promise.race([b.exited, new Promise(r => setTimeout(() => r({ code: 'running' }), 8000))]),
+      Promise.race([a.exited, new Promise(r => setTimeout(() => r({ code: 'running' }), 20_000))]),
+      Promise.race([b.exited, new Promise(r => setTimeout(() => r({ code: 'running' }), 20_000))]),
     ])
     const running = results.filter(r => r.code === 'running').length
     const refused = results.filter(r => r.code === 3).length

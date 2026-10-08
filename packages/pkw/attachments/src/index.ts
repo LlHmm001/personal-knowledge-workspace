@@ -56,6 +56,29 @@ function safeFilename(name: string): string {
   return cleaned
 }
 
+/**
+ * The filename an upload actually carries.
+ *
+ * A missing name used to reach `safeFilename` as the string `"undefined"` — `String(undefined)` —
+ * and the file was stored, indexed and served under that literal name. It is not a cosmetic bug:
+ * the stored path is the attachment's identity on disk, so every upload without a name collided on
+ * one path, and a reader clicking the attachment got a file called `undefined`.
+ *
+ * A name that is absent, empty or nothing but separators is refused here rather than given a
+ * placeholder: the caller is the only place that knows what the file is called, and inventing a name
+ * would put a file in the workspace that nobody can identify.
+ */
+function requiredFilename(name: unknown): string {
+  if (typeof name !== 'string' || name.trim() === '') {
+    throw new Error('attachments: an upload must carry a filename; an unnamed file cannot be identified in the workspace')
+  }
+  const cleaned = safeFilename(name)
+  if (cleaned === 'file') {
+    throw new Error(`attachments: the filename ${JSON.stringify(name)} names no file`)
+  }
+  return cleaned
+}
+
 interface AttachmentEventPayload {
   attachmentId: string
   relativePath?: string
@@ -137,7 +160,7 @@ export class AttachmentsService extends Service {
 
   async importFile(input: ImportAttachmentInput): Promise<AttachmentRecord> {
     const attachmentId = AttachmentId(`att_${randomUUID().replaceAll('-', '').slice(0, 12)}`)
-    const filename = safeFilename(input.filename)
+    const filename = requiredFilename(input.filename)
     const relativePath = `attachments/${attachmentId}/${filename}`
     const target = await this.ctx.fs.resolve(this.handle.attachmentPath(attachmentId, filename))
     await this.writeBytes(target, input.content)
