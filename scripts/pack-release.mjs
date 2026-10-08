@@ -25,6 +25,10 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const { values } = parseArgs({ options: {
   'artifact-dir': { type: 'string' }, version: { type: 'string' }, json: { type: 'string' },
   'keep-work': { type: 'boolean', default: false },
+  // Include the Harness peers a release needs, packed from a profile that already carries them.
+  // Without this the tarballs alone are not installable offline: the peers are published by the
+  // Harness release, and a site's registry does not carry them.
+  'include-peers-from': { type: 'string' },
 } })
 if (!values['artifact-dir'] || !values.version) {
   process.stderr.write('Usage: node scripts/pack-release.mjs --artifact-dir DIR --version V [--json OUT]\n')
@@ -116,6 +120,19 @@ for (const name of packageNames) {
   if (!existsSync(lib)) throw new Error(`missing build output: ${lib} — run \`node scripts/build.mjs\` first`)
   const manifest = JSON.parse(await readFile(join(pkwRoot, name, 'package.json'), 'utf8'))
   await pack({ sourceDir: join(pkwRoot, name), manifest, stampedVersion: version })
+}
+// ── the Harness peers, packed from a profile that already resolved them ──────────────
+const peersDirectory = values['include-peers-from'] ? resolve(values['include-peers-from'], 'node_modules/@deepseek-ai') : null
+if (peersDirectory) {
+  if (!existsSync(peersDirectory)) throw new Error(`--include-peers-from has no ${peersDirectory}`)
+  for (const entry of await readdir(peersDirectory, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue
+    // The PKW packages are the release itself; everything else is a peer it depends on.
+    if (entry.name.startsWith('dsh-pkw-')) continue
+    const sourceDir = join(peersDirectory, entry.name)
+    const manifest = JSON.parse(await readFile(join(sourceDir, 'package.json'), 'utf8'))
+    await pack({ sourceDir, manifest, stampedVersion: null })
+  }
 }
 if (!values['keep-work']) await rm(workDir, { recursive: true, force: true })
 
