@@ -100,6 +100,7 @@ test('target: the CLI runs its whole chain through a temporary systemd unit', {
   const port = 3361
   const origin = `http://127.0.0.1:${port}`
   const log = (...parts) => console.error(JSON.stringify({ at: new Date().toISOString(), ...Object.assign({}, ...parts) }))
+  let failedRun = false
   try {
     // ── the data root: a copy of the fixture, with an account this test can log in with ──
     const copy = await copyDataRoot(dataSource, dataRoot)
@@ -152,14 +153,18 @@ exit 1
 `, { mode: 0o700 })
     await writeFile(systemdStop, `#!/bin/sh
 systemctl stop ${unit} >/dev/null 2>&1 || true
-# Wait for the unit to be gone, so a stop that returns is a stop that happened.
+# Wait until the unit is gone *and* the port is free. A unit that is inactive can still be closing
+# its listener, and the next start hook would then fail to bind the port — a race that looks like a
+# service that will not start.
 i=0
 while [ $i -lt 600 ]; do
   state=$(systemctl is-active ${unit} 2>/dev/null || true)
-  [ "$state" = "inactive" ] || [ "$state" = "failed" ] || [ -z "$state" ] && exit 0
+  busy=$(ss -ltn 2>/dev/null | grep -c ":${port} ")
+  if { [ "$state" = "inactive" ] || [ "$state" = "failed" ] || [ -z "$state" ]; } && [ "$busy" = "0" ]; then exit 0; fi
   i=$((i+1)); sleep 0.1
 done
-exit 0
+echo "the unit or its port is still busy after stop" >&2
+exit 1
 `, { mode: 0o700 })
     await writeFile(systemdProbe, `#!/bin/sh
 # The probe answers with the unit's own state; the CLI reads MainPID and the cgroup as well.
@@ -173,9 +178,29 @@ exit 1
     // the mode, and the rest comes from the environment of the run, exactly as a site would wire it.
     const verifyHook = join(workDir, 'verify.sh')
     await writeFile(verifyHook, `#!/bin/sh
-# Receives --expected-version and --mode from the CLI, and supplies the rest from this test's
-# own configuration: the profile that is serving now, the origin, and the owner credential.
-release=$(readlink -f ${root}/current)
+# Receives --expected-version and --mode from the CLI, and supplies the rest from this test's own
+# configuration: the release the transaction is verifying, the origin, and the owner credential.
+#
+# The release is found by version under this test's own installation root, not through \`current\`:
+# during a switch the acceptance step belongs to the release being verified, and a hook that reads
+# \`current\` can end up describing whichever release is linked at that instant. The rehearsal driver
+# passes the candidate for the same reason.
+expected=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "--expected-version" ]; then expected="$arg"; fi
+  prev="$arg"
+done
+release=""
+for dir in ${root}/releases/*/profile; do
+  case "$dir" in
+    *"/$expected/profile") release="$(dirname "$dir")" ;;
+  esac
+done
+if [ -z "$release" ]; then
+  echo "no release for version $expected under ${root}/releases" >&2
+  exit 1
+fi
 # The verifier writes its report to stdout and its reason to stderr; both are kept, so a refusal
 # can be read rather than guessed.
 out=$(/usr/local/bin/node ${join(repoRoot, 'deploy/site/verify-collaboration.mjs')} "$@" \
@@ -228,10 +253,19 @@ exit $code
       // environment without reaching a public registry.
       ...(process.env.PKW_TARGET_SUPPORT ? ['--support-dir', process.env.PKW_TARGET_SUPPORT] : []),
     ], { env: { ...process.env, PKW_TARGET_VERIFY_CREDENTIALS: credentialsFile } })
+    await writeFile(join(workDir, 'cli-report.json'), JSON.stringify({ code: result.code, stdout: result.stdout, stderr: result.stderr }, null, 2) + '\n', { mode: 0o600 })
     log({ stage: 'cli-exit', code: result.code, stdout: result.stdout.slice(-300), stderr: result.stderr.slice(-600) })
     // The verdict is asserted, not merely observed: this is an acceptance run, so the release has
     // to be activated, and the CLI's own report has to say so.
-    assert.equal(result.code, 0, `the CLI must activate the release: ${result.stdout.slice(-400)}${result.stderr.slice(-600)}`)
+    if (result.code !== 0) failedRun = true
+    // The acceptance step is what this run is for, and it is not passing yet. Rather than weaken the
+    // assertion or delete the evidence, the run records what happened and fails: the CLI's verdict,
+    // the verifier's own log when it wrote one, and the hook scripts are all kept for the next
+    // investigation. A run that cannot reach `activated` is not an acceptance.
+    if (result.code !== 0) {
+      log({ stage: 'verdict-not-activated', code: result.code })
+      assert.fail(`the CLI did not activate the release (exit ${result.code}); its verdict and the verifier log are in ${workDir}`)
+    }
     let verdict = null
     try { verdict = JSON.parse(result.stdout.trim().split('\n').filter(Boolean).slice(-1)[0]) } catch { verdict = null }
     assert.ok(verdict, `the CLI must print a structured verdict: ${result.stdout.slice(-300)}`)
@@ -272,8 +306,11 @@ exit $code
       'the release in service must still be answering after the second attempt')
   } finally {
     await run('systemctl', ['stop', unit])
-    if (process.env.PKW_KEEP_TARGET_WORKDIR) log({ stage: 'kept', workDir, unit })
-    else await rm(workDir, { recursive: true, force: true })
+    // A failing run keeps its scene: the hooks, the verifier log and the installation are what the
+    // next investigation needs, and deleting them would destroy the evidence.
+    const failed = failedRun
+    if (failed || process.env.PKW_KEEP_TARGET_WORKDIR) log({ stage: 'kept', workDir, unit, failed })
+    if (!failed && !process.env.PKW_KEEP_TARGET_WORKDIR) await rm(workDir, { recursive: true, force: true })
   }
 })
 
