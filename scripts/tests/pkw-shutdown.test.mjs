@@ -141,7 +141,14 @@ function client(port) {
       if (body !== undefined) headers['Content-Type'] = 'application/json'
       if (csrf) headers['X-PKW-CSRF'] = csrf
       if (jar.size) headers.Cookie = [...jar].map(([k, v]) => `${k}=${v}`).join('; ')
-      const response = await fetch(origin + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), redirect: 'manual' })
+      let response
+      try {
+        response = await fetch(origin + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), redirect: 'manual' })
+      } catch (error) {
+        // Name the call that failed: an unhandled "fetch failed" otherwise says nothing about
+        // which step of the test lost its connection.
+        throw new Error(`${method} ${path} failed: ${error.message}${error.cause ? ` (${error.cause.message})` : ''}`)
+      }
       for (const raw of response.headers.getSetCookie?.() ?? []) {
         const [pair] = raw.split(';'); const at = pair.indexOf('=')
         if (at > 0) jar.set(pair.slice(0, at), pair.slice(at + 1))
