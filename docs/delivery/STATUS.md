@@ -125,6 +125,10 @@ Narrowed further, with the product's own schema as the reference:
 * calling the gateway directly (a valid session, the space in it, the same request) reaches the
   space route and gets the same opaque 400: the failure is inside the page route handler, after the
   session and authorization checks.
+* the synthetic store was also missing `unit_globals`, the row the workspace registry reads its
+  workspace ids from — a store whose workspace table the registry never hears about. It is now
+  created and the workspace id is indexed there; the page still answers 400, so this was a
+  necessary correction and not the whole difference.
 * the synthetic store was missing nine tables the product's own store carries
   (`u_pkw_notes_note_order`, `u_pkw_notes_folder_trash`, `u_pkw_tasks_matrices`, and the six
   `u_pkw_weknora_sync_*` tables). The helper now creates them, taken from a store the product

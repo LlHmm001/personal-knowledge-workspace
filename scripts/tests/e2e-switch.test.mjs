@@ -232,6 +232,16 @@ test('e2e: new release writes, verification fails, rollback restores the old rel
             const space = session.value.spaces[0]
             const serving = await api.spaceVersion(space.id)
             if (serving !== expectedVersion) {
+              // Record what the store says about the workspace the note belongs to, so a page that
+              // cannot resolve it is distinguishable from a page that fails for another reason.
+              try {
+                const { DatabaseSync } = await import('node:sqlite')
+                const db = new DatabaseSync(join(dataRoot, 'spaces', space.id, 'state.sqlite'), { readOnly: true })
+                const globals = db.prepare('SELECT value FROM unit_globals WHERE unit=?').get('workspace')
+                const ws = db.prepare('SELECT key FROM u_workspace_workspaces LIMIT 1').get()
+                db.close()
+                console.error(JSON.stringify({ e2e: 'workspace-registry', workspaceKey: ws?.key ?? null, globals: globals ? JSON.parse(globals.value) : null }))
+              } catch (error) { console.error(JSON.stringify({ e2e: 'workspace-registry', error: error.message })) }
               // The page did not carry the version header. Record what it did answer, so the reason
               // is visible instead of being reported as "null".
               const probe = await api.spacePage(space.id)

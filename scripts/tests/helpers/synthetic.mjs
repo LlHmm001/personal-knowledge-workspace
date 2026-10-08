@@ -62,6 +62,10 @@ export async function makeSyntheticDataRoot({ owner = 'owner', noteBody = '# syn
   state.exec(`
     PRAGMA user_version = 1;
     CREATE TABLE units (name TEXT PRIMARY KEY, version INTEGER NOT NULL) STRICT;
+    -- The per-unit state the runtime keeps outside the unit's own tables. The workspace registry
+    -- reads the workspace ids it indexes from here; a store without this row has a workspace table
+    -- that the registry never learns about, and every page that resolves the workspace by id fails.
+    CREATE TABLE unit_globals (unit TEXT PRIMARY KEY REFERENCES units(name), value TEXT NOT NULL) STRICT;
     CREATE TABLE u_workspace_workspaces (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
     CREATE TABLE u_pkw_notes_note_index (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
     CREATE TABLE u_pkw_notes_note_paths (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
@@ -87,6 +91,9 @@ export async function makeSyntheticDataRoot({ owner = 'owner', noteBody = '# syn
   }
   // The workspace path is absolute in the product's own schema; a copy that keeps the
   // source path would write to the source, which is exactly what tests must detect.
+  state.prepare('INSERT INTO unit_globals VALUES(?,?)').run('workspace', JSON.stringify({
+    initialized: true, workspaceIds: [workspaceId], archivedSessionIds: [],
+  }))
   state.prepare('INSERT INTO u_workspace_workspaces VALUES(?,?)').run(workspaceId, JSON.stringify({
     path: workspaceDir, title: 'synthetic workspace', sessionIds: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
   }))
