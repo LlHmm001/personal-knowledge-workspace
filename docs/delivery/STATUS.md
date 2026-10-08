@@ -5,7 +5,7 @@ Everything here is bound to one commit. Where an item is not finished, it says s
 ## Current state
 
 * Branch `feat/pkw-independent-runtime`, PR #2, still **draft**, base `chore/pkw-delivery`.
-* Final SHA for this table: `523a025cd348703fd88caff7a8e35807375ece67`.
+* Final SHA for this table: `59eef7c` (see `git rev-parse HEAD` for the full id).
 * Live services untouched: no restart, no configuration change, no `current` repoint, no deletion of
   recovery material. Production DSH and `pkw-collaboration` keep their original main PIDs.
 * Closed findings stay closed: generator (log read live, outcome gate, real-entry tests), trace
@@ -30,6 +30,7 @@ Everything here is bound to one commit. Where an item is not finished, it says s
 | 11 | Isolated target acceptance through a temporary systemd unit | pass | `PKW_TEST_PROFILE=… PKW_TARGET_ARTIFACTS=… PKW_TARGET_SUPPORT=… PKW_TEST_DATA_ROOT=… node --test scripts/tests/target-systemd.test.mjs` | 0 | `/tmp/target17.log` | transient unit on a test port; DSH unreachable only for that process |
 | 13 | Acceptances 1-10 re-run on this SHA | pass | see rows above | 0 | `/tmp/all5.log` | 430 tests, 418 pass, 0 fail, 12 skipped |
 | 12 | Real Harness CI job (`typecheck + test + build + packed runtime`) | **not run** | GitHub Actions | — | — | blocked: see missing inputs |
+| 14 | Real-artifact switch/rollback E2E (`e2e-switch.test.mjs`) with its three inputs wired | **ran for the first time, red** | `PKW_E2E_SUPPORT_PROFILE=… PKW_E2E_STORE=… PKW_E2E_OLD_ARTIFACTS=… PKW_E2E_OLD_VERSION=0.1.7-pkw.1 node --test scripts/tests/e2e-switch.test.mjs` | 1 | `/tmp/e2e-test2.log` | see open item 5 |
 
 ## Open item 1 — the original lifecycle write test
 
@@ -102,6 +103,26 @@ probe reported unreachable before the verifier ran and the refusal read `authent
 the acceptance refusal carried no detail, the acceptance observations were referenced in a catch
 before their declaration, and the CLI's verdict was read from the last stdout line when the install
 prints a line per artifact first.
+
+## Open item 5 — the real-artifact E2E, now actually running
+
+This test had only ever been skipped: it needs a staged old artifact set, a support profile and a
+pnpm store, and none were wired. With them wired it runs — and fails, which is the useful part.
+It stages the old release from `/LlHmm9527/.pkw-deployments/0.1.7-pkw.1/packages`, stages this
+checkout as `0.1.9-pkw.1`, installs, promotes, injects a post-activation verification failure after
+writing real content, and rolls back. The failure is in the verifier hook:
+
+```
+e2e: space-page   expectedVersion 0.1.9-pkw.1   serving null
+                  status 400  contentType application/json
+                  body {"ok":false,"code":"PKW_REQUEST_FAILED","error":"操作未完成…"}
+```
+
+The same endpoint on a profile built from the packed release answers `200` with
+`x-pkw-version: 0.1.8-pkw.2`, so the endpoint and its header are fine; what differs is what this
+test's own data root or staged profile carries. The test now records the page's status, Location,
+content type and body head when the header is missing, so the next run starts from the answer
+rather than from "null". Nothing was widened to pass and no 400 was swallowed.
 
 ## Superseded: the target acceptance's earlier stopping point
 
