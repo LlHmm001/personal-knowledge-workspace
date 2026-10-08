@@ -100,8 +100,12 @@ async function openGateway() {
       // Long enough for a winner that has claimed the lock to get as far as writing its record —
       // that is module loading and opening the data root, not a microsecond — and still bounded, so a
       // lockfile that never becomes readable ends as a refusal with its own code rather than as a wait
-      // that never ends.
-      if (blocked > 300) throw error
+      // that never ends. What the wait saw is reported: a refusal that cannot say whether the lock was
+      // empty, ownerless or unreadable for fifteen seconds cannot say what happened either.
+      if (blocked > 300) {
+        console.error(JSON.stringify({ status: 'lock-refused', reason: 'claim-not-confirmed', detail: again.reason, lockPath: again.lockPath ?? null, waitedMs: blocked * 50 }))
+        process.exit(LOCK_EXIT.UNREADABLE)
+      }
       await new Promise(resolve => setTimeout(resolve, 50))
     }
   }
