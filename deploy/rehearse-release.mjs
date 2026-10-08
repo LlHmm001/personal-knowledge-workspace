@@ -45,9 +45,16 @@ const { values } = parseArgs({ options: {
   // Write a note and an attachment through the real API while the new release serves, so the
   // rollback can be asked whether the restored release reads data the new release committed.
   'write-during-serve': { type: 'boolean', default: false },
+  // Optional: pin the attachment mode a site expects. Without it the read-back compares against the
+  // mode the write itself produced, which is what a restore actually has to preserve.
+  'expect-mode': { type: 'string' },
+  // Rehearsal counterexample: make the *real* write fail (a genuine API failure) while the injected
+  // fault is requested. This exists to prove the run refuses instead of relabelling a broken release
+  // as the expected fault, so it is a flag of the rehearsal and never part of a deployment path.
+  'break-write': { type: 'string' },
 } })
 if (!values['work-dir'] || !values['data-source'] || !values['profile-source'] || !values['artifact-dir'] || !values.version || !values.port) {
-  process.stderr.write('Usage: node deploy/rehearse-release.mjs --work-dir DIR --data-source DIR --profile-source DIR --artifact-dir DIR --version V --port N [--old-version V] [--fail-install] [--modify-candidate-after-install] [--force-verify-failure]\n')
+  process.stderr.write('Usage: node deploy/rehearse-release.mjs --work-dir DIR --data-source DIR --profile-source DIR --artifact-dir DIR --version V --port N [--old-version V] [--fail-install] [--modify-candidate-after-install] [--force-verify-failure]\n  [--write-during-serve] [--expect-mode OCTAL] [--store-dir DIR] [--owner-password P] [--set-owner-password]\n')
   process.exit(2)
 }
 const workDir = resolve(values['work-dir'])
@@ -231,26 +238,33 @@ async function runVerifier(expectedVersion, mode) {
  * The product stores attachments under the space's workspace; the comparison is made on that copy,
  * which is the one a future reader will be served from, and the sha256 is what the upload recorded.
  */
+/**
+ * Compare the stored attachment with the state the write itself left behind.
+ *
+ * The comparison is against the baseline recorded at write time — the file, its bytes, its sha256
+ * and its mode — not against a constant written here. A restore has to preserve what the write
+ * produced; an expectation invented in this script would only ever test this script, and it could
+ * disagree with the product in either direction without anyone noticing. `--expect-mode` exists for
+ * a site that also wants to pin the mode, and says so in the report when it does.
+ */
 async function compareAttachment(served) {
-  const { createHash } = await import('node:crypto')
-  const { stat, readFile: readBytes, readdir } = await import('node:fs/promises')
-  if (!served.attachmentId) return { ok: false, reason: 'the upload reported no attachment id' }
-  const base = join(dataRoot, 'spaces', served.spaceId, 'workspace', 'attachments', served.attachmentId)
-  const entries = await readdir(base).catch(() => null)
-  if (!entries) return { ok: false, reason: `no stored attachment at ${base}` }
-  const stored = []
-  for (const name of entries) {
-    const full = join(base, name)
-    const info = await stat(full).catch(() => null)
-    if (!info?.isFile()) continue
-    const bytes = await readBytes(full)
-    const sha256 = createHash('sha256').update(bytes).digest('hex')
-    stored.push({ file: name, bytes: info.size, sha256, mode: (info.mode & 0o7777).toString(8) })
+  const baseline = served.attachmentBaseline ?? null
+  if (!baseline) return { ok: false, reason: 'the write recorded no attachment baseline, so there is nothing to compare against' }
+  const current = await inspectStoredAttachment(served.spaceId, served.attachmentId)
+  if (!current.ok) return { ok: false, reason: current.reason, baseline, stored: current.stored ?? null }
+  const differs = []
+  if (current.file !== baseline.file) differs.push(`file ${baseline.file} -> ${current.file}`)
+  if (current.bytes !== baseline.bytes) differs.push(`bytes ${baseline.bytes} -> ${current.bytes}`)
+  if (current.sha256 !== baseline.sha256) differs.push(`sha256 ${baseline.sha256.slice(0, 12)} -> ${current.sha256.slice(0, 12)}`)
+  if (current.mode !== baseline.mode) differs.push(`mode ${baseline.mode} -> ${current.mode}`)
+  const expectedMode = values['expect-mode'] ?? null
+  if (expectedMode && current.mode !== expectedMode) differs.push(`mode ${current.mode} is not the configured ${expectedMode}`)
+  return {
+    ok: differs.length === 0,
+    file: current.file, bytes: current.bytes, sha256: current.sha256, mode: current.mode,
+    baseline, expectedMode,
+    ...(differs.length > 0 ? { reason: `the restored attachment differs from the write baseline: ${differs.join('; ')}` } : {}),
   }
-  const match = stored.find(entry => entry.sha256 === served.attachmentSha256)
-  return match
-    ? { ok: true, file: match.file, bytes: match.bytes, sha256: match.sha256, mode: match.mode, expectedBytes: served.attachmentBytes }
-    : { ok: false, reason: 'no stored attachment matches the uploaded bytes', stored, expectedSha256: served.attachmentSha256 }
 }
 
 function apiClient() {
@@ -304,6 +318,28 @@ async function readServedWriteBack(label) {
 
 async function writeThroughApi() {
   const { call } = apiClient()
+  if (values['break-write']) {
+    // A real failure on the real endpoint: a plain file is placed where the note's parent directory
+    // belongs, so the product's own mkdir fails and the API answers an error. Nothing is faked and
+    // no product rule is bypassed — this only makes the write impossible.
+    const brokenPath = `rehearsal/broken-${randomUUID().slice(0, 8)}.md`
+    const spaceId = await onlySpaceId()
+    const blocker = join(dataRoot, 'spaces', spaceId, 'workspace', 'notes', 'rehearsal')
+    await writeFile(blocker, 'this file stands where the note directory belongs\n', { mode: 0o600 })
+    report.phases.writeFault = { kind: 'counterexample', brokenPath, blocker }
+    const login0 = await call('/pkw/login', { method: 'POST', body: { username: values['bootstrap-username'] ?? 'owner', password: values['owner-password'] ?? values['bootstrap-password'] ?? 'rehearsal-password' } })
+    if (login0.status !== 200) throw new Error(`the counterexample could not even log in (${login0.status})`)
+    const session0 = await call('/pkw/session')
+    const attempt = await call(`/pkw/spaces/${spaceId}/api`, { method: 'POST', body: { method: 'createNote', args: { relativePath: brokenPath, markdown: '# counterexample\n' } }, csrf: session0.body.value.csrf })
+    report.phases.writeFault.status = attempt.status
+    report.phases.writeFault.body = attempt.body
+    if (attempt.status === 200) {
+      // The write succeeded, so this counterexample has nothing to say: say that, instead of
+      // reporting a failure that did not happen.
+      throw new Error('the counterexample did not manage to make the write fail; the write succeeded')
+    }
+    throw new Error(`writing during serve: the release refused a real write (HTTP ${attempt.status}): ${JSON.stringify(attempt.body).slice(0, 300)}`)
+  }
   const login = await call('/pkw/login', { method: 'POST', body: { username: values['bootstrap-username'] ?? 'owner', password: values['owner-password'] ?? values['bootstrap-password'] ?? 'rehearsal-password' } })
   if (login.status !== 200) throw new Error(`writing during serve: login was refused with HTTP ${login.status}`)
   const session = await call('/pkw/session')
@@ -317,14 +353,76 @@ async function writeThroughApi() {
   const attachmentBytes = Buffer.from(`rehearsal attachment ${marker}\n`)
   const uploaded = await call(`/pkw/spaces/${space.id}/api`, { method: 'POST', body: { method: 'uploadAttachment', args: { relativePath: `rehearsal/${marker}.bin`, contentBase64: attachmentBytes.toString('base64') } }, csrf: value.csrf })
   if (uploaded.status !== 200) throw new Error(`writing during serve: uploadAttachment failed (${uploaded.status}): ${JSON.stringify(uploaded.body).slice(0, 200)}`)
+  const noteId = created.body.value.noteId
+  const attachmentId = uploaded.body?.value?.attachmentId ?? null
+  if (!attachmentId) throw new Error(`writing during serve: the upload reported no attachment id: ${JSON.stringify(uploaded.body).slice(0, 200)}`)
+
+  // ── linkage: the attachment has to be reachable *through the note* ───────────────
+  // An upload that is never referenced is an attachment no reader would ever see: `getNote`
+  // reports the attachments a note cites, by scanning the markdown for managed link targets. So
+  // the write is only complete once the note cites it and the product itself reports it back.
+  const before = await call(`/pkw/spaces/${space.id}/api`, { method: 'POST', body: { method: 'getNote', args: { noteId } }, csrf: value.csrf })
+  if (before.status !== 200) throw new Error(`writing during serve: the note must be readable before linking: ${before.status} ${JSON.stringify(before.body).slice(0, 200)}`)
+  const attachmentName = `rehearsal-${marker}.bin`
+  const linked = await call(`/pkw/spaces/${space.id}/api`, { method: 'POST', body: {
+    method: 'saveNoteBody', args: {
+      noteId, body: `${before.body.value.body}\n![${attachmentName}](attachments/${attachmentId}/${attachmentName})\n`,
+      expectedContentHash: before.body.value.note.contentHash,
+    },
+  }, csrf: value.csrf })
+  if (linked.status !== 200) throw new Error(`writing during serve: linking the attachment failed (${linked.status}): ${JSON.stringify(linked.body).slice(0, 200)}`)
+  const verified = await call(`/pkw/spaces/${space.id}/api`, { method: 'POST', body: { method: 'getNote', args: { noteId } }, csrf: value.csrf })
+  const cited = (verified.body?.value?.attachments ?? []).some(entry => entry.attachmentId === attachmentId)
+  if (verified.status !== 200 || !cited) throw new Error(`writing during serve: the release does not report the attachment it linked (${verified.status}, cited=${cited})`)
+
+  // ── the baseline: the bytes and the mode as the release that wrote them left them ──
+  // The mode is captured here, from the file this very write produced, and the read-back compares
+  // against *this* rather than against a constant: what a restore has to preserve is the state the
+  // write created, and an expected value invented here would only ever test this script.
+  const baseline = await inspectStoredAttachment(space.id, attachmentId)
+  if (!baseline.ok) throw new Error(`writing during serve: the stored attachment is unreadable: ${baseline.reason}`)
+  if (baseline.sha256 !== createHash('sha256').update(attachmentBytes).digest('hex')) {
+    throw new Error('writing during serve: the stored attachment does not match the bytes that were uploaded')
+  }
+
   const persisted = {
-    marker, noteBody, spaceId: space.id, noteId: created.body.value.noteId,
-    attachmentId: uploaded.body?.value?.attachmentId ?? null,
-    attachmentSha256: createHash('sha256').update(attachmentBytes).digest('hex'),
-    attachmentBytes: attachmentBytes.length,
+    marker, noteBody, spaceId: space.id, noteId, attachmentId, linked: true,
+    attachmentSha256: baseline.sha256,
+    attachmentBytes: baseline.bytes,
+    attachmentBaseline: { file: baseline.file, bytes: baseline.bytes, sha256: baseline.sha256, mode: baseline.mode },
   }
   await writeFile(join(workDir, 'served-write.json'), JSON.stringify(persisted, null, 2) + '\n', { mode: 0o600 })
   return persisted
+}
+
+/** The stored attachment as it is on disk: every file under its directory, with bytes and mode. */
+async function inspectStoredAttachment(spaceId, attachmentId) {
+  const { createHash } = await import('node:crypto')
+  const { stat, readFile: readBytes, readdir } = await import('node:fs/promises')
+  if (!attachmentId) return { ok: false, reason: 'no attachment id was given' }
+  const base = join(dataRoot, 'spaces', spaceId, 'workspace', 'attachments', attachmentId)
+  const entries = await readdir(base).catch(() => null)
+  if (!entries) return { ok: false, reason: `no stored attachment at ${base}` }
+  const stored = []
+  for (const name of entries) {
+    const full = join(base, name)
+    const info = await stat(full).catch(() => null)
+    if (!info?.isFile()) continue
+    const bytes = await readBytes(full)
+    stored.push({ file: name, bytes: info.size, sha256: createHash('sha256').update(bytes).digest('hex'), mode: (info.mode & 0o7777).toString(8) })
+  }
+  if (stored.length === 0) return { ok: false, reason: `no file under ${base}`, stored }
+  // Named explicitly rather than spread first: spreading `stored` afterwards would put the array
+  // itself under the `stored` key and leave `file` reading from the array, which is how it came to
+  // be reported as `undefined` while the comparison it fed still passed.
+  return { ok: true, file: stored[0].file, bytes: stored[0].bytes, sha256: stored[0].sha256, mode: stored[0].mode, stored }
+}
+
+/** The single space the copied identity store carries. */
+async function onlySpaceId() {
+  const { DatabaseSync } = await import('node:sqlite')
+  const db = new DatabaseSync(join(dataRoot, 'identity.sqlite'), { readOnly: true })
+  try { return db.prepare('SELECT id FROM spaces LIMIT 1').get().id } finally { db.close() }
 }
 
 const startHook = async () => {
@@ -411,10 +509,23 @@ try {
         // mode, with the same parameter name the official CLI uses.
         verify: async ({ expectedVersion }) => {
           if (values['force-verify-failure'] && expectedVersion === version) {
-            report.phases.injectedFault = 'post-activation verification'
-            // Before refusing, do what a real deployment does while the release serves: write
-            // through the product's own API, so the data the rollback must preserve exists.
-            if (values['write-during-serve']) report.phases.writtenDuringServe = await writeThroughApi()
+            // The fault is only *this* fault after the real work succeeded. Marking it first and
+            // then writing would label a genuine API failure — a release that cannot create a note,
+            // or cannot link what it uploaded — as the expected injection, and the run would exit 0
+            // on evidence that the release is broken. So the write is attempted first, and any
+            // failure here propagates as a real failure with no fault recorded.
+            if (values['write-during-serve']) {
+              report.phases.writtenDuringServe = await writeThroughApi()
+            }
+            report.phases.injectedFault = {
+              kind: 'post-activation verification',
+              // What makes the fault legitimate: the release really wrote, and the write is really
+              // in the data the rollback has to preserve.
+              afterWrite: report.phases.writtenDuringServe
+                ? { noteId: report.phases.writtenDuringServe.noteId, attachmentId: report.phases.writtenDuringServe.attachmentId, linked: report.phases.writtenDuringServe.linked === true }
+                : null,
+              reason: 'rehearsal: injected post-activation verification failure',
+            }
             throw new Error('rehearsal: injected post-activation verification failure')
           }
           return await runVerifier(expectedVersion, 'activate')
@@ -448,8 +559,6 @@ try {
   await registry.close()
   try { await stopHook() } catch { /* already stopped */ }
 }
-await writeFile(join(workDir, 'report.json'), JSON.stringify(report, null, 2) + '\n', { mode: 0o600 })
-
 // Exit code policy:
 //   0  the release was activated and accepted, or the injected fault produced a
 //      *verified* rollback (original release restored and accepted again)
@@ -459,9 +568,38 @@ const faultInjected = Boolean(report.phases.injectedFault)
 const activated = report.status === 'activated'
 const rollbackVerified = report.result?.rollbackEvidence?.acceptance === 'verified'
 const readBackOk = report.phases.readBackAfterRollback ? report.phases.readBackAfterRollback.ok === true : true
-const exitCode = (activated || (faultInjected && rollbackVerified)) && readBackOk ? 0 : 1
+
+// When write acceptance is on, the run is making three claims and each one needs evidence:
+//   1. the release really wrote through its own API while it served,
+//   2. that write really cited the attachment it uploaded,
+//   3. the restored release really read both back.
+// A missing write, a missing read-back, or a linkage that was never observed is a failure of the
+// run — not a weaker pass. `readBackOk` above is deliberately permissive for a run that never asked
+// for a write; these three checks are what stops it from also being permissive for a run that did.
+const writeAcceptance = Boolean(values['write-during-serve'])
+const wrote = report.phases.writtenDuringServe ?? null
+const writeAcceptanceProblems = []
+if (writeAcceptance) {
+  if (!wrote) writeAcceptanceProblems.push('the release was asked to write while it served and no write was recorded')
+  else {
+    if (!wrote.noteId) writeAcceptanceProblems.push('the write recorded no note id')
+    if (!wrote.attachmentId) writeAcceptanceProblems.push('the upload recorded no attachment id')
+    if (wrote.linked !== true) writeAcceptanceProblems.push('the attachment was never observed to be cited by the note')
+    if (!wrote.attachmentBaseline) writeAcceptanceProblems.push('the write recorded no attachment baseline')
+  }
+  if (!report.phases.readBackAfterRollback) writeAcceptanceProblems.push('no read-back after the rollback was recorded')
+  else if (report.phases.readBackAfterRollback.ok !== true) writeAcceptanceProblems.push(`the read-back after the rollback did not pass: ${report.phases.readBackAfterRollback.reason ?? 'no reason recorded'}`)
+}
+report.writeAcceptance = { requested: writeAcceptance, problems: writeAcceptanceProblems, ok: writeAcceptanceProblems.length === 0 }
+const exitCode = (activated || (faultInjected && rollbackVerified)) && readBackOk && writeAcceptanceProblems.length === 0 ? 0 : 1
+// The report is written after the verdict is computed, so the verdict it records is the verdict the
+// process exits with: a report written before the write-acceptance gate would be missing the very
+// field that explains a non-zero exit.
+report.exit = { code: exitCode, faultInjected, activated, rollbackVerified, readBackOk }
+await writeFile(join(workDir, 'report.json'), JSON.stringify(report, null, 2) + '\n', { mode: 0o600 })
 console.log(JSON.stringify({
   status: report.status, version, oldVersion, faultInjected, rollbackVerified, exitCode,
+  writeAcceptance: report.writeAcceptance, readBack: report.phases.readBackAfterRollback?.ok ?? null,
   phases: Object.keys(report.phases), report: join(workDir, 'report.json'),
 }, null, 2))
 process.exit(exitCode)

@@ -14,7 +14,7 @@
  */
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
-import { execFileSync, spawn } from 'node:child_process'
+import { execFileSync } from 'node:child_process'
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -25,9 +25,11 @@ import { switchRelease, checkReachable, profileVersion } from '../../deploy/swit
 import { makeSyntheticDataRoot, SYNTHETIC_PASSWORD, hashPassword } from './helpers/synthetic.mjs'
 import { copyDataRoot } from '../../scripts/copy-data-root.mjs'
 import { startLoopbackRegistry } from '../../deploy/site/loopback-registry.mjs'
+import { listenerManager, portHolder } from '../../deploy/site/process-stop-state.mjs'
 import { stagePackages } from '../../scripts/deployment.mjs'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
+const scriptsDir = join(repoRoot, 'scripts')
 const NEW_VERSION = '0.1.9-pkw.1'
 const OLD_VERSION = process.env.PKW_E2E_OLD_VERSION ?? '0.1.8-pkw.1'
 /**
@@ -77,10 +79,18 @@ test('e2e: new release writes, verification fails, rollback restores the old rel
   let failedRun = false
   const root = await mkdtemp(join(tmpdir(), 'pkw-e2e-'))
   const data = await makeSyntheticDataRoot()
-  const ports = { new: await freePort(), old: await freePort() }
+  const port = await freePort()
   const registry = await startLoopbackRegistry()
-  const children = new Set()
   let report_oldReleasePackages = 0
+  const dataRoot = join(root, 'data')
+  const configPath = join(root, 'collaboration.json')
+  // Declared before the work starts, so the `finally` block can always clean up after it: a manager
+  // that only exists inside the try would leave a listener behind on exactly the runs that failed.
+  const manager = listenerManager({
+    root, port, dataRoot, password: SYNTHETIC_PASSWORD,
+    scriptsDir, repoRoot, configPath, logDir: join(root, 'logs'),
+    pidFile: join(root, 'listener.pid'),
+  })
   try {
     // ── the new release: this checkout, staged at a new version ──────────────────
     const artifacts = await stagePackages(join(root, 'packages'), NEW_VERSION, registry.url)
@@ -166,45 +176,33 @@ test('e2e: new release writes, verification fails, rollback restores the old rel
     await symlink(join('releases', OLD_VERSION), join(root, 'current'))
 
     // ── the data copy: consistent snapshot, fully self-contained ─────────────────
-    const dataRoot = join(root, 'data')
     const copied = await copyDataRoot(data.root, dataRoot)
     assert.equal(copied.leaks.length, 0, `the copy must not point at the source: ${JSON.stringify(copied.leaks)}`)
     const identity = await import('node:sqlite').then(m => new m.DatabaseSync(join(dataRoot, 'identity.sqlite')))
     identity.prepare('UPDATE accounts SET password=?').run(await hashPassword(SYNTHETIC_PASSWORD))
     identity.close()
-    await writeFile(join(dataRoot, 'collaboration.json'), JSON.stringify({
-      dataPath: dataRoot, publicOrigin: 'http://127.0.0.1:0', bootstrapUsername: 'owner', bootstrapPasswordEnv: 'PKW_E2E_BOOTSTRAP',
-    }, null, 2) + '\n', { mode: 0o600 })
 
-    // ── hooks: one listener per release version, on its own port ─────────────────
-    const listeners = new Map()
-    const startListener = async version => {
-      const port = ports[version === NEW_VERSION ? 'new' : 'old']
-      const configPath = join(root, `config-${version}.json`)
-      await writeFile(configPath, JSON.stringify({
-        dataPath: dataRoot, publicOrigin: `http://127.0.0.1:${port}`, bootstrapUsername: 'owner', bootstrapPasswordEnv: 'PKW_E2E_BOOTSTRAP',
-      }, null, 2) + '\n', { mode: 0o600 })
-      const release = version === NEW_VERSION ? NEW_VERSION : OLD_VERSION
-      const child = spawn(process.execPath, [
-        join(repoRoot, 'scripts/serve-collaboration.mjs'),
-        '--profile', join(root, 'releases', release, 'profile'),
-        '--config', configPath, '--port', String(port),
-      ], { env: { ...process.env, PKW_E2E_BOOTSTRAP: SYNTHETIC_PASSWORD }, stdio: ['ignore', 'pipe', 'pipe'], detached: true })
-      let output = ''
-      child.stdout.on('data', c => { output += c })
-      child.stderr.on('data', c => { output += c })
-      child.unref()
-      children.add(child)
-      const reachable = await checkReachable({ origin: `http://127.0.0.1:${port}`, timeoutMs: 30_000 })
-      if (!reachable.reachable) throw new Error(`listener for ${version} did not start: ${reachable.error}; ${output.slice(-1400)}`)
-      listeners.set(version, child.pid)
-      return { port, output: () => output }
-    }
-    const stopListener = async pid => {
-      if (!pid) return
-      try { process.kill(pid, 'SIGTERM') } catch { /* gone */ }
-      for (let i = 0; i < 80; i++) { try { process.kill(pid, 0) } catch { return } await new Promise(r => setTimeout(r, 100)) }
-      try { process.kill(pid, 'SIGKILL') } catch { /* gone */ }
+    // ── the release in service: a real process, started and stopped by the hooks ──
+    // The transaction owns the lifecycle. It starts the release it promotes through the start hook,
+    // stops it through the stop hook, and confirms the stop with the independent probe. This test
+    // never starts a service of its own, and every later observation — reachability, acceptance, the
+    // rollback acceptance and the final read-back — is made of the process the transaction started,
+    // addressed by the pid that process recorded. A port that happens to answer is not evidence that
+    // a child started, which is why the manager checks the child is alive and reported listening
+    // itself rather than borrowing a healthy response from whatever else might hold the port.
+    await writeFile(configPath, JSON.stringify({
+      dataPath: dataRoot, publicOrigin: `http://127.0.0.1:${port}`, bootstrapUsername: 'owner', bootstrapPasswordEnv: 'PKW_E2E_BOOTSTRAP',
+    }, null, 2) + '\n', { mode: 0o600 })
+    /** Every address this test observed, in order, so the report can say which pid served what. */
+    const serviceLog = []
+    /** The pids the transaction's stop hook actually stopped, in order. */
+    const stoppedPids = []
+    const observe = (label, detail) => { serviceLog.push({ at: new Date().toISOString(), label, ...detail }); return detail }
+
+    /** Reachability is an observation: it says whether the origin answers, nothing more. */
+    const observeReachable = async () => {
+      const state = await checkReachable({ origin: `http://127.0.0.1:${port}`, timeoutMs: 20_000 })
+      return observe('reachable', { reachable: state.reachable, status: state.status ?? null, error: state.error ?? null })
     }
 
     // Where a note body actually lives. A note's `relativePath` is workspace-relative and the
@@ -213,22 +211,6 @@ test('e2e: new release writes, verification fails, rollback restores the old rel
     // missing file for a note the product just wrote.
     const noteBodyFile = (spaceId, relativePath) => join(dataRoot, 'spaces', spaceId, 'workspace', 'notes', relativePath)
     const writtenNotePath = () => noteBodyFile(data.spaceId, `notes/rollback-${marker}.md`)
-
-    /** Whether anything still holds a local port. A stopped listener must leave its port free. */
-    const portHeld = async port => {
-      const server = createServer()
-      try {
-        await new Promise((resolve, reject) => {
-          server.once('error', reject)
-          server.listen(port, '127.0.0.1', resolve)
-        })
-        return false
-      } catch {
-        return true
-      } finally {
-        await new Promise(resolve => server.close(resolve))
-      }
-    }
 
     // ── a real HTTP client for the collaboration surface ────────────────────────
     const client = port => {
@@ -281,18 +263,34 @@ test('e2e: new release writes, verification fails, rollback restores the old rel
           },
         },
         hooks: {
-          // The transaction owns the candidate's life: it stops it here and then proves the stop
-          // with the state hook. This hook records the process it was handed, so the check below can
-          // say the candidate was serving and is gone, rather than only that the port is free.
+          // ── the transaction owns the lifecycle ─────────────────────────────────
+          // It starts the release it promotes, stops it, and confirms the stop. Nothing else in this
+          // test starts a listener: the observation hooks below only look.
+          start: async () => {
+            const started = await manager.start()
+            observe('start', started)
+            return started
+          },
           stop: async () => {
-            candidate.stoppedAt = [...listeners.keys()].sort()
-            for (const [, pid] of listeners) await stopListener(pid)
-            listeners.clear()
+            const stopped = await manager.stop()
+            // Recorded from the manager's own record, so the assertions below compare the pid the
+            // transaction stopped with the pid that served — not with a version name that could have
+            // been served by any process.
+            stoppedPids.push(stopped.pid ?? null)
+            observe('stop', stopped)
           },
-          start: async () => { /* started by the verification step below, which knows the version */ },
-          reachable: async ({ previousVersion }) => {
-            try { await startListener(previousVersion); return { reachable: true, status: 200 } } catch (error) { return { reachable: false, error: error.message } }
+          // The independent stop probe. It is asked the question separately from `stop`, and it
+          // answers from three observations — the recorded process, the port, and the data root's own
+          // lock — so "the stop hook returned" is never mistaken for "the service is gone".
+          isStopped: async () => {
+            const evidence = await manager.isStopped()
+            observe('isStopped', { known: evidence.known, stopped: evidence.stopped, reason: evidence.reason ?? null })
+            return evidence
           },
+          // Reachability is an observation of whatever is in service now. It never starts anything:
+          // a hook that starts the service it is supposed to be checking would make every later
+          // observation a statement about a process this test brought up, not about the transaction.
+          reachable: async () => observeReachable(),
           // The verifier only observes: it starts the release under test and reports what it saw.
           // It never promotes, never repoints `current`, and never writes to the data root.
           // The rollback has its own acceptance. Reachability alone says the old port answers;
@@ -300,19 +298,26 @@ test('e2e: new release writes, verification fails, rollback restores the old rel
           // version. Without this hook the transaction is right to record `rolled-back-unverified`,
           // so the test supplies the observation rather than letting the status be weaker than the
           // evidence it actually has.
+          // The rollback acceptance is made of the process the rollback started — the same pid the
+          // final read-back uses, never a second instance this test brought up.
           verifyPrevious: async ({ expectedVersion }) => {
-            const listener = await startListener(expectedVersion)
-            const api = client(listener.port)
+            const recorded = manager.recorded()
+            if (!recorded) return { ok: false, enforcing: true, checks: { authenticated: 'no-process', servingVersion: null }, note: 'no listener was recorded as running for the restored release' }
+            const api = client(recorded.port)
             const login = await api.login()
             if (login.status !== 200) return { ok: false, enforcing: true, checks: { authenticated: 'refused', servingVersion: null }, note: `login answered HTTP ${login.status}` }
             const session = await api.session()
             const space = session.value.spaces[0]
             const serving = await api.spaceVersion(space.id)
-            return { ok: serving === expectedVersion, enforcing: true, checks: { authenticated: 'verified', servingVersion: serving } }
+            observe('rollback-acceptance', { pid: recorded.pid, serving })
+            return { ok: serving === expectedVersion, enforcing: true, checks: { authenticated: 'verified', servingVersion: serving, pid: recorded.pid } }
           },
+          // The verifier observes the release in service. It does not start it.
           verify: async ({ expectedVersion }) => {
-            const listener = await startListener(expectedVersion)
-            const api = client(listener.port)
+            const recorded = manager.recorded()
+            assert.ok(recorded, 'the transaction must have started the release before verifying it')
+            assert.equal(recorded.version, expectedVersion, `the transaction started ${recorded.version}, not the release being verified (${expectedVersion})`)
+            const api = client(recorded.port)
             assert.equal((await api.login()).status, 200, 'the enforcing verifier must be able to log in')
             const session = await api.session()
             const space = session.value.spaces[0]
@@ -336,7 +341,8 @@ test('e2e: new release writes, verification fails, rollback restores the old rel
             assert.equal(serving, expectedVersion, 'the service must report the version being verified')
             if (expectedVersion === NEW_VERSION) {
               candidate.observed = serving
-              candidate.port = listener.port
+              candidate.port = recorded.port
+              candidate.pid = recorded.pid
             }
             if (expectedVersion !== NEW_VERSION) {
               // Recovery path: reachability is enough here; acceptance is the caller's job.
@@ -391,7 +397,12 @@ test('e2e: new release writes, verification fails, rollback restores the old rel
       }, null, 1).slice(0, 1200)}`)
       assert.equal(error.report?.status, 'rolled-back')
       assert.equal(error.report?.rollback?.restoredVersion, OLD_VERSION, 'the restored release must declare the old version')
-      assert.match(error.message, /synthetic post-activation verification failure/, 'the original error must be preserved')
+      // The service history is part of the failure: which process served, when it was started and
+      // stopped, and what the independent probe answered, in the order it happened.
+      if (!/synthetic post-activation verification failure/.test(error.message)) {
+        console.error(JSON.stringify({ e2e: 'service-history', serviceLog, stoppedPids, recorded: manager.recorded(), activationError: error.report?.activationError ?? null }, null, 1).slice(0, 2500))
+        assert.fail(`the original error must be preserved: ${error.message.slice(0, 400)}`)
+      }
       assert.ok(noteId, 'the new release must have written a note before the failure')
       failedRun = false
 
@@ -416,17 +427,31 @@ test('e2e: new release writes, verification fails, rollback restores the old rel
       // make the restored release's start hook fail to bind, which is a stopped service, not a
       // rolled-back one.
       assert.equal(candidate.observed, NEW_VERSION, 'the candidate must have served before the transaction stopped it')
-      assert.deepEqual(candidate.stoppedAt, [NEW_VERSION], `the transaction must stop the release it started, not another one: ${JSON.stringify(candidate.stoppedAt)}`)
+      assert.ok(candidate.pid, 'the candidate must have recorded the pid that served it')
       assert.ok(candidate.port, 'the candidate must have been serving on a port')
-      assert.equal(await portHeld(candidate.port), false, `the stopped candidate must leave its port free (${candidate.port})`)
-      // Only the candidate is checked here. The transaction starts the previous release itself, both
-      // to observe reachability and to run the rollback acceptance, so a listener for that version
-      // may still be in service at this point — and it is stopped in the `finally` block below.
-      assert.equal(listeners.has(NEW_VERSION), false, 'the candidate this test started must not survive the rollback')
+      // The pid the transaction stopped is the pid that served, and nothing on that port answers now.
+      assert.ok(stoppedPids.includes(candidate.pid), `the transaction must stop the process that served the candidate (stopped ${JSON.stringify(stoppedPids)}, served ${candidate.pid})`)
+      // The candidate process is gone — ESRCH, checked by the kernel rather than by a bookkeeping
+      // flag. Both releases serve the same origin, so the port being held at this point is the
+      // restored release doing its job; what must not be true is that the *candidate* is still
+      // there, and that is what the process check answers.
+      const candidateAlive = (() => { try { process.kill(candidate.pid, 0); return true } catch (error) { return error?.code === 'EPERM' } })()
+      assert.equal(candidateAlive, false, `the candidate process ${candidate.pid} must be gone after the stop`)
+      const recorded = manager.recorded()
+      assert.ok(recorded, 'the rollback must have started the restored release')
+      assert.notEqual(recorded.pid, candidate.pid, 'the restored release must be a different process from the candidate')
+      assert.equal(recorded.version, OLD_VERSION, `the restored release must be ${OLD_VERSION}, not ${recorded.version}`)
+      // The port is served again, and by the recovered release rather than by anything else: the
+      // transaction's own start hook brought it back, and this test started nothing.
+      const heldNow = await portHolder(recorded.port)
+      assert.equal(heldNow.known, true, `the port probe must answer (${JSON.stringify(heldNow)})`)
+      assert.equal(heldNow.held, true, `the restored release must be serving on ${recorded.port}`)
 
       // ── rollback verification: the OLD service must read the NEW data back ────
-      const oldListener = await startListener(OLD_VERSION)
-      const oldApi = client(oldListener.port)
+      // The same process the rollback started, addressed by the pid it recorded. Starting a second
+      // listener here would answer a different question — "can some other instance read this" —
+      // and would leave the process the rollback started unverified.
+      const oldApi = client(recorded.port)
       assert.equal((await oldApi.login()).status, 200, 'the restored service must accept a real login')
       const session = await oldApi.session()
       const space = session.value.spaces[0]
@@ -466,12 +491,14 @@ test('e2e: new release writes, verification fails, rollback restores the old rel
     }
     assert.equal(switched.status, 'activated')
   } finally {
-    // Kill the whole process group *and* the process itself: a listener spawned as a group leader
-    // dies with its group, and one whose group call fails would otherwise be left holding its port
-    // and the data root's lock after the test has gone.
-    for (const child of children) {
-      try { process.kill(-child.pid, 'SIGKILL') } catch { /* no group of its own */ }
-      try { process.kill(child.pid, 'SIGKILL') } catch { /* already gone */ }
+    // Clean up through the one place that knows which process this test owns: it stops the recorded
+    // listener, proves it is gone before returning, and clears the record. Cleaning up is only
+    // finished once our own process has exited — a run that deletes its directory while a listener
+    // still holds the data root would leave a writer behind with nothing pointing at it.
+    const cleanup = await manager.stop().catch(error => ({ requested: false, reason: error.message }))
+    const gone = await manager.isStopped().catch(error => ({ known: false, stopped: false, reason: error.message }))
+    if (!gone.stopped) {
+      console.error(JSON.stringify({ e2e: 'cleanup-not-confirmed', cleanup, evidence: gone }))
     }
     await registry.close()
     // A failing run keeps its scene (the staged releases, the copied data root and the listener
@@ -479,11 +506,13 @@ test('e2e: new release writes, verification fails, rollback restores the old rel
     // makes a failure expensive to diagnose.
     if (process.env.PKW_E2E_KEEP) {
       console.error(JSON.stringify({ e2e: 'kept', root, dataRoot: data.root, failed: failedRun }))
-    } else if (!failedRun) {
+    } else if (!failedRun && gone.stopped) {
       await rm(root, { recursive: true, force: true })
       await rm(data.root, { recursive: true, force: true })
     } else {
-      console.error(JSON.stringify({ e2e: 'kept-on-failure', root, dataRoot: data.root }))
+      // A failure, or a stop that could not be confirmed, keeps the whole scene: the staged
+      // releases, the copied data root and the listener logs are what the next investigation needs.
+      console.error(JSON.stringify({ e2e: failedRun ? 'kept-on-failure' : 'kept-unconfirmed-stop', root, dataRoot: data.root, evidence: gone }))
     }
   }
 })
