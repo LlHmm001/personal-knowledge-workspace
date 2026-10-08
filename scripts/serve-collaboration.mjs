@@ -91,6 +91,28 @@ try {
 } catch (error) { await gateway.close(); throw error }
 console.log(JSON.stringify({ status: 'listening', bind: `127.0.0.1:${port}`, publicOrigin: config.publicOrigin, mode: 'collaboration', drainTimeoutMs, productionAcceptance: 'not_run' }))
 
+// ── test-only escape hatch, never set by the product ─────────────────────────────
+// Two ways a listener can end that no caller asked for — an unexpected exit code and a signal
+// death — can only be produced for real, and the deployment code that must refuse to report a
+// fixture in those cases has to be tested against a real listener. This ends the process in
+// exactly that way, once it has started serving, and only when a caller has explicitly set the
+// variable. Nothing in this repository sets it, and an unset variable is no code at all.
+if (process.env.PKW_TEST_LISTENER_EXIT === 'code1' || process.env.PKW_TEST_LISTENER_EXIT === 'signal') {
+  // The end must land when the caller asks this process to stop, not while its last request is in
+  // flight: the caller only reaches its shut-down path once its generation has finished cleanly.
+  // So this waits for the stop signal itself, and then ends the process the way nobody asked for —
+  // a non-zero exit code, or death by a signal — before the graceful path can run. It is registered
+  // here, after the graceful handler, so replacing that handler is deliberate and visible.
+  const mode = process.env.PKW_TEST_LISTENER_EXIT
+  const endUnexpectedly = () => {
+    if (mode === 'signal') process.kill(process.pid, 'SIGKILL')
+    console.error(JSON.stringify({ status: 'test-listener-exit', code: 1, mode }))
+    process.exit(1)
+  }
+  process.removeAllListeners('SIGTERM')
+  process.on('SIGTERM', endUnexpectedly)
+}
+
 /** Report a non-graceful termination and leave the process state untouched. */
 function forcedExit(reason, detail) {
   console.error(JSON.stringify({ status: 'forced-exit', reason, detail: detail ?? null, at: new Date().toISOString() }))

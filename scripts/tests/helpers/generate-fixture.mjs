@@ -103,6 +103,25 @@ const call = async (path, { method = 'GET', body, raw } = {}) => {
   return { status: response.status, body: parsed, headers: response.headers }
 }
 
+/**
+ * Report a failed run and exit non-zero.
+ *
+ * A stop failure never replaces the error that caused it: the original reason is what the caller
+ * needs, and the stop outcome is reported beside it. The scene is preserved — only a directory
+ * this run created is removed, and only when asked — so a failure can be inspected.
+ */
+async function failRun(error) {
+  let stopped = null
+  let stopError = null
+  try { stopped = await stop() } catch (failure) { stopError = { message: failure.message, code: failure.code ?? null } }
+  console.error(JSON.stringify({
+    error: error.message, stopped, stopError, target, createdTarget,
+    preserved: true, log: log().slice(-800),
+  }, null, 2))
+  if (values['remove-on-failure'] && createdTarget) await rm(target, { recursive: true, force: true })
+  process.exit(1)
+}
+
 try {
   // Readiness must be evidence that *this* child bound the port: its own startup line,
   // followed by a health answer. A health answer alone could come from a service that was
@@ -146,23 +165,23 @@ try {
 
   await call('/pkw/manage', { method: 'POST', body: { action: 'logout' } })
   const stopped = await stop()
+
+  // ── the outcome gate ─────────────────────────────────────────────────────────
+  // The fixture exists, but the writer that produced it has to be gone in the way a finished
+  // writer goes: exit code 0, no signal, no spawn failure. Anything else means the generation
+  // ended for a reason nobody asked for — a crash after the API calls, a kill — and reporting a
+  // generated fixture then would leave a second writer, or a half-written store, that the caller
+  // believes is finished. A non-zero exit, a signal or a spawn failure is a failed run: the
+  // reason is reported and the scene is kept, exactly as any other failure.
+  if (stopped.exitCode !== 0 || stopped.signal !== null || stopped.spawnError !== null) {
+    throw new Error(`the listener did not shut down cleanly after generating the fixture: ${describeOutcome(stopped)}; the fixture may be incomplete and is not reported as generated`)
+  }
+
   console.log(JSON.stringify({
     stopped,
     target, spaceId: space.id, noteId: created.body.value.noteId,
     attachment: uploaded.body?.value ?? null, noteBody: body, attachmentBytes: bytes.length,
   }, null, 2))
 } catch (error) {
-  // A stop failure must not replace the error that caused it: the original reason is what the
-  // caller needs, and the stop outcome is reported beside it.
-  let stopped = null
-  let stopError = null
-  try { stopped = await stop() } catch (failure) { stopError = { message: failure.message, code: failure.code ?? null } }
-  // The scene is preserved: only a directory this run created is removed, and even then
-  // only when asked, so a failure can be inspected.
-  console.error(JSON.stringify({
-    error: error.message, stopped, stopError, target, createdTarget,
-    preserved: true, log: log().slice(-800),
-  }, null, 2))
-  if (values['remove-on-failure'] && createdTarget) await rm(target, { recursive: true, force: true })
-  process.exit(1)
+  await failRun(error)
 }

@@ -11,6 +11,7 @@
  */
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -262,5 +263,104 @@ test('generator: the real entry point refuses a target that already exists', asy
     assert.equal(result.code, 3, `unexpected exit ${result.code}: ${result.stderr}`)
     assert.match(result.stderr, /refusing to generate into an existing path/)
     assert.equal(await readFile(join(target, 'someone-elses-file'), 'utf8'), 'keep me\n')
+  } finally { await rm(workspace, { recursive: true, force: true }) }
+})
+
+// ── the outcome gate: a generated fixture is only reported by a clean shutdown ───────────────
+
+/** Run the real generator, optionally armed so its listener ends unexpectedly after generating. */
+function runGenerator({ target, port, profile, probe = null }) {
+  const generator = join(process.cwd(), 'scripts/tests/helpers/generate-fixture.mjs')
+  const probeScript = join(process.cwd(), 'scripts/tests/helpers/fixture-listener-outcome.mjs')
+  // The listener inherits the generator's environment, so the hatch is armed on the generator
+  // itself; the probe only decides *when*, by writing the file the listener waits for.
+  const env = probe ? { ...process.env, PKW_TEST_LISTENER_EXIT: probe === 'signal' ? 'signal' : 'code1' } : process.env
+  return new Promise(resolvePromise => {
+    const child = spawn(process.execPath, [
+      generator, '--target', target, '--profile', profile, '--port', String(port),
+    ], { stdio: ['ignore', 'pipe', 'pipe'], env })
+    let stdout = '', stderr = ''
+    child.stdout.on('data', chunk => { stdout += chunk })
+    child.stderr.on('data', chunk => { stderr += chunk })
+    if (!probe) {
+      child.once('exit', code => resolvePromise({ code, stdout, stderr }))
+      return
+    }
+    const watcher = spawn(process.execPath, [probeScript, target], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, PKW_FIXTURE_PROBE: probe },
+    })
+    let probeError = ''
+    watcher.stderr.on('data', chunk => { probeError += chunk })
+    child.once('exit', code => {
+      const finish = () => resolvePromise({ code, stdout, stderr, probeError })
+      if (watcher.exitCode === null) watcher.once('exit', finish)
+      else finish()
+    })
+  })
+}
+
+test('generator: the outcome gate holds on the success path', {
+  skip: profileUnderTest() ? false : 'no PKW profile available (set PKW_TEST_PROFILE)',
+}, async () => {
+  // The control: a clean shutdown is the only thing reported as a generated fixture, and the report
+  // says so in the three fields the gate reads.
+  const workspace = await mkdtemp(join(tmpdir(), 'pkw-gen-gate-'))
+  const target = join(workspace, 'data')
+  const port = await freePort(42811)
+  try {
+    const result = await runGenerator({ target, port, profile: profileUnderTest() })
+    assert.equal(result.code, 0, `the generator failed: ${result.stderr.slice(-500)}`)
+    const report = JSON.parse(result.stdout)
+    assert.deepEqual(report.stopped, { exitCode: 0, signal: null, spawnError: null },
+      'a fixture may only be reported after a clean shutdown')
+    assert.match(report.noteId, /^note_/)
+  } finally { await rm(workspace, { recursive: true, force: true }) }
+})
+
+test('generator: a listener that exits non-zero after generating is never reported as generated', {
+  skip: profileUnderTest() ? false : 'no PKW profile available (set PKW_TEST_PROFILE)',
+}, async () => {
+  // The counterexample: the fixture exists — note and attachment are on disk — and then the writer
+  // exits with code 1. The outcome gate must refuse it for the code and report the reason.
+  const workspace = await mkdtemp(join(tmpdir(), 'pkw-gen-exit1-'))
+  const target = join(workspace, 'data')
+  const port = await freePort(42831)
+  try {
+    const result = await runGenerator({ target, port, profile: profileUnderTest(), probe: 'exit1' })
+    assert.notEqual(result.code, 0, 'a non-zero listener exit must not produce a successful run')
+    assert.doesNotMatch(result.stdout, /noteId/, 'no success report may be printed')
+    const failure = JSON.parse(result.stderr.slice(result.stderr.indexOf('{')))
+    assert.equal(failure.stopped.exitCode, 1, `the stop outcome must show the exit code: ${JSON.stringify(failure.stopped)}`)
+    assert.equal(failure.stopped.signal, null)
+    assert.match(failure.error, /did not shut down cleanly/)
+    assert.match(failure.error, /exited with 1/)
+    assert.equal(failure.preserved, true)
+    // The scene is kept, including the note this run generated.
+    assert.equal(existsSync(join(target, 'identity.sqlite')), true)
+    const spaces = await readdir(join(target, 'spaces'))
+    assert.ok(spaces.length >= 1)
+  } finally { await rm(workspace, { recursive: true, force: true }) }
+})
+
+test('generator: a listener killed after generating is never reported as generated', {
+  skip: profileUnderTest() ? false : 'no PKW profile available (set PKW_TEST_PROFILE)',
+}, async () => {
+  // The same defect with the other ending: the writer dies from a signal.
+  const workspace = await mkdtemp(join(tmpdir(), 'pkw-gen-killed-'))
+  const target = join(workspace, 'data')
+  const port = await freePort(42851)
+  try {
+    const result = await runGenerator({ target, port, profile: profileUnderTest(), probe: 'signal' })
+    assert.notEqual(result.code, 0, 'a killed listener must not produce a successful run')
+    assert.doesNotMatch(result.stdout, /noteId/, 'no success report may be printed')
+    const failure = JSON.parse(result.stderr.slice(result.stderr.indexOf('{')))
+    assert.equal(failure.stopped.signal, 'SIGKILL', `the stop outcome must show the signal: ${JSON.stringify(failure.stopped)}`)
+    assert.equal(failure.stopped.exitCode, null)
+    assert.match(failure.error, /did not shut down cleanly|was killed by SIGKILL/)
+    assert.equal(failure.preserved, true)
+    assert.equal(existsSync(join(target, 'identity.sqlite')), true)
+    const spaces = await readdir(join(target, 'spaces'))
+    assert.ok(spaces.length >= 1)
   } finally { await rm(workspace, { recursive: true, force: true }) }
 })
