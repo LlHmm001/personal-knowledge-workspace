@@ -5,7 +5,7 @@ Everything here is bound to one commit. Where an item is not finished, it says s
 ## Current state
 
 * Branch `feat/pkw-independent-runtime`, PR #2, still **draft**, base `chore/pkw-delivery`.
-* Final SHA for this table: `59eef7c` (see `git rev-parse HEAD` for the full id).
+* Final SHA for this table: `4c8f426` (see `git rev-parse HEAD` for the full id).
 * Live services untouched: no restart, no configuration change, no `current` repoint, no deletion of
   recovery material. Production DSH and `pkw-collaboration` keep their original main PIDs.
 * Closed findings stay closed: generator (log read live, outcome gate, real-entry tests), trace
@@ -119,10 +119,13 @@ e2e: space-page   expectedVersion 0.1.9-pkw.1   serving null
 ```
 
 The same endpoint on a profile built from the packed release answers `200` with
-`x-pkw-version: 0.1.8-pkw.2`, so the endpoint and its header are fine; what differs is what this
-test's own data root or staged profile carries. The test now records the page's status, Location,
-content type and body head when the header is missing, so the next run starts from the answer
-rather than from "null". Nothing was widened to pass and no 400 was swallowed.
+`x-pkw-version: 0.1.8-pkw.2` — and, checked separately, so does the staged `0.1.9-pkw.1` release
+this test builds, when it serves a fixture data root. So the endpoint, the header and the staged
+release are all sound, and what differs is this test's own scene. Two things now make that scene
+inspectable rather than guessed at: the test records the page's status, Location, content type and
+body head when the header is missing, and a failing run keeps its staged releases, copied data root
+and listener logs (`/tmp/pkw-e2e-*` plus the data root it names in its own output). Nothing was
+widened to pass and no 400 was swallowed.
 
 ## Superseded: the target acceptance's earlier stopping point
 
