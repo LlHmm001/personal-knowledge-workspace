@@ -94,9 +94,9 @@ console.log(JSON.stringify({ status: 'listening', bind: `127.0.0.1:${port}`, pub
 // ── test-only escape hatch, never set by the product ─────────────────────────────
 // Two ways a listener can end that no caller asked for — an unexpected exit code and a signal
 // death — can only be produced for real, and the deployment code that must refuse to report a
-// fixture in those cases has to be tested against a real listener. This ends the process in
-// exactly that way, once it has started serving, and only when a caller has explicitly set the
-// variable. Nothing in this repository sets it, and an unset variable is no code at all.
+// fixture in those cases has to be tested against a real listener. When a caller has explicitly
+// set the variable, the stop signal ends this process in exactly that way instead of shutting it
+// down gracefully. Nothing in this repository sets it, and an unset variable is no code at all.
 if (process.env.PKW_TEST_LISTENER_EXIT === 'code1' || process.env.PKW_TEST_LISTENER_EXIT === 'signal') {
   // The end must land when the caller asks this process to stop, not while its last request is in
   // flight: the caller only reaches its shut-down path once its generation has finished cleanly.
