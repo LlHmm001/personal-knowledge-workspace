@@ -62,25 +62,32 @@ containing **both** the write committed before the signal and the write that was
 It also asserts, before the signal, that the in-flight write's own promise has not settled — so a
 run that finished the write too early fails instead of passing by luck.
 
-## Open question: the original lifecycle write test
+## The original lifecycle write test: what it was
 
-The same signals could not be made to pass inside
-`S3/T-EXIT graceful shutdown with a request in flight commits data and exits 0`. With the gate
-added (and with the earlier diagnostic instrumentation) that test returns `400 PKW_REQUEST_FAILED`
-from its **restart** read-back, reproducibly; the standalone test and the reproduction pass the
-identical sequence. The difference between the two has not been isolated, so the test keeps its
-fixed sleep and all nine original lifecycle tests pass. This is reported as an open item rather than
-papered over: a fixed sleep still decides "in flight" there.
-
-Two candidate causes were ruled out by measurement, not by assumption:
+With the gate added, `S3/T-EXIT graceful shutdown with a request in flight commits data and exits 0`
+returned `400 PKW_REQUEST_FAILED` from its **restart** read-back, reproducibly, while the
+reproduction and the standalone test passed the identical sequence. Two candidate causes were ruled
+out by measurement first:
 
 * test-hang mechanics — the gate releases on a signal and the product's in-flight registration is
   not bypassed;
 * HTTP connection closure — the reproduction shows the response arriving after the signal, with the
   writer exiting 0.
 
-That leaves a business-persistence difference specific to that test's setup, which is where the next
-investigation should start.
+That left a difference in the test's own setup, and it was the remote stub: it answered
+`{"data":[],"success":true}`. The runtime treats a sync whose remote answer does not carry the
+one-shot flag as a sync that did not complete, and the note stays in that state on disk — so a fresh
+process reading the note afterwards is refused with 400. The stub in the drain test now answers
+`{"ok":true}`, the same contract the passing standalone test and the reproduction use.
+
+The consequence for the suite: both drain tests now use the explicit signals. Ten lifecycle tests
+run with 0 skip, five consecutive runs, ten green each time:
+
+```
+PKW_TEST_PROFILE=<profile> PKW_TEST_DATA_ROOT=<fixture> PKW_TEST_USERNAME=owner \
+  node --test scripts/tests/pkw-shutdown.test.mjs scripts/tests/inflight-signal.test.mjs
+→ 10 tests, 10 pass, 0 fail, 0 skip   (five consecutive runs)
+```
 
 ## Commands
 

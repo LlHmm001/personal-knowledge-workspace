@@ -57,11 +57,11 @@ async function setCopyPassword(identityPath, username, password) {
 }
 
 /** Loopback WeKnora stub: records calls, answers slowly, never reaches a real host. */
-async function startStub({ delayMs = 0, status = 200 } = {}) {
+async function startStub({ delayMs = 0, status = 200, body = { data: [], success: true } } = {}) {
   const calls = []
   const server = createServer((req, res) => {
     calls.push({ method: req.method, url: req.url })
-    const respond = () => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ data: [], success: true })) }
+    const respond = () => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(body)) }
     if (delayMs > 0) setTimeout(respond, delayMs); else respond()
   })
   await new Promise((ok, no) => { server.once('error', no); server.listen(0, '127.0.0.1', ok) })
@@ -96,12 +96,16 @@ async function makeDataRoot({ stubUrl, spaceId }) {
  * The port is passed explicitly: the listener's default is a production port, and a test
  * must never depend on — or collide with — whatever is running there.
  */
-function startGateway({ profile, configPath, port, drainTimeoutMs }) {
+function startGateway({ profile, configPath, port, drainTimeoutMs, gate }) {
   const child = spawn(process.execPath, [
     join(scriptsDir, 'serve-collaboration.mjs'), '--profile', profile, '--config', configPath, '--port', String(port),
     ...(drainTimeoutMs === undefined ? [] : ['--drain-timeout-ms', String(drainTimeoutMs)]),
   ], {
-    env: { ...process.env, PW: TEST_PASSWORD, PKW_TEST_WEKNORA_KEY: 'stub-key' },
+    env: {
+      ...process.env, PW: TEST_PASSWORD, PKW_TEST_WEKNORA_KEY: 'stub-key',
+      // Only a test that armed a gate sets this; an unarmed listener runs no gate code.
+      ...(gate ? { PKW_TEST_GATE_FILE: gate.configPath } : {}),
+    },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   const lines = []
@@ -162,8 +166,43 @@ function client(port) {
 
 
 /** Boot one gateway against the copied root and return a logged-in RPC caller. */
-async function bootAndLogin({ profile, configPath, port, drainTimeoutMs }) {
-  const gateway = startGateway({ profile, configPath, port, drainTimeoutMs })
+/**
+ * A gate that reports and parks one chosen request, so "in flight" is a fact, not a guess.
+ *
+ * A fixed sleep only makes it likely that an operation is still running when the signal arrives:
+ * on a slow machine it may not have started, and on a fast one it may already have finished. The
+ * gate numbers the requests matching a path and method, records the moment the chosen one enters
+ * the handler, and holds that one until the test writes the release file. The request is passed to
+ * the product untouched and is counted by the service's own in-flight registration, so what is
+ * held is an ordinary request that has not finished — never a request taken out of band.
+ */
+async function armGate({ root, path, method = 'POST', holdCount = 1 }) {
+  const log = join(root, 'gate.log')
+  const release = join(root, 'gate.release')
+  const configPath = join(root, 'gate.json')
+  await writeFile(configPath, JSON.stringify({ path, method, holdCount, holdMs: 0, log, release }), { mode: 0o600 })
+  const entries = async () => String(await readFile(log, 'utf8').catch(() => '')).split('\n').filter(Boolean).map(line => JSON.parse(line))
+  return {
+    configPath,
+    /** The request the gate reported entering, waiting for it to arrive. */
+    async entered(timeoutMs = 30000) {
+      const deadline = Date.now() + timeoutMs
+      for (;;) {
+        const found = (await entries()).find(entry => entry.event === 'entered')
+        if (found) return found
+        if (Date.now() > deadline) return null
+        await new Promise(resolvePromise => setTimeout(resolvePromise, 5))
+      }
+    },
+    /** Zero means the held request is still unfinished. */
+    async releasedCount() { return (await entries()).filter(entry => entry.event === 'released').length },
+    /** Let the held request continue. Written after the signal, so the drain is real. */
+    async release() { await writeFile(release, 'go\n', { mode: 0o600 }) },
+  }
+}
+
+async function bootAndLogin({ profile, configPath, port, drainTimeoutMs, gate }) {
+  const gateway = startGateway({ profile, configPath, port, drainTimeoutMs, gate })
   await gateway.ready()
   const api = client(port)
   const session = await loginWith(api)
@@ -224,7 +263,7 @@ test('S3/T-EXIT graceful shutdown while idle exits 0', { skip: skipReason || !da
 test('S3/T-EXIT graceful shutdown with a request in flight commits data and exits 0', { skip: skipReason || !dataRootAvailable }, async () => {
   const profile = profileUnderTest()
   const port = await freePort()
-  const stub = await startStub({ delayMs: 1500 })
+  const stub = await startStub({ delayMs: 1500, body: { ok: true } })
   // The space id is read from the copied identity store so the test follows data.
   const sourceIdentity = join(sourceDataRoot(), 'identity.sqlite')
   const identity = new DatabaseSync(sourceIdentity, { readOnly: true })
@@ -234,7 +273,10 @@ test('S3/T-EXIT graceful shutdown with a request in flight commits data and exit
   const config = JSON.parse(await readFile(configPath, 'utf8'))
   config.publicOrigin = `http://127.0.0.1:${port}`
   await writeFile(configPath, JSON.stringify(config, null, 2))
-  const gateway = startGateway({ profile, configPath, port })
+  // The fifth request to this path is the write under test; the gate reports when it enters the
+  // handler and holds it there until this test releases it.
+  const gate = await armGate({ root, path: `/pkw/spaces/${spaceId}/api`, method: 'POST', holdCount: 5 })
+  const gateway = startGateway({ profile, configPath, port, gate })
   try {
     await gateway.ready()
     const api = client(port)
@@ -253,16 +295,22 @@ test('S3/T-EXIT graceful shutdown with a request in flight commits data and exit
       expectedRevision: read.body.value.note.observedRevision,
     })
     assert.equal(saved.status, 200, JSON.stringify(saved.body))
-    // Fire another write that is still in flight when the signal arrives.
+    // The in-flight write is held inside the listener and released only after the signal.
+    const current = await rpc('getNote', { noteId })
     const inFlight = rpc('saveNoteBody', {
       noteId, body: `# shutdown test\n\n${marker}
 in-flight\n`,
-      expectedContentHash: saved.body.value.contentHash,
-      expectedRevision: saved.body.value.observedRevision,
+      expectedContentHash: current.body.value.note.contentHash,
+      expectedRevision: current.body.value.note.observedRevision,
     })
-    await new Promise(r => setTimeout(r, 150))
+    const entered = await gate.entered()
+    assert.ok(entered, 'the in-flight write must be observed entering the listener')
+    assert.equal(entered.ordinal, 5, `the watched request must be the write: ${JSON.stringify(entered)}`)
+    assert.equal(await gate.releasedCount(), 0, 'the write must be unfinished when the signal arrives')
     const started = Date.now()
     gateway.child.kill('SIGTERM')
+    assert.equal(await gate.releasedCount(), 0, 'the write must still be held after the signal, so the drain is real')
+    await gate.release()
     const inFlightResult = await inFlight.catch(error => ({ status: 0, body: String(error) }))
     const { code } = await gateway.exited
     assert.equal(code, 0, `expected graceful exit 0, got ${code}; stderr=${gateway.stderr}`)
@@ -381,7 +429,10 @@ test('S3/T-EXIT graceful shutdown during a slow remote sync keeps committed data
   const config = JSON.parse(await readFile(configPath, 'utf8'))
   config.publicOrigin = `http://127.0.0.1:${port}`
   await writeFile(configPath, JSON.stringify(config, null, 2))
-  const boot = await bootAndLogin({ profile, configPath, port, drainTimeoutMs: 25_000 })
+  // The second request to this path is the sync under test; the gate holds it in the handler and
+  // the stub holds the remote call, so the sync is provably in flight across the signal.
+  const gate = await armGate({ root, path: `/pkw/spaces/${spaceId}/api`, method: 'POST', holdCount: 2 })
+  const boot = await bootAndLogin({ profile, configPath, port, drainTimeoutMs: 25_000, gate })
   try {
     const created = await boot.rpc('createNote', { relativePath: `sync-${randomUUID().slice(0, 8)}.md`, markdown: '# sync drain\n\nqueued\n' })
     assert.equal(created.status, 200, JSON.stringify(created.body))
@@ -389,9 +440,14 @@ test('S3/T-EXIT graceful shutdown during a slow remote sync keeps committed data
     // Kick a real sync against the slow stub and do not await it: the signal must
     // arrive while the runtime still has work in flight.
     const syncing = boot.rpc('syncEntity', { entityType: 'note', entityId: noteId })
-    await new Promise(r => setTimeout(r, 400))
+    const entered = await gate.entered()
+    assert.ok(entered, 'the sync must be observed entering the listener')
+    assert.equal(entered.ordinal, 2, `the watched request must be the sync: ${JSON.stringify(entered)}`)
+    assert.equal(await gate.releasedCount(), 0, 'the sync must be unfinished when the signal arrives')
     const started = Date.now()
     boot.gateway.child.kill('SIGTERM')
+    assert.equal(await gate.releasedCount(), 0, 'the sync must still be held after the signal, so the drain is real')
+    await gate.release()
     const { code } = await boot.gateway.exited
     const elapsed = Date.now() - started
     assert.equal(code, 0, `expected graceful exit 0, got ${code}; stderr=${boot.gateway.stderr}`)
