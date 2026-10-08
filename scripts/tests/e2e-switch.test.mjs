@@ -74,6 +74,7 @@ function freePort() {
 }
 
 test('e2e: new release writes, verification fails, rollback restores the old release which reads the new data', { timeout: 1_200_000, skip }, async () => {
+  let failedRun = false
   const root = await mkdtemp(join(tmpdir(), 'pkw-e2e-'))
   const data = await makeSyntheticDataRoot()
   const ports = { new: await freePort(), old: await freePort() }
@@ -260,11 +261,13 @@ test('e2e: new release writes, verification fails, rollback restores the old rel
         },
       })
     } catch (error) {
+      if (error.code !== 'PKW_DEPLOYMENT_ROLLED_BACK') failedRun = true
       assert.equal(error.code, 'PKW_DEPLOYMENT_ROLLED_BACK', `unexpected failure: ${error.code ?? error.message}\n${JSON.stringify(error.report?.activationError ?? {}, null, 1).slice(0, 400)}`)
       assert.equal(error.report?.status, 'rolled-back')
       assert.equal(error.report?.rollback?.restoredVersion, OLD_VERSION, 'the restored release must declare the old version')
       assert.match(error.message, /synthetic post-activation verification failure/, 'the original error must be preserved')
       assert.ok(noteId, 'the new release must have written a note before the failure')
+      failedRun = false
 
       // ── rollback verification: the OLD service must read the NEW data back ────
       const oldListener = await startListener(OLD_VERSION)
@@ -287,7 +290,16 @@ test('e2e: new release writes, verification fails, rollback restores the old rel
   } finally {
     for (const child of children) { try { process.kill(-child.pid, 'SIGKILL') } catch { /* gone */ } }
     await registry.close()
-    await rm(root, { recursive: true, force: true })
-    await rm(data.root, { recursive: true, force: true })
+    // A failing run keeps its scene (the staged releases, the copied data root and the listener
+    // logs) unless it succeeded or the caller asked for cleanup: deleting the evidence is what
+    // makes a failure expensive to diagnose.
+    if (process.env.PKW_E2E_KEEP) {
+      console.error(JSON.stringify({ e2e: 'kept', root, dataRoot: data.root, failed: failedRun }))
+    } else if (!failedRun) {
+      await rm(root, { recursive: true, force: true })
+      await rm(data.root, { recursive: true, force: true })
+    } else {
+      console.error(JSON.stringify({ e2e: 'kept-on-failure', root, dataRoot: data.root }))
+    }
   }
 })
