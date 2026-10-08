@@ -288,7 +288,13 @@ test('e2e: new release writes, verification fails, rollback restores the old rel
     }
     assert.equal(switched.status, 'activated')
   } finally {
-    for (const child of children) { try { process.kill(-child.pid, 'SIGKILL') } catch { /* gone */ } }
+    // Kill the whole process group *and* the process itself: a listener spawned as a group leader
+    // dies with its group, and one whose group call fails would otherwise be left holding its port
+    // and the data root's lock after the test has gone.
+    for (const child of children) {
+      try { process.kill(-child.pid, 'SIGKILL') } catch { /* no group of its own */ }
+      try { process.kill(child.pid, 'SIGKILL') } catch { /* already gone */ }
+    }
     await registry.close()
     // A failing run keeps its scene (the staged releases, the copied data root and the listener
     // logs) unless it succeeded or the caller asked for cleanup: deleting the evidence is what
