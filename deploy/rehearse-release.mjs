@@ -15,6 +15,7 @@
  *
  * Every phase is written to `report.json` so a caller asserts on facts.
  */
+import { createHash, randomUUID } from 'node:crypto'
 import { cp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
@@ -32,8 +33,18 @@ const { values } = parseArgs({ options: {
   'old-version': { type: 'string' }, 'store-dir': { type: 'string' }, 'bootstrap-username': { type: 'string' },
   'force-verify-failure': { type: 'boolean', default: false },
   'bootstrap-password': { type: 'string' },
+  // The account the data root already carries, which is what a verifier has to log in with. The
+  // bootstrap password only exists to create a fresh owner, so the two are not the same secret.
+  'owner-password': { type: 'string' },
+  // Set the copy's own account password to `--owner-password` before anything is started. A
+  // rehearsal owns its copy, and the copy's account is the one a verifier has to log in with;
+  // without this the rehearsal depends on a secret it was never given.
+  'set-owner-password': { type: 'boolean', default: false },
   'fail-install': { type: 'boolean', default: false },
   'modify-candidate-after-install': { type: 'boolean', default: false },
+  // Write a note and an attachment through the real API while the new release serves, so the
+  // rollback can be asked whether the restored release reads data the new release committed.
+  'write-during-serve': { type: 'boolean', default: false },
 } })
 if (!values['work-dir'] || !values['data-source'] || !values['profile-source'] || !values['artifact-dir'] || !values.version || !values.port) {
   process.stderr.write('Usage: node deploy/rehearse-release.mjs --work-dir DIR --data-source DIR --profile-source DIR --artifact-dir DIR --version V --port N [--old-version V] [--fail-install] [--modify-candidate-after-install] [--force-verify-failure]\n')
@@ -126,6 +137,24 @@ if (existsSync(join(dataRoot, 'identity.sqlite'))) {
   }
 }
 
+// The copy's account is what every later step logs in with, so it is set explicitly rather than
+// assumed. The hash format is the one the runtime validates; the salt is fresh per run.
+if (values['set-owner-password'] || values['owner-password']) {
+  const { scrypt, randomBytes } = await import('node:crypto')
+  const { promisify } = await import('node:util')
+  const { DatabaseSync } = await import('node:sqlite')
+  const username = values['bootstrap-username'] ?? 'owner'
+  const password = values['owner-password'] ?? values['bootstrap-password'] ?? 'rehearsal-password'
+  const salt = randomBytes(16).toString('hex')
+  const derived = await promisify(scrypt)(password, salt, 32, { N: 131072, r: 8, p: 1, maxmem: 160 * 1024 * 1024 })
+  const identity = new DatabaseSync(join(dataRoot, 'identity.sqlite'))
+  try {
+    const changed = identity.prepare('UPDATE accounts SET password=? WHERE username=?').run(`scrypt-v1:${salt}:${derived.toString('hex')}`, username)
+    if (changed.changes !== 1) throw new Error(`the data copy has no account named ${username}: ${changed.changes} rows changed`)
+  } finally { identity.close() }
+  report.phases.setOwnerPassword = { username, changed: 1 }
+}
+
 // ── hooks: one listener on this driver's port, resolved through `current`
 const configPath = join(workDir, 'collaboration.json')
 await writeFile(configPath, JSON.stringify({
@@ -169,7 +198,10 @@ const isStopped = async () => {
  */
 async function runVerifier(expectedVersion, mode) {
   const credentialsFile = join(workDir, 'owner-password')
-  if (!existsSync(credentialsFile)) await writeFile(credentialsFile, `${values['bootstrap-password'] ?? 'rehearsal-password'}\n`, { mode: 0o600 })
+  const ownerPassword = values['owner-password'] ?? values['bootstrap-password'] ?? 'rehearsal-password'
+  // Rewritten every run: a rehearsal that reused a stale file would report a credential failure
+  // for a password that is no longer the one it was given.
+  await writeFile(credentialsFile, `${ownerPassword}\n`, { mode: 0o600 })
   const args = [
     join(repoRoot, 'deploy/site/verify-collaboration.mjs'),
     '--mode', mode, '--profile', join(await currentRelease(root), 'profile'),
@@ -187,6 +219,114 @@ async function runVerifier(expectedVersion, mode) {
   })
   return JSON.parse(output.trim().split('\n').filter(Boolean).slice(-1)[0])
 }
+/**
+ * Write through the real collaboration API, as a deployment's own smoke test would.
+ *
+ * The note and the attachment are created through the same JSON-RPC surface the UI uses, and the
+ * bytes and the markers are kept so a later step can ask the restored release to read them back.
+ */
+/**
+ * Compare the stored attachment with the bytes that were uploaded, and read its permissions.
+ *
+ * The product stores attachments under the space's workspace; the comparison is made on that copy,
+ * which is the one a future reader will be served from, and the sha256 is what the upload recorded.
+ */
+async function compareAttachment(served) {
+  const { createHash } = await import('node:crypto')
+  const { stat, readFile: readBytes, readdir } = await import('node:fs/promises')
+  if (!served.attachmentId) return { ok: false, reason: 'the upload reported no attachment id' }
+  const base = join(dataRoot, 'spaces', served.spaceId, 'workspace', 'attachments', served.attachmentId)
+  const entries = await readdir(base).catch(() => null)
+  if (!entries) return { ok: false, reason: `no stored attachment at ${base}` }
+  const stored = []
+  for (const name of entries) {
+    const full = join(base, name)
+    const info = await stat(full).catch(() => null)
+    if (!info?.isFile()) continue
+    const bytes = await readBytes(full)
+    const sha256 = createHash('sha256').update(bytes).digest('hex')
+    stored.push({ file: name, bytes: info.size, sha256, mode: (info.mode & 0o7777).toString(8) })
+  }
+  const match = stored.find(entry => entry.sha256 === served.attachmentSha256)
+  return match
+    ? { ok: true, file: match.file, bytes: match.bytes, sha256: match.sha256, mode: match.mode, expectedBytes: served.attachmentBytes }
+    : { ok: false, reason: 'no stored attachment matches the uploaded bytes', stored, expectedSha256: served.attachmentSha256 }
+}
+
+function apiClient() {
+  const origin = `http://127.0.0.1:${port}`
+  const jar = new Map()
+  const call = async (path, { method = 'GET', body, csrf } = {}) => {
+    const headers = { Origin: origin }
+    if (body !== undefined) headers['Content-Type'] = 'application/json'
+    if (csrf) headers['X-PKW-CSRF'] = csrf
+    if (jar.size) headers.Cookie = [...jar].map(([k, v]) => `${k}=${v}`).join('; ')
+    const response = await fetch(origin + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), redirect: 'manual' })
+    for (const raw of response.headers.getSetCookie?.() ?? []) {
+      const [pair] = raw.split(';'); const at = pair.indexOf('=')
+      if (at > 0) jar.set(pair.slice(0, at), pair.slice(at + 1))
+    }
+    const text = await response.text()
+    let parsed; try { parsed = JSON.parse(text) } catch { parsed = text }
+    return { status: response.status, body: parsed }
+  }
+  return { call }
+}
+
+/**
+ * Ask the release that is serving now to read back what an earlier release wrote.
+ *
+ * This is the question a rollback has to answer: not "something answers on the socket" but "the
+ * release that came back can log in and read the data the release being replaced committed".
+ */
+async function readServedWriteBack(label) {
+  const served = JSON.parse(await readFile(join(workDir, 'served-write.json'), 'utf8'))
+  const { call } = apiClient()
+  const login = await call('/pkw/login', { method: 'POST', body: { username: values['bootstrap-username'] ?? 'owner', password: values['owner-password'] ?? values['bootstrap-password'] ?? 'rehearsal-password' } })
+  if (login.status !== 200) return { label, login: login.status, ok: false, reason: `login was refused with HTTP ${login.status}` }
+  const session = await call('/pkw/session')
+  const read = await call(`/pkw/spaces/${served.spaceId}/api`, { method: 'POST', body: { method: 'getNote', args: { noteId: served.noteId } }, csrf: session.body.value.csrf })
+  if (read.status !== 200) return { label, login: 200, read: read.status, ok: false, reason: `getNote answered HTTP ${read.status}: ${JSON.stringify(read.body).slice(0, 200)}` }
+  const text = JSON.stringify(read.body.value)
+  // The attachment the replaced release uploaded is compared byte for byte against what was sent,
+  // and its permissions are read as well: a restore that loses the bytes or the mode is not a
+  // restore of the same data.
+  const attachment = await compareAttachment(served)
+  return {
+    label, login: 200, read: 200, ok: text.includes(served.marker) && attachment.ok,
+    attachment,
+    revision: read.body.value.note?.observedRevision ?? null,
+    marker: served.marker, attachmentId: served.attachmentId,
+    attachmentSha256: served.attachmentSha256, attachmentBytes: served.attachmentBytes,
+    reason: text.includes(served.marker) ? null : 'the note the previous release wrote was not found in the body',
+  }
+}
+
+async function writeThroughApi() {
+  const { call } = apiClient()
+  const login = await call('/pkw/login', { method: 'POST', body: { username: values['bootstrap-username'] ?? 'owner', password: values['owner-password'] ?? values['bootstrap-password'] ?? 'rehearsal-password' } })
+  if (login.status !== 200) throw new Error(`writing during serve: login was refused with HTTP ${login.status}`)
+  const session = await call('/pkw/session')
+  const value = session.body.value
+  const space = (value.spaces ?? []).find(entry => entry.kind === 'private') ?? (value.spaces ?? [])[0]
+  if (!space) throw new Error('writing during serve: the session exposes no space')
+  const marker = `written-during-serve-${randomUUID().slice(0, 8)}`
+  const noteBody = `# ${marker}\n\ncreated by the new release while it served\n`
+  const created = await call(`/pkw/spaces/${space.id}/api`, { method: 'POST', body: { method: 'createNote', args: { relativePath: `rehearsal/${marker}.md`, markdown: noteBody } }, csrf: value.csrf })
+  if (created.status !== 200 || !created.body?.value?.noteId) throw new Error(`writing during serve: createNote failed (${created.status}): ${JSON.stringify(created.body).slice(0, 200)}`)
+  const attachmentBytes = Buffer.from(`rehearsal attachment ${marker}\n`)
+  const uploaded = await call(`/pkw/spaces/${space.id}/api`, { method: 'POST', body: { method: 'uploadAttachment', args: { relativePath: `rehearsal/${marker}.bin`, contentBase64: attachmentBytes.toString('base64') } }, csrf: value.csrf })
+  if (uploaded.status !== 200) throw new Error(`writing during serve: uploadAttachment failed (${uploaded.status}): ${JSON.stringify(uploaded.body).slice(0, 200)}`)
+  const persisted = {
+    marker, noteBody, spaceId: space.id, noteId: created.body.value.noteId,
+    attachmentId: uploaded.body?.value?.attachmentId ?? null,
+    attachmentSha256: createHash('sha256').update(attachmentBytes).digest('hex'),
+    attachmentBytes: attachmentBytes.length,
+  }
+  await writeFile(join(workDir, 'served-write.json'), JSON.stringify(persisted, null, 2) + '\n', { mode: 0o600 })
+  return persisted
+}
+
 const startHook = async () => {
   const release = await currentRelease(root)
   listener = spawn(process.execPath, [
@@ -272,6 +412,9 @@ try {
         verify: async ({ expectedVersion }) => {
           if (values['force-verify-failure'] && expectedVersion === version) {
             report.phases.injectedFault = 'post-activation verification'
+            // Before refusing, do what a real deployment does while the release serves: write
+            // through the product's own API, so the data the rollback must preserve exists.
+            if (values['write-during-serve']) report.phases.writtenDuringServe = await writeThroughApi()
             throw new Error('rehearsal: injected post-activation verification failure')
           }
           return await runVerifier(expectedVersion, 'activate')
@@ -285,6 +428,21 @@ try {
     report.status = error.code ?? 'failed'
     report.error = { message: error.message, code: error.code ?? null }
     report.result = error.report ?? null
+  }
+  // The read-back belongs to the report, not to the transaction's success path: a rolled-back
+  // deployment throws, and the question "can the restored release read what the replaced release
+  // wrote" still has to be answered and recorded. It is asked here, after the transaction has
+  // settled and while the restored release is serving — the same process the rollback started,
+  // never a second one.
+  if (existsSync(join(workDir, 'served-write.json'))) {
+    let restored
+    try {
+      restored = await readServedWriteBack('restored-release')
+    } catch (readError) {
+      restored = { label: 'restored-release', ok: false, reason: `the read-back could not be made: ${readError.message}` }
+    }
+    report.phases.readBackAfterRollback = restored
+    if (!restored.ok) report.status = 'rollback-data-not-readable'
   }
 } finally {
   await registry.close()
@@ -300,7 +458,8 @@ await writeFile(join(workDir, 'report.json'), JSON.stringify(report, null, 2) + 
 const faultInjected = Boolean(report.phases.injectedFault)
 const activated = report.status === 'activated'
 const rollbackVerified = report.result?.rollbackEvidence?.acceptance === 'verified'
-const exitCode = activated || (faultInjected && rollbackVerified) ? 0 : 1
+const readBackOk = report.phases.readBackAfterRollback ? report.phases.readBackAfterRollback.ok === true : true
+const exitCode = (activated || (faultInjected && rollbackVerified)) && readBackOk ? 0 : 1
 console.log(JSON.stringify({
   status: report.status, version, oldVersion, faultInjected, rollbackVerified, exitCode,
   phases: Object.keys(report.phases), report: join(workDir, 'report.json'),
