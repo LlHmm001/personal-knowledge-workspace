@@ -110,6 +110,11 @@ would use, and it compares the stored attachment byte for byte against what was 
 `e2e-switch.test.mjs` is the same sequence as a test on this commit, and it asserts the observations
 the report only records:
 
+* the transaction **proved the stop before promoting**: `recoverySteps.stop === 'confirmed'` with
+  `stopEvidence = { known: true, stopped: true, source: 'stop-hook-succeeded' }`. That proof is the
+  single-writer guarantee for the promotion — a writer still holding the root would have failed the
+  probe — and the rollback's own steps are asserted too: `currentRepointed`, `started`,
+  `versionConfirmed` all true;
 * the candidate **served** (it reported its own version, `x-pkw-version: 0.1.9-pkw.1`), the
   transaction handed exactly that release to the stop hook, and the candidate's port is free
   afterwards. A second listener still holding the port would make the restored release's start hook

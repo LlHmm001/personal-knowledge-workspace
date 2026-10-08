@@ -395,6 +395,21 @@ test('e2e: new release writes, verification fails, rollback restores the old rel
       assert.ok(noteId, 'the new release must have written a note before the failure')
       failedRun = false
 
+      // ── the stop was confirmed by evidence, and nothing else owned the root while it was down ──
+      // `stopEvidenceAtFailure` is the transaction's own record that it proved the candidate stopped
+      // before it touched anything. That proof is the single-writer guarantee for the promotion: a
+      // writer still holding the root would have failed the probe, and the run would never have
+      // reached the candidate's writes.
+      const steps = error.report?.recoverySteps ?? null
+      assert.equal(steps?.stop, 'confirmed', `the rollback must run against a confirmed stop: ${JSON.stringify(steps)}`)
+      assert.equal(steps?.stopEvidence?.stopped, true,
+        `the confirmed stop must carry evidence that the candidate is gone: ${JSON.stringify(steps?.stopEvidence ?? null)}`)
+      assert.equal(steps?.stopEvidence?.known, true,
+        `the stop evidence must be knowledge, not an assumption: ${JSON.stringify(steps?.stopEvidence ?? null)}`)
+      assert.equal(steps?.currentRepointed, true, `the rollback must repoint \`current\`: ${JSON.stringify(steps)}`)
+      assert.equal(steps?.started, true, `the rollback must start the restored release: ${JSON.stringify(steps)}`)
+      assert.equal(steps?.versionConfirmed, true, `the restored release must confirm its own version: ${JSON.stringify(steps)}`)
+
       // ── the candidate was stopped, and the stop is confirmed before anything replaces it ──
       // "The candidate was serving" and "the candidate is gone" are two observations, and the
       // rollback is only meaningful if both hold: a second listener still holding the port would
