@@ -133,12 +133,22 @@ test('target: the CLI runs its whole chain through a temporary systemd unit', {
     // ── the hooks the CLI is given: a transient unit, never the live one ──
     await writeFile(systemdRun, `#!/bin/sh
 # Start the release in service as a transient unit. The live pkw-collaboration.service is a
-# different unit name and is never touched.
-exec systemd-run --unit=${unit} --collect --quiet \\
+# different unit name and is never touched. Starting and being ready are different things, so this
+# waits for the unit to answer before it returns: a start hook that returns before the service
+# serves would make the acceptance step observe a service that has not started yet.
+systemd-run --unit=${unit} --collect --quiet \\
   --property=InaccessiblePaths=/opt/deepseek-harness \\
   --property=Environment=PKW_TARGET_BOOTSTRAP=${PASSWORD} \\
   /usr/local/bin/node ${join(repoRoot, 'scripts/serve-collaboration.mjs')} \\
-  --profile "$(readlink -f ${root}/current)/profile" --config ${configPath} --port ${port}
+  --profile "$(readlink -f ${root}/current)/profile" --config ${configPath} --port ${port} || exit 1
+i=0
+while [ $i -lt 300 ]; do
+  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 http://127.0.0.1:${port}/healthz 2>/dev/null || echo 000)
+  [ "$code" = "200" ] && exit 0
+  i=$((i+1)); sleep 0.1
+done
+echo "the unit did not answer on http://127.0.0.1:${port}/healthz" >&2
+exit 1
 `, { mode: 0o700 })
     await writeFile(systemdStop, `#!/bin/sh
 systemctl stop ${unit} >/dev/null 2>&1 || true
@@ -166,9 +176,15 @@ exit 1
 # Receives --expected-version and --mode from the CLI, and supplies the rest from this test's
 # own configuration: the profile that is serving now, the origin, and the owner credential.
 release=$(readlink -f ${root}/current)
-exec /usr/local/bin/node ${join(repoRoot, 'deploy/site/verify-collaboration.mjs')} "$@" \
+# The verifier writes its report to stdout and its reason to stderr; both are kept, so a refusal
+# can be read rather than guessed.
+out=$(/usr/local/bin/node ${join(repoRoot, 'deploy/site/verify-collaboration.mjs')} "$@" \
   --profile "$release/profile" --public-origin ${origin} --gateway-url ${origin} \
-  --credentials-file ${credentialsFile} --username owner
+  --credentials-file ${credentialsFile} --username owner 2>&1)
+code=$?
+printf '%s\n' "$out" >> ${join(workDir, 'verify.log')}
+printf '%s\n' "$out"
+exit $code
 `, { mode: 0o700 })
 
     const rpc = async (method, args, csrf, jar = new Map()) => {
@@ -208,6 +224,9 @@ exec /usr/local/bin/node ${join(repoRoot, 'deploy/site/verify-collaboration.mjs'
       '--snapshot-dir', join(workDir, 'snapshots', version),
       '--store-dir', process.env.PKW_TARGET_STORE ?? '/LlHmm9527/pkw-independent/store/v11',
       '--expected-version', version,
+      // The peers the release resolves against, so the install can complete in an isolated
+      // environment without reaching a public registry.
+      ...(process.env.PKW_TARGET_SUPPORT ? ['--support-dir', process.env.PKW_TARGET_SUPPORT] : []),
     ], { env: { ...process.env, PKW_TARGET_VERIFY_CREDENTIALS: credentialsFile } })
     log({ stage: 'cli-exit', code: result.code, stdout: result.stdout.slice(-300), stderr: result.stderr.slice(-600) })
     // The verdict is asserted, not merely observed: this is an acceptance run, so the release has
@@ -243,6 +262,7 @@ exec /usr/local/bin/node ${join(repoRoot, 'deploy/site/verify-collaboration.mjs'
       '--snapshot-dir', join(workDir, 'snapshots', `${version}-again`),
       '--store-dir', process.env.PKW_TARGET_STORE ?? '/LlHmm9527/pkw-independent/store/v11',
       '--expected-version', version,
+      ...(process.env.PKW_TARGET_SUPPORT ? ['--support-dir', process.env.PKW_TARGET_SUPPORT] : []),
     ])
     // The candidate is already promoted, so this refuses before promotion; what matters is that the
     // refusal is reached through the same hooks and that the release in service is left serving.

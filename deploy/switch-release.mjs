@@ -836,13 +836,17 @@ if (process.argv[1] && import.meta.url === (await import('node:url')).pathToFile
     'expected-version': { type: 'string' },
     'state-hook': { type: 'string' }, 'managed-unit': { type: 'string' },
     'public-origin': { type: 'string' },
+    // The Harness peers the release resolves against, as a directory tree of tarballs
+    // (`@scope/name/*.tgz`). They are not part of the release, but an offline install has to be
+    // able to resolve them, and the registry this CLI serves is the only one it can offer.
+    'support-dir': { type: 'string' },
     'allow-fresh-release': { type: 'boolean', default: false },
   } })
   if (!values.root || !values.version || !values['artifact-dir'] || !values['stop-hook'] || !values['start-hook'] || !values['verify-hook']) {
     process.stderr.write(`Usage: node deploy/switch-release.mjs --root DIR --version V --artifact-dir DIR \
   --stop-hook F --start-hook F --verify-hook F \
   [--state-hook F | --managed-unit NAME] --reachable-url URL \
-  [--public-origin URL] [--snapshot-dir DIR] [--expected-version V]
+  [--public-origin URL] [--snapshot-dir DIR] [--expected-version V] [--support-dir DIR]
 
 A stop hook that cannot be asked whether the service is stopped makes the stop state
 unknown, and an unknown stop state is never treated as stopped. Supply one of:
@@ -899,6 +903,24 @@ unknown, and an unknown stop state is never treated as stopped. Supply one of:
     }
     if (artifacts.length !== 10) throw new Error(`expected 10 artifacts for ${values.version} in ${values['artifact-dir']}, found ${artifacts.length}`)
     for (const artifact of artifacts) await registry.add(artifact.tarball)
+    // The peer closure: every tarball under the support directory is served, so an offline install
+    // in an isolated environment resolves the same packages the release declares.
+    const support = []
+    const supportRoot = values['support-dir'] ? resolve(values['support-dir']) : null
+    if (supportRoot) {
+      if (!existsSync(supportRoot)) throw new Error(`--support-dir does not exist: ${supportRoot}`)
+      const walk = async dir => {
+        for (const entry of await readdir(dir, { withFileTypes: true })) {
+          const full = join(dir, entry.name)
+          if (entry.isDirectory()) { await walk(full); continue }
+          if (!entry.name.endsWith('.tgz')) continue
+          support.push(full)
+        }
+      }
+      await walk(supportRoot)
+      if (support.length === 0) throw new Error(`--support-dir holds no tarballs: ${supportRoot}`)
+      for (const tarball of support) await registry.add(tarball)
+    }
     const report = await switchRelease({
       root: resolve(values.root), version: values.version, artifacts, registry: registry.url,
       storeDir: values['store-dir'], allowFreshRelease: values['allow-fresh-release'],
@@ -947,7 +969,10 @@ unknown, and an unknown stop state is never treated as stopped. Supply one of:
         }),
       },
     })
-    console.log(JSON.stringify({ status: report.status, version: report.version, previousVersion: report.previousVersion }, null, 2))
+    console.log(JSON.stringify({
+      status: report.status, version: report.version, previousVersion: report.previousVersion,
+      artifacts: artifacts.length, supportArtifacts: support.length,
+    }, null, 2))
   } catch (error) {
     console.error(JSON.stringify({ status: error.code ?? 'failed', message: error.message, original: error.cause?.message ?? null }, null, 2))
     process.exit(1)
