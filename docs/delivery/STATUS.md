@@ -5,7 +5,7 @@ Everything here is bound to one commit. Where an item is not finished, it says s
 ## Current state
 
 * Branch `feat/pkw-independent-runtime`, PR #2, still **draft**, base `chore/pkw-delivery`.
-* Final SHA for this table: `a852420` (see `git rev-parse HEAD` for the full id). The product code is
+* Final SHA for this table: `9628540` (see `git rev-parse HEAD` for the full id). The product code is
   unchanged since `91ebb6e`; the commits since then touch the deployment tooling, the test
   scaffolding and this document, so the packed artifacts still describe the code in the tree.
 * Live services untouched: no restart, no configuration change, no `current` repoint, no deletion of
