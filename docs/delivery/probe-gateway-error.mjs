@@ -30,10 +30,8 @@ const loaderSource = [
   "  const text = typeof source === 'string' ? source : Buffer.from(source).toString('utf8')",
   '  const marker = ' + JSON.stringify(MARKER),
 
-  "  writeFileSync('/tmp/pkw-gateway-hook.json', JSON.stringify({ url, matched: text.includes(marker) }))",
   "  if (!text.includes(marker)) return { ...result, source: text, format: 'module' }",
   "  let patched = text.replace(marker, " + JSON.stringify(PATCHED) + ")",
-  "  if (patched.includes(" + JSON.stringify(TRACE_MARKER) + ")) patched = patched.replace(" + JSON.stringify(TRACE_MARKER) + ", " + JSON.stringify(TRACE_PATCHED) + ")",
   "  return { ...result, source: patched, format: 'module' }",
   '}',
 ].join('\n')
