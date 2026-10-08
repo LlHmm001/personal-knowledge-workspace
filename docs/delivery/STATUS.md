@@ -5,7 +5,7 @@ Everything here is bound to one commit. Where an item is not finished, it says s
 ## Current state
 
 * Branch `feat/pkw-independent-runtime`, PR #2, still **draft**, base `chore/pkw-delivery`.
-* Final SHA for this table: `356e447` (see `git rev-parse HEAD` for the full id). The product code is
+* Final SHA for this table: `70f0a00` (see `git rev-parse HEAD` for the full id). The product code is
   unchanged since `91ebb6e`; the commits since then touch the deployment tooling, the test
   scaffolding and this document, so the packed artifacts still describe the code in the tree.
 * Live services untouched: no restart, no configuration change, no `current` repoint, no deletion of
@@ -32,7 +32,7 @@ Everything here is bound to one commit. Where an item is not finished, it says s
 | 11 | Isolated target acceptance through a temporary systemd unit, DSH unreachable inside it | pass (re-run on this SHA) | `PKW_TEST_PROFILE=… PKW_TARGET_ARTIFACTS=… PKW_TARGET_SUPPORT=… PKW_TEST_DATA_ROOT=… node --test scripts/tests/target-systemd.test.mjs` | 0 | `/tmp/target-356e447.log` | transient unit on a test port; `InaccessiblePaths` read back from the running unit, live DSH still active |
 | 13 | Acceptances 1-10 re-run on this SHA | pass | see rows above | 0 | `/tmp/all-356e447.log` | 432 tests, 429 pass, 0 fail, 3 skipped |
 | 12 | Real Harness CI job (`typecheck + test + build + packed runtime`) | **not run** | GitHub Actions | — | — | blocked: see missing inputs |
-| 14 | Real-artifact switch/rollback E2E (`e2e-switch.test.mjs`) with its four inputs wired | pass (re-run on this SHA) | `PKW_E2E_SUPPORT_PROFILE=… PKW_E2E_STORE=… PKW_E2E_OLD_ARTIFACTS=… PKW_E2E_OLD_VERSION=0.1.7-pkw.1 node --test scripts/tests/e2e-switch.test.mjs` | 0 | `/tmp/e2e-356e447.log` | the staged release is this checkout; the old release is the real `0.1.7-pkw.1` artifact set |
+| 14 | Real-artifact switch/rollback E2E (`e2e-switch.test.mjs`) with its four inputs wired | pass (re-run on this SHA) | `PKW_E2E_SUPPORT_PROFILE=… PKW_E2E_STORE=… PKW_E2E_OLD_ARTIFACTS=… PKW_E2E_OLD_VERSION=0.1.7-pkw.1 node --test scripts/tests/e2e-switch.test.mjs` | 0 | `/tmp/e2e-stopevidence2.log` | the staged release is this checkout; the old release is the real `0.1.7-pkw.1` artifact set |
 
 ## Closed item 1 — the lifecycle write test, and the 400 that was never the product's
 
