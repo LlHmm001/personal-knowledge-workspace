@@ -5,7 +5,9 @@ Everything here is bound to one commit. Where an item is not finished, it says s
 ## Current state
 
 * Branch `feat/pkw-independent-runtime`, PR #2, still **draft**, base `chore/pkw-delivery`.
-* Final SHA for this table: `c6fa619` (see `git rev-parse HEAD` for the full id).
+* Final SHA for this table: `9804faa` (see `git rev-parse HEAD` for the full id). The last commit
+  that changes anything but this document is `c6fa619`; the product code itself is unchanged since
+  `91ebb6e`, so the packed artifacts still describe the code in the tree.
 * Live services untouched: no restart, no configuration change, no `current` repoint, no deletion of
   recovery material. Production DSH and `pkw-collaboration` keep their original main PIDs.
 * Closed findings stay closed: generator (log read live, outcome gate, real-entry tests), trace
@@ -20,17 +22,17 @@ Everything here is bound to one commit. Where an item is not finished, it says s
 | 2 | Nine original lifecycle tests execute (0 skip) with that fixture | pass (9/9, five consecutive runs) | `PKW_TEST_PROFILE=… PKW_TEST_DATA_ROOT=… PKW_TEST_USERNAME=owner node --test scripts/tests/pkw-shutdown.test.mjs` | 0 | `/tmp/lock-1.log` … `/tmp/lock-5.log` | the drain test holds its request with an observation gate, not a sleep |
 | 3 | Explicit enter/release signal proven end to end | pass (1/1) | `… node --test scripts/tests/inflight-signal.test.mjs` | 0 | `docs/delivery/repro-inflight/explicit-signal-first.log` | new test, 0 skip only with `PKW_TEST_DATA_ROOT` |
 | 4 | Docker-free reproduction of the parked-request experiment | pass (15 runs) | `node docs/delivery/repro-inflight/repro.mjs --mode parked --hold-ms 250 --stub-delay 1500` | 0 | `docs/delivery/repro-inflight/stages-parked.json` | none: temporary directories only |
-| 5 | Whole tooling suite on this commit | pass (432 tests, 0 fail, 3 skipped) | `PKW_TEST_PROFILE=… node --test scripts/tests/*.test.mjs` | 0 | `/tmp/all-c6fa619.log` | the E2E and the target acceptance skip without their inputs; CI has no profile, so the lifecycle test skips there too |
+| 5 | Whole tooling suite on this commit | pass (432 tests, 429 pass, 0 fail, 3 skipped) | `PKW_TEST_PROFILE=… node --test scripts/tests/*.test.mjs` | 0 | `/tmp/all-9804faa.log` | the E2E and the target acceptance skip without their inputs; CI has no profile, so the lifecycle test skips there too |
 | 6 | Typecheck | pass | `pnpm run typecheck` | 0 | `/tmp/typecheck-c6fa619.log` | resolves the harness seam at `/opt/deepseek-harness` (read-only) |
 | 7 | PKW build from this commit | pass | `node scripts/build.mjs` | 0 | `/tmp/build.log` | writes `packages/pkw/*/lib` in the working checkout only |
 | 8 | Old artifact set inventoried | pass | `ls /LlHmm9527/.pkw-deployments/0.1.7-pkw.1/{packages,receipt.json}` | 0 | receipt in that directory | it is the material the running site was deployed from; read-only here |
 | 9 | New artifact set packed, unpacked contents beside each tarball | pass (10 packages) | `node scripts/pack-release.mjs --artifact-dir /LlHmm9527/.pkw-deployments/0.1.8-pkw.2/packages --version 0.1.8-pkw.2 --json …/receipt.json` | 0 | `/LlHmm9527/.pkw-deployments/0.1.8-pkw.2/receipt.json` | peers are not bundled in the tarballs; the closure is provided by the profile they are installed into |
 | 9b | Old and new release profiles assembled, each from its own artifacts | pass (35 packages, 25 pinned peers, 0 unresolved each) | `node scripts/pkw-independent-profile.mjs --profile e2e/{old,new}-profile --version … --release-source … --harness /opt/deepseek-harness --store …` | 0 | `/tmp/old-profile.log`, `/tmp/new-profile.log` | reads the harness declarations at `/opt/deepseek-harness`; writes only under `e2e/` |
 | 10 | Real switch → injected acceptance failure → rollback → restored release reads the data | pass | `node deploy/rehearse-release.mjs --work-dir e2e/rollback8 --profile-source e2e/old-profile --data-source fixtures/lifecycle-1 --artifact-dir /LlHmm9527/.pkw-deployments/0.1.8-pkw.2/packages --version 0.1.8-pkw.2 --old-version 0.1.7-pkw.1 --owner-password … --set-owner-password --store-dir /LlHmm9527/pkw-independent/store/v11 --force-verify-failure --write-during-serve` | 0 | `e2e/rollback8/report.json` | the remote stub is a loopback fixture; peers come from the profile, not the tarballs |
-| 11 | Isolated target acceptance through a temporary systemd unit | pass | `PKW_TEST_PROFILE=… PKW_TARGET_ARTIFACTS=… PKW_TARGET_SUPPORT=… PKW_TEST_DATA_ROOT=… node --test scripts/tests/target-systemd.test.mjs` | 0 | `/tmp/target17.log` | transient unit on a test port; DSH unreachable only for that process |
-| 13 | Acceptances 1-10 re-run on this SHA | pass | see rows above | 0 | `/tmp/all-c6fa619.log` | 432 tests, 429 pass, 0 fail, 3 skipped |
+| 11 | Isolated target acceptance through a temporary systemd unit | pass (re-run on this SHA) | `PKW_TEST_PROFILE=… PKW_TARGET_ARTIFACTS=… PKW_TARGET_SUPPORT=… PKW_TEST_DATA_ROOT=… node --test scripts/tests/target-systemd.test.mjs` | 0 | `/tmp/target-9804faa.log` | transient unit on a test port; DSH unreachable only for that process |
+| 13 | Acceptances 1-10 re-run on this SHA | pass | see rows above | 0 | `/tmp/all-9804faa.log` | 432 tests, 429 pass, 0 fail, 3 skipped |
 | 12 | Real Harness CI job (`typecheck + test + build + packed runtime`) | **not run** | GitHub Actions | — | — | blocked: see missing inputs |
-| 14 | Real-artifact switch/rollback E2E (`e2e-switch.test.mjs`) with its four inputs wired | pass | `PKW_E2E_SUPPORT_PROFILE=… PKW_E2E_STORE=… PKW_E2E_OLD_ARTIFACTS=… PKW_E2E_OLD_VERSION=0.1.7-pkw.1 node --test scripts/tests/e2e-switch.test.mjs` | 0 | `/tmp/probe400/e2e-fixed13.log` | the staged release is this checkout; the old release is the real `0.1.7-pkw.1` artifact set |
+| 14 | Real-artifact switch/rollback E2E (`e2e-switch.test.mjs`) with its four inputs wired | pass (re-run on this SHA) | `PKW_E2E_SUPPORT_PROFILE=… PKW_E2E_STORE=… PKW_E2E_OLD_ARTIFACTS=… PKW_E2E_OLD_VERSION=0.1.7-pkw.1 node --test scripts/tests/e2e-switch.test.mjs` | 0 | `/tmp/e2e-9804faa.log` | the staged release is this checkout; the old release is the real `0.1.7-pkw.1` artifact set |
 
 ## Closed item 1 — the lifecycle write test, and the 400 that was never the product's
 
@@ -266,7 +268,7 @@ passes through a temporary systemd unit. What is genuinely not done:
 
 The four artifacts the delivery owes are all in place: the lifecycle work with an explicit signal
 and its reproduction, complete old and new artifact sets with a real switch/failure/rollback E2E,
-the isolated target acceptance, and the acceptance table bound to `c6fa619` with its cutover plan,
+the isolated target acceptance, and the acceptance table bound to `9804faa` with its cutover plan,
 rollback, disk budget and retention rules. Nothing was merged, nothing was cut over, and no
 recovery material was deleted.
 
