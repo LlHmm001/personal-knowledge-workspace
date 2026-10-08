@@ -23,8 +23,9 @@ Everything here is bound to one commit. Where an item is not finished, it says s
 | 6 | Typecheck | pass | `pnpm run typecheck` | 0 | `/tmp/build.log` | resolves the harness seam at `/opt/deepseek-harness` (read-only) |
 | 7 | PKW build from this commit | pass | `node scripts/build.mjs` | 0 | `/tmp/build.log` | writes `packages/pkw/*/lib` in the working checkout only |
 | 8 | Old artifact set inventoried | pass | `ls /LlHmm9527/.pkw-deployments/0.1.7-pkw.1/{packages,receipt.json}` | 0 | receipt in that directory | it is the material the running site was deployed from; read-only here |
-| 9 | New artifact set packed with its own closure | **not run** | `scripts/pkw-independent-profile.mjs --release-source … --version … --harness …` | — | — | needs the pack step plus a version to pin; no blocker found in the inventory |
-| 10 | Real switch / failure / rollback E2E with both artifact sets | **not run** | `deploy/rehearse-release.mjs …` then `deploy/switch-release.mjs …` | — | — | depends on 9 |
+| 9 | New artifact set packed, unpacked contents beside each tarball | pass (10 packages) | `node scripts/pack-release.mjs --artifact-dir /LlHmm9527/.pkw-deployments/0.1.8-pkw.2/packages --version 0.1.8-pkw.2 --json …/receipt.json` | 0 | `/LlHmm9527/.pkw-deployments/0.1.8-pkw.2/receipt.json` | peers are not bundled in the tarballs; the closure is provided by the profile they are installed into |
+| 9b | Old and new release profiles assembled, each from its own artifacts | pass (35 packages, 25 pinned peers, 0 unresolved each) | `node scripts/pkw-independent-profile.mjs --profile e2e/{old,new}-profile --version … --release-source … --harness /opt/deepseek-harness --store …` | 0 | `/tmp/old-profile.log`, `/tmp/new-profile.log` | reads the harness declarations at `/opt/deepseek-harness`; writes only under `e2e/` |
+| 10 | Real switch → injected acceptance failure → rollback | partial: switch, failure, stop, restore all verified; rollback acceptance still failing on a credential mismatch | `node deploy/rehearse-release.mjs --work-dir e2e/rollback … --force-verify-failure --store-dir /LlHmm9527/pkw-independent/store/v11` | 1 | `e2e/rollback/report.json` | see open item 3 |
 | 11 | Isolated target-server acceptance with a temporary unit | **not run** | `deploy/switch-release.mjs --managed-unit …` | — | — | needs a test-only unit and install root; not attempted yet |
 | 12 | Real Harness CI job (`typecheck + test + build + packed runtime`) | **not run** | GitHub Actions | — | — | blocked: see missing inputs |
 
@@ -47,6 +48,29 @@ are refusals, so no second writer was created; the assertion only accepts 3. The
 made to see a partial lock by the writer (it claims the root with `open(path, 'wx')`, which is
 atomic), so the next step is to log which branch of `prepareRootLock` produced 4 before touching
 either the assertion or the protocol.
+
+## Open item 3 — the rollback acceptance credential
+
+The switch, the injected failure, the confirmed stop of the candidate, the restore of the old
+release and its reachability are all verified in `e2e/rollback/report.json`:
+
+```
+status                        PKW_DEPLOYMENT_ROLLED_BACK
+phases                        seedRelease, copyData, stop, start, injectedFault, reachability
+rollback.restoredVersion      0.1.7-pkw.1
+previousRestore.steps         stop confirmed, currentRepointed, started, versionConfirmed
+rollbackEvidence.reachability verified (HTTP 200)
+rollbackEvidence.acceptance   failed
+rollbackAcceptanceError       login was refused with HTTP 401
+```
+
+The restored release answers, but the owner credential the verifier presents is not the one the
+data root carries: the fixture was generated with `--username owner` while its config bootstraps
+from `PKW_FIXTURE_BOOTSTRAP`, and a direct login attempt against the restored data root with the
+rehearsal's password is refused (`403`). The rehearsal therefore needs the data root's own
+credentials — either a fixture generated for that user, or the rehearsal overriding the copy's
+account password the way the lifecycle tests do (`setCopyPassword`). Until that is wired, the
+rollback is restored but not accepted, and this table says so rather than counting it as a pass.
 
 ## Missing inputs (listed once, with what they are for)
 

@@ -56,6 +56,11 @@ if (!existsSync(join(oldRelease, 'package.json'))) {
   await mkdir(join(root, 'releases'), { recursive: true })
   await cp(resolve(values['profile-source']), oldRelease, { recursive: true, dereference: false, verbatimSymlinks: true })
   await writeFile(join(oldRelease, 'pnpm-workspace.yaml'), 'packages: []\n')
+  // The seed carries the profile's own `.npmrc`, which pins the registry the profile was built
+  // from — a one-off loopback registry that is gone by the time a rehearsal runs. Left in place it
+  // makes every install hang against a dead port. The transaction passes its own registry
+  // explicitly, so the seed's pinned one is removed here and the rehearsal uses the live one.
+  await rm(join(oldRelease, '.npmrc'), { force: true })
   for (const entry of await readdir(join(oldRelease, 'node_modules/@deepseek-ai'), { withFileTypes: true }).catch(() => [])) {
     if (!entry.isDirectory() || !entry.name.startsWith('dsh-pkw-')) continue
     const manifestPath = join(oldRelease, 'node_modules/@deepseek-ai', entry.name, 'package.json')
