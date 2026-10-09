@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, mkdir, symlink, writeFile } from 'node:fs/promis
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import test from 'node:test'
-import { runOwned, requireCommand, runMatrix, treeBytes, caseExecutionEvidence, assertCaseExecution } from '../../deploy/rehearse-matrix.mjs'
+import { runOwned, requireCommand, runMatrix, treeBytes, caseExecutionEvidence, assertCaseExecution, caseFailureEvidence } from '../../deploy/rehearse-matrix.mjs'
 
 async function root(t) {
   const path = await mkdtemp(join(tmpdir(), 'pkw-matrix-test-'))
@@ -150,4 +150,47 @@ test('matrix refuses a zero-exit driver with a surviving same-group child and co
       while (alive() && Date.now() < deadline) await new Promise(done => setTimeout(done, 20))
     }
   }
+})
+
+
+test('matrix exposes the original business failure separately from rollback and verdict', () => {
+  const report = {
+    status: 'PKW_DEPLOYMENT_ROLLED_BACK',
+    error: { code: 'PKW_DEPLOYMENT_ROLLED_BACK', message: 'previous release restored' },
+    result: {
+      status: 'rolled-back',
+      activationError: { message: 'outer', details: { name: 'Error', message: 'uploadAttachment failed (400)', cause: { message: 'missing filename' } } },
+      rollbackEvidence: { reachability: 'verified', acceptance: 'verified' },
+    },
+    phases: { login: { password: 'never-copy', csrf: 'never-copy' } },
+  }
+  const evidence = caseFailureEvidence(report)
+  assert.equal(evidence.activationError.message, 'uploadAttachment failed (400)')
+  assert.equal(evidence.activationError.cause.message, 'missing filename')
+  assert.equal(evidence.driverError.code, 'PKW_DEPLOYMENT_ROLLED_BACK')
+  assert.equal(evidence.transactionStatus, 'rolled-back')
+  assert.deepEqual(evidence.rollbackEvidence, { reachability: 'verified', acceptance: 'verified' })
+  assert.equal(JSON.stringify(evidence).includes('never-copy'), false)
+})
+
+test('matrix failure summary redacts credentials and bounds error text without mutating private evidence', () => {
+  const message = 'password="secret-password" csrf="secret-csrf" token=secret-token Authorization: Bearer secret-bearer https://user:secret-url@example.test';
+  const report = { status: 'failed', error: { message, cause: { message: 'csrf=secret-cause ' + 'x'.repeat(9000) } } }
+  const evidence = caseFailureEvidence(report)
+  const printed = JSON.stringify(evidence)
+  for (const value of ['secret-password', 'secret-csrf', 'secret-token', 'secret-bearer', 'secret-url', 'secret-cause']) assert.equal(printed.includes(value), false)
+  assert.equal(report.error.message, message)
+  assert.ok(evidence.driverError.message.length <= 2000)
+  assert.ok(evidence.driverError.cause.message.length <= 2000)
+  assert.equal(evidence.activationError, null)
+  assert.equal(caseFailureEvidence(null).driverError, null)
+})
+
+
+test('matrix failure summary tolerates a truncated nested error tree', () => {
+  let error = { message: 'root cause' }
+  for (let i = 0; i < 10; i++) error = { message: `layer-${i}`, cause: error }
+  const evidence = caseFailureEvidence({ error })
+  assert.match(JSON.stringify(evidence), /TruncatedError/)
+  assert.equal(JSON.stringify(evidence).includes('root cause'), false)
 })

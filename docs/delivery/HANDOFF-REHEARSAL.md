@@ -242,3 +242,39 @@ The next server run must finish all three serial cases and report
 `three-rehearsals-verified` with exit zero. Any first failure retains its scene
 and stops the matrix. Production deployment and recovery-material cleanup remain
 outside this rehearsal.
+
+## Positive case reached the new release, then the upload contract failed
+
+The `54f226f` server run at `/LlHmm9527/pkw-codex-rehearsal-GShzod`
+ended naturally after 39461 ms, not at a deadline. Its private report confirms
+candidate 0.1.9-pkw.1 was installed, promoted and started. The original failure
+was `writing during serve: uploadAttachment failed (400)`. The candidate was
+then stopped with process/port/lock absence confirmed, the actual predecessor
+0.1.7-pkw.1 was restored, and rollback reachability and enforcing acceptance
+both passed. Test-process cleanup passed; returned live-service PIDs and restart
+counts were unchanged. The positive rehearsal correctly failed: no complete
+write or requested post-write fault was recorded.
+
+The rehearsal was sending `relativePath` to `uploadAttachment`, whereas the
+product requires `filename`, `mimeType`, and `contentBase64`. The driver now
+uses that contract, validates the returned attachment identity, and builds the
+managed link with the returned stored filename rather than an invented name.
+The on-disk baseline must identify that same filename and retain the uploaded
+bytes. Invalid upload responses cannot produce `served-write.json`, a completed
+write or an injected-fault marker. Product source, package archives, version
+numbers and all rollback/write acceptance gates are unchanged.
+
+A CLI regression with a contract-enforcing HTTP fixture failed on the previous
+driver with the same upload-400 location. It now exercises the real rehearsal
+CLI/listener/writer/disk checks against a gateway fixture, including a returned
+filename that differs from the requested name and six invalid identity responses.
+The fixture replaces the install/switch transaction and product gateway, so this
+is not a claim of real server business acceptance. The matrix now also prints
+a bounded, redacted original activation error and rollback status alongside the
+verdict; it does not print the private configuration, credentials or report.
+The server's complete three-case matrix still needs a fresh run.
+
+Final local verification: all rehearsal-focused suites passed on Node 22.23.1,
+83 tests, zero failures and zero skips. The new CLI tests use the same bounded
+process-group runner as the matrix, assert cleanup, and retain the scene if
+cleanup cannot be confirmed. No server rerun or production change is implied.

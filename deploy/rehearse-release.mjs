@@ -393,11 +393,16 @@ async function writeThroughApi() {
   const created = await call(`/pkw/spaces/${space.id}/api`, { method: 'POST', body: { method: 'createNote', args: { relativePath: `rehearsal/${marker}.md`, markdown: noteBody } }, csrf: value.csrf })
   if (created.status !== 200 || !created.body?.value?.noteId) throw new Error(`writing during serve: createNote failed (${created.status}): ${JSON.stringify(created.body).slice(0, 200)}`)
   const attachmentBytes = Buffer.from(`rehearsal attachment ${marker}\n`)
-  const uploaded = await call(`/pkw/spaces/${space.id}/api`, { method: 'POST', body: { method: 'uploadAttachment', args: { relativePath: `rehearsal/${marker}.bin`, contentBase64: attachmentBytes.toString('base64') } }, csrf: value.csrf })
+  const uploaded = await call(`/pkw/spaces/${space.id}/api`, { method: 'POST', body: { method: 'uploadAttachment', args: { filename: `rehearsal-${marker}.bin`, mimeType: 'application/octet-stream', contentBase64: attachmentBytes.toString('base64') } }, csrf: value.csrf })
   if (uploaded.status !== 200) throw new Error(`writing during serve: uploadAttachment failed (${uploaded.status}): ${JSON.stringify(uploaded.body).slice(0, 200)}`)
   const noteId = created.body.value.noteId
-  const attachmentId = uploaded.body?.value?.attachmentId ?? null
-  if (!attachmentId) throw new Error(`writing during serve: the upload reported no attachment id: ${JSON.stringify(uploaded.body).slice(0, 200)}`)
+  const attachmentId = uploaded.body?.value?.attachmentId
+  const attachmentName = uploaded.body?.value?.filename
+  if (typeof attachmentId !== 'string' || !/^att_[A-Za-z0-9_-]+$/.test(attachmentId)
+    || typeof attachmentName !== 'string' || attachmentName.trim() !== attachmentName || attachmentName === ''
+    || attachmentName === '.' || attachmentName === '..' || /[\\/:*?"<>|\u0000-\u001f]/.test(attachmentName)) {
+    throw new Error('writing during serve: the upload reported an invalid attachment identity (attachmentId or stored filename)')
+  }
 
   // ── linkage: the attachment has to be reachable *through the note* ───────────────
   // An upload that is never referenced is an attachment no reader would ever see: `getNote`
@@ -405,10 +410,13 @@ async function writeThroughApi() {
   // the write is only complete once the note cites it and the product itself reports it back.
   const before = await call(`/pkw/spaces/${space.id}/api`, { method: 'POST', body: { method: 'getNote', args: { noteId } }, csrf: value.csrf })
   if (before.status !== 200) throw new Error(`writing during serve: the note must be readable before linking: ${before.status} ${JSON.stringify(before.body).slice(0, 200)}`)
-  const attachmentName = `rehearsal-${marker}.bin`
+  // The API returns the persisted name, which can differ from the requested name.
+  // Encode its Markdown destination exactly as the product UI does, including
+  // spaces, Unicode and parentheses, without inventing a second filename.
+  const attachmentPath = encodeURIComponent(attachmentName).replace(/[!'()*]/g, char => '%' + char.charCodeAt(0).toString(16).toUpperCase())
   const linked = await call(`/pkw/spaces/${space.id}/api`, { method: 'POST', body: {
     method: 'saveNoteBody', args: {
-      noteId, body: `${before.body.value.body}\n![${attachmentName}](attachments/${attachmentId}/${attachmentName})\n`,
+      noteId, body: `${before.body.value.body}\n![rehearsal attachment](attachments/${attachmentId}/${attachmentPath})\n`,
       expectedContentHash: before.body.value.note.contentHash,
     },
   }, csrf: value.csrf })
@@ -423,6 +431,7 @@ async function writeThroughApi() {
   // write created, and an expected value invented here would only ever test this script.
   const baseline = await inspectStoredAttachment(space.id, attachmentId)
   if (!baseline.ok) throw new Error(`writing during serve: the stored attachment is unreadable: ${baseline.reason}`)
+  if (baseline.file !== attachmentName) throw new Error('writing during serve: the stored attachment filename does not match the upload response')
   if (baseline.sha256 !== createHash('sha256').update(attachmentBytes).digest('hex')) {
     throw new Error('writing during serve: the stored attachment does not match the bytes that were uploaded')
   }

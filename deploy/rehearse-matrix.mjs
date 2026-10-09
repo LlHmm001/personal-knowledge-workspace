@@ -7,7 +7,7 @@ import { cp, lstat, mkdir, open, readFile, readdir, realpath, statfs, writeFile 
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
-import { packageList } from '../scripts/deployment.mjs'
+import { packageList, deploymentErrorDetails } from '../scripts/deployment.mjs'
 import { startLoopbackRegistry } from './site/loopback-registry.mjs'
 import { readReleaseArtifacts, verifyArtifactPayload } from './site/rehearsal-artifacts.mjs'
 import { assertRehearsalVerdict } from './site/rehearsal-verdict.mjs'
@@ -116,6 +116,31 @@ export async function runOwned(command, args, { cwd, env, log, timeoutMs = 600_0
 export function caseExecutionEvidence(kind, work, result) {
   const { code, signal, error, interrupted, timedOut, interruptionReason, stopActions, elapsedMs, timeoutMs, groupCleanup, pid } = result
   return { kind, work, status: 'unverified', execution: { code, signal, error, interrupted, timedOut, interruptionReason, stopActions, elapsedMs, timeoutMs, groupCleanup, pid } }
+}
+
+/** Surface the original business failure without printing the private report or API payloads. */
+export function caseFailureEvidence(recorded) {
+  const status = value => /^[a-zA-Z0-9_-]{1,80}$/.test(value ?? '') ? value : null
+  const error = value => {
+    if (!value) return null
+    const result = deploymentErrorDetails(value)
+    const scrub = item => {
+      if (typeof item.message === 'string') item.message = item.message.replace(/(["']?csrf["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;&]+)/gi, '$1[redacted]')
+      if (item.cause) scrub(item.cause)
+      return item
+    }
+    return scrub(result)
+  }
+  const transaction = recorded?.result ?? {}
+  return {
+    driverStatus: status(recorded?.status), transactionStatus: status(transaction.status),
+    activationError: error(transaction.activationError?.details ?? transaction.activationError),
+    driverError: error(recorded?.error),
+    rollbackEvidence: {
+      reachability: status(transaction.rollbackEvidence?.reachability),
+      acceptance: status(transaction.rollbackEvidence?.acceptance),
+    },
+  }
 }
 
 /** A deadline is not cleanup failure when both process and listener absence were confirmed. */
@@ -286,6 +311,7 @@ export async function runMatrix(values, { signal } = {}) {
       try {
         recorded = JSON.parse(await readFile(join(caseDir, 'report.json'), 'utf8'))
         if (!recorded || typeof recorded !== 'object' || Array.isArray(recorded)) throw failure('PKW_MATRIX_REPORT_SHAPE', 'Rehearsal report is not an object')
+        entry.failureEvidence = caseFailureEvidence(recorded)
         entry.cleanup = recorded.cleanup ?? null
         entry.lifecycleOk = recorded.exit?.lifecycleOk ?? null
       } catch (error) { entry.reportError = { code: error.code ?? null, message: error.message } }
