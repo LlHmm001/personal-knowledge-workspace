@@ -2,8 +2,9 @@
 
 Status: the user approved the maintenance window and returned a successful
 **production activation with authenticated read acceptance** from installed
-legacy `0.1.2-pkw.4` to independent `0.1.9-pkw.1`. User browser/business confirmation
-and historical cleanup remain pending. Do not repeat the activation command.
+legacy `0.1.2-pkw.4` to independent `0.1.9-pkw.1`. The user subsequently confirmed
+the browser/business checks passed. Historical cleanup remains separate and has
+not been performed. Do not repeat the activation command.
 
 ## Returned production activation receipt
 
@@ -24,7 +25,7 @@ unchanged check.
 | Cold backup | `/LlHmm9527/pkw-first-cutover-9xeifm/plan/cold-backup` |
 | Backup manifest SHA-256 | `cd9d1988078e612391ccf1c1e853d5f36b8df63e58f56e9f47a4581e41a195bf` |
 | Production read acceptance | `verified` |
-| User business confirmation | `pending` |
+| User business confirmation in activation output | `pending` at command completion; subsequently confirmed by the user below |
 | Database restored | `false` |
 | DSH unchanged | `true` |
 | DSH process after activation | PID `1585972`, active/running, `NRestarts=0` |
@@ -33,11 +34,27 @@ unchanged check.
 The transaction installed the owned `current` link and systemd drop-in described
 below. It retained the canonical data root and did not restore a database.
 Read acceptance compared the selected pre-stop original note and attachment after
-candidate startup; it is not an assertion that every historical record, new writes,
-the public reverse proxy, or the browser workflow has been verified. The next
-confirmation is the user's browser check of the displayed version, an original
-note and attachment, and a new test note saved and read again after refresh.
-Keep the plan and backup intact while that confirmation is pending.
+candidate startup. Browser/business checks were then confirmed separately by the
+user; neither check is an assertion that every historical record was inspected.
+
+## User-confirmed browser/business acceptance
+
+After activation, the user returned: "版本、原资料、新建保存、附件和 DSH 均正常".
+This answers the requested checks at `https://ddmind.duckdns.org/pkw`:
+
+- Displayed version is `0.1.9-pkw.1` after refresh or login.
+- An original note opens and an original attachment downloads.
+- A new "升级验收" note saves and reopens after refresh.
+- A small test attachment uploads and downloads.
+- The original DSH session still opens.
+
+Evidence provenance is the user's explicit browser confirmation, not automated
+browser observation by Codex. Together with the returned activation receipt,
+this completes the requested production cutover and business acceptance. The
+server activation journal originally returned `userBusinessConfirmation:pending`;
+this later confirmation is recorded here without rewriting that journal.
+Keep the plan, cold backup and original installation intact. No cleanup was
+performed as part of this confirmation.
 
 ## Completed evidence and the actual predecessor
 
@@ -194,8 +211,9 @@ process identities through the transaction:
    Start the candidate, confirm process/listener/lock ownership, then compare the
    same original note and attachment through an authenticated session.
 4. Recheck DSH identity/restarts. Only these completed checks produce
-   `ACTIVATED_VERIFIED`. Browser login, original-note/attachment access and a new
-   save/refresh check by the user remain separately pending business confirmation.
+   `ACTIVATED_VERIFIED`. Browser login, original-note/attachment access and new
+   save/refresh checks require separate user confirmation, recorded above for
+   this cutover.
 
 There is no package install or database conversion step during this first
 maintenance transaction. The cooperative command deadline is bounded, but it
@@ -259,8 +277,9 @@ synthetic compatibility, plan preparation and production activation are separate
 returned server results recorded above.
 
 Production activation and selected-content authenticated read acceptance are
-verified in the returned receipt. Browser login, original-note/attachment access
-through the public route and a new save/refresh check remain pending user business
-confirmation. No historical cleanup is authorized by this success report. Real
+verified in the returned receipt. The user subsequently confirmed the version,
+original-note/attachment access through the public route, a new save/refresh check,
+test attachment upload/download and the original DSH session. No historical
+cleanup is authorized by this success report. Real
 Harness CI still requires its repository inputs; local and server checks must
 not be reported as an independent Harness CI pass.
