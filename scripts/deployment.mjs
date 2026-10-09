@@ -17,7 +17,14 @@ export function run(command, args, cwd = repoRoot) {
   return new Promise((resolvePromise, reject) => {
     const child = spawn(command, args, { cwd, stdio: 'inherit', env: process.env })
     child.once('error', reject)
-    child.once('exit', code => code === 0 ? resolvePromise() : reject(new Error(`${command} exited ${code}`)))
+    child.once('exit', (code, signal) => {
+      if (code === 0 && signal === null) { resolvePromise(); return }
+      const error = new Error(signal ? `${command} was terminated by ${signal}` : `${command} exited ${code}`)
+      error.code = signal ? 'PKW_COMMAND_INTERRUPTED' : 'PKW_COMMAND_FAILED'
+      error.exitCode = code
+      error.signal = signal
+      reject(error)
+    })
   })
 }
 

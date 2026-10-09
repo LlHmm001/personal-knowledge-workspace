@@ -93,3 +93,34 @@ Verification for this correction:
   inodes. Two tarballs were fetched from the local fixture registry, with no
   third-party network. This proves the copy/install mechanism, not the server's
   three business rehearsals, which still await execution.
+
+## Installation-exit timeout observed on the server
+
+The `5477b3ca9d283a968f22697d807b79c8c5ab635d` run at
+`/LlHmm9527/pkw-codex-rehearsal-YNdx2n` passed predecessor assembly and runtime
+checks. Its first positive case printed pnpm 11.7.0's `Done in 3.9s`, then did
+not produce a normal child exit before the matrix deadline. The recorded
+interruption was SIGTERM and the installation error was `pnpm exited null`.
+No candidate runtime check, candidate activation, injected fault or read-back
+was recorded. The test listener's graceful exit and independent absence were
+confirmed; both live units remained active with their original PIDs and zero
+restarts in the user's returned output.
+
+The previous matrix gate conflated interrupted execution and failed cleanup.
+It now saves the per-case execution outcome before reading the case report,
+retains timeout/signal/escalation and process-group evidence, and distinguishes
+`PKW_MATRIX_TIMEOUT`, `PKW_MATRIX_EXECUTION`, `PKW_MATRIX_REPORT`, and actual
+`PKW_MATRIX_CLEANUP`. After a deadline, progress explicitly says `stopping`.
+Timeout remains failure even if every owned process subsequently stops. The
+installation runner also retains the real exit signal instead of saying
+`exited null`.
+
+The cause of the server's post-completion hang is **not established**. Cached
+pnpm 11.7.0 source emits the Done message after awaiting its command and first
+worker shutdown. Two isolated local ten-package hoisted upgrades (direct pnpm
+and Corepack, Node 24.15.0) both exited normally, 17 ms and 12 ms after Done.
+A separate probe of pnpm's HTTP client also exited normally with a server that
+advertised a 600-second keep-alive. These are counterexamples to proposed
+causes, not a server fix. Server runtime/entry metadata and live resource
+evidence are still needed. Do not increase the deadline or treat Done as an
+exit-zero substitute; preserve the failed scene.

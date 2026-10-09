@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, mkdir, symlink, writeFile } from 'node:fs/promis
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import test from 'node:test'
-import { runOwned, requireCommand, runMatrix, treeBytes } from '../../deploy/rehearse-matrix.mjs'
+import { runOwned, requireCommand, runMatrix, treeBytes, caseExecutionEvidence, assertCaseExecution } from '../../deploy/rehearse-matrix.mjs'
 
 async function root(t) {
   const path = await mkdtemp(join(tmpdir(), 'pkw-matrix-test-'))
@@ -26,11 +26,59 @@ test('matrix child records spawn failure and does not wait for an exit that neve
 })
 test('matrix deadline remains failure even when child handles TERM and exits zero', { timeout: 5000 }, async t => {
   const dir = await root(t)
+  const progress = []
   const r = await runOwned(process.execPath, ['-e', 'process.on("SIGTERM",()=>process.exit(0));setInterval(()=>{},20)'], {
     cwd: dir, env: {}, log: join(dir, 'deadline.log'), timeoutMs: 600, graceMs: 1000,
+    onProgress: value => progress.push(value),
   })
   assert.equal(r.code, 0); assert.equal(r.interrupted, true)
+  assert.equal(r.timedOut, true); assert.equal(r.interruptionReason, 'timeout')
+  assert.deepEqual(r.groupCleanup, { known: true, present: false, closed: true, confirmed: true })
+  assert.equal(r.stopActions[0].scope, 'child'); assert.equal(r.stopActions[0].signal, 'SIGTERM')
+  assert.equal(progress.at(-1).state, 'stopping'); assert.equal(progress.at(-1).running, false)
+  assert.equal(progress.at(-1).timedOut, true)
+  const entry = caseExecutionEvidence('positive', dir, r)
+  entry.cleanup = { ok: true, confirmed: true, error: null }
+  entry.lifecycleOk = true
+  assert.throws(() => assertCaseExecution(entry), { code: 'PKW_MATRIX_TIMEOUT' })
+  assert.equal('tail' in entry.execution, false); assert.equal('stdout' in entry.execution, false)
   assert.throws(() => requireCommand(r, 'fixture'), { code: 'PKW_MATRIX_COMMAND_FAILED' })
+})
+
+test('matrix distinguishes external interruption from its own deadline', { timeout: 5000 }, async t => {
+  const dir = await root(t), controller = new AbortController()
+  const abort = setTimeout(() => controller.abort(), 300)
+  try {
+    const result = await runOwned(process.execPath, ['-e', 'process.on("SIGTERM",()=>process.exit(0));setInterval(()=>{},20)'], {
+      cwd: dir, env: {}, log: join(dir, 'signal.log'), signal: controller.signal, timeoutMs: 2000, graceMs: 1000, onProgress: () => {},
+    })
+    assert.equal(result.interrupted, true); assert.equal(result.timedOut, false); assert.equal(result.interruptionReason, 'signal')
+    const entry = caseExecutionEvidence('positive', dir, result)
+    entry.cleanup = { ok: true, confirmed: true, error: null }; entry.lifecycleOk = true
+    assert.throws(() => assertCaseExecution(entry), { code: 'PKW_MATRIX_EXECUTION' })
+  } finally { clearTimeout(abort) }
+})
+
+test('matrix timeout cannot hide unconfirmed cleanup or a missing report', () => {
+  const result = { code: 1, signal: null, error: null, interrupted: true, timedOut: true, interruptionReason: 'timeout', groupCleanup: { confirmed: true } }
+  const entry = caseExecutionEvidence('positive', '/private/scene', result)
+  entry.cleanup = { ok: true, confirmed: false }; entry.lifecycleOk = true
+  assert.throws(() => assertCaseExecution(entry), { code: 'PKW_MATRIX_CLEANUP' })
+  entry.cleanup.confirmed = true
+  entry.execution.groupCleanup.confirmed = false
+  assert.throws(() => assertCaseExecution(entry), { code: 'PKW_MATRIX_CLEANUP' })
+  entry.execution.groupCleanup.confirmed = true
+  entry.reportError = { code: 'ENOENT', message: 'missing report' }
+  assert.throws(() => assertCaseExecution(entry), { code: 'PKW_MATRIX_REPORT' })
+  assert.equal(entry.execution.timedOut, true, 'original timeout evidence survives refusal')
+})
+
+test('matrix leaves expected nonzero cases to the strict verdict only after cleanup', () => {
+  const entry = caseExecutionEvidence('breakwrite', '/private/scene', { code: 1, signal: null, error: null, interrupted: false, timedOut: false, groupCleanup: { confirmed: true } })
+  entry.cleanup = { ok: true, confirmed: true }; entry.lifecycleOk = true
+  assert.doesNotThrow(() => assertCaseExecution(entry))
+  entry.execution.error = 'PKW_MATRIX_DESCENDANTS'
+  assert.throws(() => assertCaseExecution(entry), { code: 'PKW_MATRIX_CLEANUP' }, 'a leftover group remains a protocol failure even after it is removed')
 })
 test('matrix refuses an existing scene without deleting its files', async t => {
   const dir = await root(t)

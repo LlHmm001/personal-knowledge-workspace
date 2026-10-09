@@ -580,7 +580,7 @@ try {
     report.status = report.result.status
   } catch (error) {
     report.status = error.code ?? 'failed'
-    report.error = { message: error.message, code: error.code ?? null }
+    report.error = { message: error.message, code: error.code ?? null, exitCode: error.exitCode ?? null, signal: error.signal ?? null }
     report.result = error.report ?? null
   }
   // The read-back belongs to the report, not to the transaction's success path: a rolled-back
@@ -600,7 +600,7 @@ try {
   }
 } catch (error) {
   report.status = error.code ?? 'failed'
-  report.error = { message: error.message, code: error.code ?? null }
+  report.error = { message: error.message, code: error.code ?? null, exitCode: error.exitCode ?? null, signal: error.signal ?? null }
 } finally {
   // Cleanup runs even if the registry or transaction fails. Its evidence gates the verdict.
   await interruptedCleanup

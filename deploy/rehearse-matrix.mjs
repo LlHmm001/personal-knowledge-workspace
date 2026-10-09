@@ -23,16 +23,28 @@ const failure = (code, message) => Object.assign(new Error(message), { code })
 export async function runOwned(command, args, { cwd, env, log, timeoutMs = 600_000, graceMs = 60_000, signal, onProgress = emit, label = 'command' }) {
   const output = await open(log, 'wx', 0o600)
   let child, timer, escalation, killTimer, detachTimer, beat, interrupted = false, exited = false, closed = false, settleDone
+  let timedOut = false, interruptionReason = null
+  const stopActions = []
   let code = null, terminationSignal = null, spawnError = null, tail = '', stdout = ''
   const started = Date.now()
   const stopGroup = sig => {
     if (!child?.pid) return
-    try { process.kill(-child.pid, sig) } catch (error) { if (error.code !== 'ESRCH') spawnError ??= error }
+    const action = { scope: 'group', signal: sig, elapsedMs: Date.now() - started }
+    stopActions.push(action)
+    try { process.kill(-child.pid, sig); action.sent = true } catch (error) { action.error = error.code ?? 'UNKNOWN'; if (error.code !== 'ESRCH') spawnError ??= error }
   }
-  const abort = () => {
+  const progress = () => onProgress({ phase: label, state: interrupted ? 'stopping' : 'running', running: !interrupted, timedOut, elapsedSeconds: Math.floor((Date.now() - started) / 1000) })
+  const abort = (reason = 'signal') => {
     if (interrupted || closed) return
     interrupted = true
-    if (!exited) child?.kill('SIGTERM')
+    interruptionReason = reason
+    timedOut = reason === 'timeout'
+    try { progress() } catch (error) { spawnError ??= error }
+    if (!exited) {
+      const action = { scope: 'child', signal: 'SIGTERM', elapsedMs: Date.now() - started }
+      stopActions.push(action)
+      try { action.sent = child?.kill('SIGTERM') ?? false } catch (error) { action.error = error.code ?? 'UNKNOWN'; spawnError ??= error }
+    }
     escalation = setTimeout(() => {
       stopGroup('SIGTERM')
       killTimer = setTimeout(() => {
@@ -45,6 +57,7 @@ export async function runOwned(command, args, { cwd, env, log, timeoutMs = 600_0
       }, 5000)
     }, graceMs)
   }
+  const abortFromSignal = () => abort('signal')
   try {
     if (signal?.aborted) throw failure('PKW_MATRIX_INTERRUPTED', 'Interrupted before starting a command')
     child = spawn(command, args, { cwd, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
@@ -57,21 +70,23 @@ export async function runOwned(command, args, { cwd, env, log, timeoutMs = 600_0
     // Synchronous writes are bounded by each delivered pipe chunk; no unbounded log queue.
     const { writeSync } = await import('node:fs')
     const capture = (chunk, isStdout = false) => {
-      try { for (let offset = 0; offset < chunk.length;) offset += writeSync(output.fd, chunk, offset) } catch (error) { spawnError ??= error; abort() }
+      try { for (let offset = 0; offset < chunk.length;) offset += writeSync(output.fd, chunk, offset) } catch (error) { spawnError ??= error; abort('capture-error') }
       tail = (tail + chunk.toString()).slice(-65536)
       if (isStdout) stdout = (stdout + chunk.toString()).slice(-65536)
     }
     child.stdout.on('data', chunk => capture(chunk, true)); child.stderr.on('data', chunk => capture(chunk))
-    signal?.addEventListener('abort', abort, { once: true })
-    if (signal?.aborted) abort()
-    timer = setTimeout(abort, timeoutMs)
-    beat = setInterval(() => { try { onProgress({ phase: label, running: true, elapsedSeconds: Math.floor((Date.now() - started) / 1000) }) } catch (error) { spawnError ??= error; abort() } }, 10_000)
+    signal?.addEventListener('abort', abortFromSignal, { once: true })
+    if (signal?.aborted) abortFromSignal()
+    timer = setTimeout(() => abort('timeout'), timeoutMs)
+    beat = setInterval(() => { try { progress() } catch (error) { spawnError ??= error; abort('progress-error') } }, 10_000)
     await done
     clearTimeout(escalation); clearTimeout(killTimer); clearTimeout(detachTimer)
+    let groupState
     const groupPresent = () => {
-      if (!child.pid) return false
-      try { process.kill(-child.pid, 0); return true } catch (error) {
-        if (error.code === 'ESRCH') return false
+      if (!child.pid) { groupState = { known: true, present: false }; return false }
+      try { process.kill(-child.pid, 0); groupState = { known: true, present: true }; return true } catch (error) {
+        if (error.code === 'ESRCH') { groupState = { known: true, present: false }; return false }
+        groupState = { known: false, present: null, error: error.code ?? 'UNKNOWN' }
         spawnError ??= error; return true
       }
     }
@@ -84,12 +99,36 @@ export async function runOwned(command, args, { cwd, env, log, timeoutMs = 600_0
         for (let i = 0; i < 100 && groupPresent(); i++) await new Promise(done => setTimeout(done, 50))
       }
     }
-    return { code, signal: terminationSignal, error: spawnError ? (spawnError.code ?? 'PKW_MATRIX_PROCESS_ERROR') : null, interrupted, tail, stdout, pid: child.pid ?? null }
+    groupPresent()
+    return { code, signal: terminationSignal, error: spawnError ? (spawnError.code ?? 'PKW_MATRIX_PROCESS_ERROR') : null,
+      interrupted, timedOut, interruptionReason, stopActions, elapsedMs: Date.now() - started, timeoutMs,
+      groupCleanup: { ...groupState, closed, confirmed: closed && groupState.known && groupState.present === false },
+      tail, stdout, pid: child.pid ?? null }
   } finally {
     clearTimeout(timer); clearTimeout(escalation); clearTimeout(killTimer); clearTimeout(detachTimer); clearInterval(beat)
-    signal?.removeEventListener('abort', abort)
+    signal?.removeEventListener('abort', abortFromSignal)
     await output.close()
   }
+}
+
+/** Keep process evidence without copying stdout, which may contain private credentials. */
+export function caseExecutionEvidence(kind, work, result) {
+  const { code, signal, error, interrupted, timedOut, interruptionReason, stopActions, elapsedMs, timeoutMs, groupCleanup, pid } = result
+  return { kind, work, status: 'unverified', execution: { code, signal, error, interrupted, timedOut, interruptionReason, stopActions, elapsedMs, timeoutMs, groupCleanup, pid } }
+}
+
+/** A deadline is not cleanup failure when both process and listener absence were confirmed. */
+export function assertCaseExecution(entry) {
+  const result = entry.execution
+  if (result.groupCleanup?.confirmed !== true || ['PKW_MATRIX_DESCENDANTS', 'PKW_MATRIX_CLEANUP_UNKNOWN'].includes(result.error)) {
+    throw failure('PKW_MATRIX_CLEANUP', `${entry.kind}: owned process-group cleanup was not cleanly confirmed; scene retained`)
+  }
+  if (entry.reportError) throw failure('PKW_MATRIX_REPORT', `${entry.kind}: rehearsal report could not be read; execution evidence and scene retained`)
+  if (entry.lifecycleOk !== true || entry.cleanup?.ok !== true || entry.cleanup?.confirmed !== true || entry.cleanup?.error) {
+    throw failure('PKW_MATRIX_CLEANUP', `${entry.kind}: owned listener cleanup was not confirmed; scene retained`)
+  }
+  if (result.timedOut) throw failure('PKW_MATRIX_TIMEOUT', `${entry.kind}: rehearsal exceeded its execution deadline; owned-child cleanup confirmed and scene retained`)
+  if (result.signal || result.error || result.interrupted) throw failure('PKW_MATRIX_EXECUTION', `${entry.kind}: rehearsal execution failed; owned-child cleanup confirmed and scene retained`)
 }
 
 export function requireCommand(result, label) {
@@ -235,11 +274,22 @@ export async function runMatrix(values, { signal } = {}) {
       if (kind === 'mode') args.push('--expect-mode', expectedMode)
       emit({ phase: kind, work: caseDir })
       const result = await runOwned(process.execPath, args, { cwd: report.reference.runnerRoot, env, signal, label: kind, log: join(dirs.logs, `${kind}.log`) })
-      const recorded = JSON.parse(await readFile(join(caseDir, 'report.json'), 'utf8'))
-      if (result.signal || result.error || result.interrupted || recorded.exit?.lifecycleOk !== true || recorded.cleanup?.ok !== true || recorded.cleanup?.confirmed !== true || recorded.cleanup?.error) throw failure('PKW_MATRIX_CLEANUP', `${kind}: execution or owned-child cleanup was not confirmed; scene retained`)
+      const entry = caseExecutionEvidence(kind, caseDir, result)
+      report.cases.push(entry)
+      // Save the command's outcome even when it died before writing a usable report.
+      await save()
+      let recorded
+      try {
+        recorded = JSON.parse(await readFile(join(caseDir, 'report.json'), 'utf8'))
+        if (!recorded || typeof recorded !== 'object' || Array.isArray(recorded)) throw failure('PKW_MATRIX_REPORT_SHAPE', 'Rehearsal report is not an object')
+        entry.cleanup = recorded.cleanup ?? null
+        entry.lifecycleOk = recorded.exit?.lifecycleOk ?? null
+      } catch (error) { entry.reportError = { code: error.code ?? null, message: error.message } }
+      await save()
+      assertCaseExecution(entry)
       const verdict = assertRehearsalVerdict({ kind, exitCode: result.code, report: recorded, oldVersion: values['old-version'], expectedMode: kind === 'mode' ? expectedMode : undefined })
       if (kind === 'positive') expectedMode = recorded.phases.writtenDuringServe.attachmentBaseline.mode === '600' ? '644' : '600'
-      report.cases.push({ ...verdict, work: caseDir, cleanupConfirmed: true })
+      Object.assign(entry, verdict, { status: 'verified', cleanupConfirmed: true })
       await save(); emit({ phase: `${kind}-verified`, exitCode: result.code, cleanupConfirmed: true })
     }
     report.status = 'three-rehearsals-verified'
