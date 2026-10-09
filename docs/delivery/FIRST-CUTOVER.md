@@ -90,7 +90,7 @@ cold-backup, cutover, acceptance and original-service restoration commands.
 | --- | --- | --- | --- | --- | --- | --- |
 | Actual live topology | collected; no issues or process changes | retain the returned baseline; recheck it at each preparation boundary | current PID, runner, config, profile, disk package versions, data root and unit references identified; changes during inspection reported | returned inventory JSON | paths or versions may differ from historical reports | no raw environment, credentials or database reads |
 | First-cutover adapter and recovery | design fixed; execution pending | implement owned drop-in transaction for the actual legacy service | restore original unit/drop-ins/runner references after confirmed candidate stop; no DSH stop hooks | reviewed implementation plus relevant failure checks | generic release rollback cannot cover first unit replacement | preserve the old installation |
-| Candidate and artifact provenance | prepare-only tool ready; server execution pending | copy and reverify the passed rehearsal candidate into a new data-disk directory | archive receipts, peer closure and runner source fixed; runtime resolves inside its own profile | package/import checks and existing rehearsal evidence | don't install into the DSH profile | use private verified pnpm; don't change the global tool |
+| Candidate and artifact provenance | server preparation passed; not activated | retain O43TIw candidate and check its digests before compatibility/cutover | archive receipts, peer closure and runner source fixed; runtime resolves inside its own profile | package/import checks and existing rehearsal evidence | don't install into the DSH profile | use private verified pnpm; don't change the global tool |
 | Data and cold backup | planned, not executed | retain the canonical production dataPath; size backup | stop confirmed before the backup tool claims its lock; archive verified and SHA recorded | backup manifest and verification | copying a live SQLite file is not a consistent backup | no fresh bootstrap/adopt or snapshot overwrite |
 | Production acceptance | pending cutover | configure loopback health and public-origin authenticated reads separately | intended version, original note, HTTP attachment download and save/refresh; DSH PID/restarts unchanged | enforcing verifier plus user business confirmation | a health response alone is insufficient | existing-account credentials stay on the server |
 | Historical cleanup | deferred | inspect references and prepare a named candidate list | only reviewed unreferenced test outputs removed after retention conditions | sizes and reference evidence | pattern deletion can remove recovery material | this inventory never deletes |
@@ -145,5 +145,71 @@ Local Node 22 checks: `first-cutover-preparation`, `rehearsal-artifacts` and
 and completed-evidence binding, exclusive creation, internal/external links,
 no hardlinks or source/data/credential mutation, runtime failure and drift,
 startup provenance, and a late interrupt refusing success. Shell syntax and
-whitespace checks passed. These verify the preparation tool; running it on the
-server and actual legacy compatibility/cutover remain separate evidence.
+whitespace checks passed. These verify the preparation tool; server preparation passed as recorded below; actual legacy compatibility/cutover remain separate evidence.
+
+
+## Returned candidate preparation (not activation)
+
+The server returned exit 0 / `PREPARED_NOT_ACTIVATED` for tool source
+`9c2369363c9879e0530fcee0c28d9c2ca4a7fc82`:
+
+- Runtime: `/LlHmm9527/pkw-first-stage-O43TIw/runtime`.
+- Profile: `releases/0.1.9-pkw.1/profile`, tree SHA-256
+  `06f957837b4d4dca1c366f18217cfe72aa0840156cb46c0c0301896dd9431e2b`.
+- Runner: `releases/0.1.9-pkw.1/runner`, tree SHA-256
+  `8c3fabd29aa8d21a97749f12b32e8f782b566b766ecb639b34c09d68c48a075f`.
+- Runtime imports/trace and cleanup passed. No current link, service start,
+  data access or installed unit draft. Live PKW PID 1608174 and DSH PID 1585972
+  remained active with zero restarts across the operation.
+
+## Exact installed legacy synthetic compatibility
+
+`docs/delivery/repro-inflight/check-legacy-compatibility.sh <fixed-source-SHA>`
+creates one exclusive `/LlHmm9527/pkw-legacy-compat-*` scene. It runs
+`deploy/check-legacy-compatibility.mjs` with a six-minute cooperative deadline.
+Each listener has its own bounded startup/shutdown, continuously drained pipes,
+private HOME/TMP/cache, and a cleared/allowlisted environment. A loader observes
+only that child binding its loopback port; nonce/PID/port, its own data lock and
+health response must agree before any login or write. Health alone cannot
+identify the child. The preload does not change application/API behavior.
+
+The command reads installed **code** at the exact old runner and mixed profile:
+9 PKW packages `0.1.2-pkw.4`, WeKnora `0.1.0`. It verifies the recorded runner
+and profile manifest plus all 10 PKW package manifests/lib trees, and the full
+prepared profile/runner hashes. It does not install packages or read production
+configuration, environment files, locks, SQLite, content or credentials.
+It does not prove which code bytes the long-running live process loaded, nor
+fingerprint the entire external legacy peer closure.
+
+The three sequential lifetimes use the same exclusively new synthetic data and
+new random credentials:
+
+1. Installed legacy: bootstrap via product, authenticate, create a note and
+   attachment via real RPC, link them, verify full body and HTTP download.
+2. Prepared candidate: authenticate the same account/space, read the old fixture,
+   create and verify another note/attachment.
+3. Installed legacy again: authenticate the same account/space and read both
+   fixtures, comparing complete body, attachment HTTP bytes, disk bytes and
+   their original modes. No invented SQLite records or expected mode shortcuts.
+
+Between phases, success requires native exit 0, stream closure, PID and owned
+process group gone, port free, and synthetic lock absent. Failure/force/unknown
+never starts the next writer. No lock is deleted to make this pass. All scenes
+and private logs survive errors. SIGINT/SIGTERM are handled cooperatively;
+SIGKILL of the driver cannot run cleanup and must not be used as a timeout.
+
+Before and after, only named unit/process/code metadata is compared against the
+returned live baseline. `LEGACY_SYNTHETIC_COMPATIBILITY_PASSED` can be emitted
+only after all three lifetimes and the final unchanged-code/live checks pass.
+This server check is **pending** until the user returns its report. Its eventual
+pass does not replace production cold backup, authenticated business acceptance,
+or the separate maintenance decision. The first-cutover adapter remains pending.
+
+Compatibility-tool local checks: Node 22.23.1 ran the client, owned-process and
+scenario suites together: 24 passed, zero failures/skips. Real child-process
+cases cover occupied ports, early exit, abort, forced shutdown, bounded pipe
+logging, three-instance reuse and a second-SIGTERM regression. Scenario cases
+cover exact sequencing, failure cleanup, last-phase interruption, existing
+scenes and before/after drift. These are tool checks, not server compatibility
+results. Shell syntax, bounded archive-path validation and diff whitespace also
+passed. No product package or prepared artifact changed for this command.
