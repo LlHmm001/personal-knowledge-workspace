@@ -12,6 +12,7 @@ import { startLoopbackRegistry } from './site/loopback-registry.mjs'
 import { readReleaseArtifacts, verifyArtifactPayload } from './site/rehearsal-artifacts.mjs'
 import { assertRehearsalVerdict } from './site/rehearsal-verdict.mjs'
 import { createArtifactRunner } from './site/rehearsal-reference.mjs'
+import { inspectPnpmStore, copyPnpmStore } from './site/rehearsal-store.mjs'
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const inside = (root, value) => value === root || value.startsWith(root + sep)
@@ -161,7 +162,9 @@ export async function runMatrix(values, { signal } = {}) {
     const newer = await readReleaseArtifacts(paths['artifact-dir'], values.version, expectedNames, { receiptPath: join(dirname(paths['artifact-dir']), 'receipt.json') })
     report.artifacts = { old: old.map(({ name, version, sha256, bytes }) => ({ name, version, sha256, bytes })), new: newer.map(({ name, version, sha256, bytes }) => ({ name, version, sha256, bytes })) }
     const sizes = {}
-    for (const key of ['profile-source', 'data-source', 'store-source']) sizes[key] = await treeBytes(paths[key], { rejectLinks: key === 'store-source' })
+    for (const key of ['profile-source', 'data-source']) sizes[key] = await treeBytes(paths[key])
+    const storePlan = await inspectPnpmStore(paths['store-source'])
+    sizes['store-source'] = storePlan.bytes
     const space = await statfs(work)
     const required = 2 * 1024 ** 3 + 8 * sizes['profile-source'] + 4 * sizes['data-source'] + sizes['store-source']
     report.space = { available: space.bavail * space.bsize, required, sources: sizes }
@@ -173,9 +176,9 @@ export async function runMatrix(values, { signal } = {}) {
     const store = join(work, 'store')
     const storePath = (await execute('pnpm', ['store', 'path', '--store-dir', store], 'store-path')).trim()
     if (!isAbsolute(storePath) || !inside(store, resolve(storePath)) || storePath.includes('\n')) throw failure('PKW_MATRIX_STORE', 'pnpm did not return a private store path')
-    await cp(paths['store-source'], storePath, { recursive: true, dereference: false, errorOnExist: true, force: false })
-    await treeBytes(storePath, { rejectLinks: true })
-    report.store = { source: paths['store-source'], private: storePath }
+    await mkdir(dirname(storePath), { recursive: true, mode: 0o700 })
+    report.store = await copyPnpmStore(paths['store-source'], storePath)
+    emit({ phase: 'private-store-content-ready', selected: report.store.selected, excluded: report.store.excluded, indexPolicy: report.store.indexPolicy, linksCopied: 0 })
 
     // Own immutable copies of exactly the ten checked artifacts, for both versions.
     for (const [label, artifacts] of [['old', old], ['new', newer]]) {

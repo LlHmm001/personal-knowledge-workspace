@@ -19,8 +19,11 @@ not be relabelled as predecessor `0.1.7-pkw.1`.
 `deploy/rehearse-matrix.mjs` exclusively creates a new data-disk directory and:
 
 1. Validates both release receipts, exact package names/versions and tar hashes.
-2. Checks support-profile isolation, capacity, and fixed pnpm 11.7.0. Copies the
-   existing CAS store into a private store, refusing symbolic links in either.
+2. Checks support-profile isolation, capacity, and fixed pnpm 11.7.0. Copies only
+   the store's `files/` package bytes, refusing links within that payload. Project
+   registrations, linked installation trees, temporary files and source SQLite
+   indexes are excluded. Private pnpm rebuilds its index through normal package
+   fetching; this is not an offline cache clone.
 3. Assembles the predecessor from its actual old tarballs with the support peer
    closure, checks installed payload bytes, imports, and resolution isolation.
 4. Creates a disposable copy of the tool checkout. Its `lib` comparison baseline
@@ -63,3 +66,30 @@ result has been obtained for this new entry yet.
   registry was used in this primitive. This is not the real-product rehearsal.
 - Shell syntax and diff whitespace checks passed. Full Harness CI, complete
   server rehearsal, production cutover, and historical cleanup remain separate.
+
+## Correction after the server cache preflight
+
+The first matrix run at commit `b70bf67` stopped with `cases: []` on
+`store/v11/projects/016ce6df01435b9854f60ecc5486c926`. This is a normal pnpm
+project-registration link, not evidence of a defective package or live service.
+The original whole-store selection was incorrect. The stopped scene at
+`/LlHmm9527/pkw-codex-rehearsal-WcOjUr` remains evidence; it is not reused.
+
+The new selection is `files/` only. pnpm 11.7.0 source identifies `projects/` as
+project links and `index.db` as a WAL-mode SQLite index. Even opening that index
+read-only can create or update source WAL/SHM, so the copier never opens it.
+The receipt explicitly says `indexPolicy: rebuild-in-private-store`; it does
+not claim the index has been rebuilt before installation succeeds.
+
+Verification for this correction:
+
+- Store, matrix, artifact, artifact-reference and verdict suites: 42/42 pass,
+  zero skips. New cases cover active/closed WAL source preservation, excluded
+  project and database links, refused payload links, overlapping roots, and
+  existing-target preservation.
+- Real pnpm 11.7.0 with two synthetic packages: private install succeeded and
+  created its own two-entry index; runtime returned `leaf:root`. Complete source
+  store/profile inventories stayed identical and copied content had independent
+  inodes. Two tarballs were fetched from the local fixture registry, with no
+  third-party network. This proves the copy/install mechanism, not the server's
+  three business rehearsals, which still await execution.
