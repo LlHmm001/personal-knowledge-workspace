@@ -164,3 +164,46 @@ Final local checks: Node 22 focused suites 77/77, zero skips; real synthetic
 entry kept all 11 trace records in logs, forwarding, and report (largest 1736
 bytes). All three owned command groups were absent afterward. This does not
 claim that the server hang has been reproduced or repaired.
+
+## Upstream worker-pool fix: isolated version comparison
+
+The returned `c303f62` server probe at `/LlHmm9527/pkw-pnpm-exit-Jp5xhc`
+reproduced the hang without an application listener. Old install exited zero;
+new add printed Done at 4047 ms and required SIGTERM at the 60-second deadline.
+Owned-child cleanup was confirmed. Live unit PIDs and restart counts were
+unchanged in the returned output. At Done +10s the main-thread resource list
+contained only stdout/stderr pipes, while allocation samples included the
+pnpm worker constructor. Those samples have omissions and no creation timestamp:
+they do **not** establish when that worker was created. A Node 22 worker can
+keep a process alive while those main-thread resource lists show only pipes.
+
+Upstream [pnpm PR 13226](https://github.com/pnpm/pnpm/pull/13226) fixes a
+matching mechanism: late worker work recreates a pool after shutdown, leaving
+an idle worker alive. [Official 11.23.0 release notes](https://github.com/pnpm/pnpm/releases/tag/v11.23.0)
+include that fix. Local deterministic checks execute the actual bundled
+worker APIs as work -> finishWorkers -> late work in private copies:
+11.7.0 completes the work but needs termination after 3 seconds; retaining the
+pool as upstream does exits zero in 360 ms; official 11.23.0 exits zero in
+419 ms. This establishes the upstream defect and fix, not yet the causal
+diagnosis or repair of the server's full artifact installation.
+
+`docs/delivery/repro-inflight/verify-pnpm-fix-handoff.sh` downloads official
+pnpm 11.23.0 into a new private tool directory, checks the pinned registry
+SHA512 before extraction, rejects links/special files/path escapes, and uses
+that launcher for the same installation-only probe. It does not install a
+global package manager. Only newly generated probe manifests use the 11.23.0
+pin; the original scene retains 11.7.0. The version check runs in the new work
+directory so the checkout's old pin cannot silently select the old tool.
+The old/new PKW receipts, source scene, support set, byte verification and
+deadlines stay the same. Normal exit zero remains mandatory; Done is not a
+success gate, and timeout remains failure. No application service is started.
+
+Local evidence for this handoff: 79 focused Node 22 tests passed, zero skips;
+the real entry with official 11.23.0 and ten synthetic PKW packages plus a peer
+completed version/install/add with exit zero. All owned child groups vanished,
+all 11 traces were retained, payloads and peer imports passed, and complete
+source byte/metadata inventories stayed unchanged. The archive's embedded
+verification/extraction was exercised with all 891 files; reuse was rejected.
+Server same-artifact verification and the three business rehearsals remain
+outstanding. Do not change system pnpm or claim production deployment from
+these local results.

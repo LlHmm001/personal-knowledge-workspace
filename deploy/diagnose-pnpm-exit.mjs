@@ -45,6 +45,8 @@ async function canonical(path) {
 }
 
 export async function diagnosePnpmExit(values, { signal, onProgress = emit, registryOptions = {} } = {}) {
+  const pnpmVersion = values['pnpm-version'] ?? '11.7.0'
+  if (!['11.7.0', '11.23.0'].includes(pnpmVersion)) throw reject('PKW_PROBE_PNPM', 'Select the original 11.7.0 or the verified upstream fix 11.23.0')
   const work = resolve(values['work-dir'])
   const inputs = Object.fromEntries(await Promise.all(['scene-dir', 'old-artifact-dir', 'artifact-dir'].map(async key => [key, await canonical(values[key])])) )
   const parent = await canonical(dirname(work))
@@ -54,13 +56,16 @@ export async function diagnosePnpmExit(values, { signal, onProgress = emit, regi
   await mkdir(work, { mode: 0o700 }) // Exclusive ownership; never reuse an earlier probe.
   const report = { diagnosticOnly: true, servicesStarted: false, installationSwitched: false, sourceScene: inputs['scene-dir'],
     node: { version: process.version, execPath: process.execPath, platform: process.platform, arch: process.arch },
-    pnpm: { path: pnpm, realpath: await realpath(pnpm), sha256: digest(await readFile(pnpm)) }, commands: [] }
+    pnpm: { expectedVersion: pnpmVersion, path: pnpm, realpath: await realpath(pnpm), sha256: digest(await readFile(pnpm)) }, commands: [] }
   const save = () => writeFile(join(work, 'report.json'), JSON.stringify(report, null, 2) + '\n', { mode: 0o600 })
   const dirs = Object.fromEntries(['tmp', 'config', 'cache', 'logs'].map(key => [key, join(work, key)]))
   let registry, phase = 'preflight'
   try {
     for (const dir of Object.values(dirs)) await mkdir(dir, { mode: 0o700 })
     for (const name of ['user', 'global']) await writeFile(join(dirs.config, name), '', { mode: 0o600 })
+    // Version checks run outside the checkout's package-manager pin. All generated
+    // profiles use this same pin; the original scene/profile is never rewritten.
+    await writeFile(join(work, 'package.json'), JSON.stringify({ private: true, packageManager: `pnpm@${pnpmVersion}` }) + '\n', { mode: 0o600 })
     const env = { PATH: `${dirname(process.execPath)}:${process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin'}`,
       ...(process.env.HOME ? { HOME: process.env.HOME } : {}), LANG: 'C.UTF-8', CI: 'true',
       TMPDIR: dirs.tmp, SQLITE_TMPDIR: dirs.tmp, NODE_DISABLE_COMPILE_CACHE: '1',
@@ -101,8 +106,8 @@ export async function diagnosePnpmExit(values, { signal, onProgress = emit, regi
     if (capacity.bavail * capacity.bsize < neededBytes) throw reject('PKW_PROBE_SPACE', 'Insufficient free space for the independent store and profile copies')
     report.capacity = { neededBytes, availableBytes: capacity.bavail * capacity.bsize }
     const beforeManifest = digest(await readFile(join(source, 'package.json')))
-    const pmVersion = await command('pnpm-version', ['--version'], repo, 30_000)
-    if (pmVersion !== '11.7.0') throw reject('PKW_PROBE_PNPM', 'pnpm must report exactly 11.7.0')
+    const pmVersion = await command('pnpm-version', ['--version'], work, 30_000)
+    if (pmVersion !== pnpmVersion) throw reject('PKW_PROBE_PNPM', `pnpm must report exactly ${pnpmVersion}`)
     report.pnpm.version = pmVersion
     phase = 'copy-private-store'; onProgress({ phase })
     await mkdir(join(work, 'store'), { mode: 0o700 })
@@ -147,7 +152,7 @@ export async function diagnosePnpmExit(values, { signal, onProgress = emit, regi
     const flags = url => ['--ignore-scripts', '--config.auto-install-peers=false', `--registry=${url}`, `--@deepseek-ai:registry=${url}`, `--store-dir=${store}`, '--config.minimum-release-age=0']
     const oldProfile = join(work, 'old-profile'), candidate = join(work, 'candidate')
     await mkdir(oldProfile, { mode: 0o700 })
-    await writeFile(join(oldProfile, 'package.json'), JSON.stringify({ private: true, type: 'module', name: 'pkw-exit-probe', packageManager: manifest.packageManager, dependencies: manifest.dependencies }) + '\n', { mode: 0o600 })
+    await writeFile(join(oldProfile, 'package.json'), JSON.stringify({ private: true, type: 'module', name: 'pkw-exit-probe', packageManager: `pnpm@${pnpmVersion}`, dependencies: manifest.dependencies }) + '\n', { mode: 0o600 })
     await writeFile(join(oldProfile, 'pnpm-workspace.yaml'), 'packages: []\nnodeLinker: hoisted\nautoInstallPeers: false\n', { mode: 0o600 })
     await openRegistry(old, oldSupport, true)
     await command('install-old', ['install', ...flags(registry.url)], oldProfile, 120_000)
@@ -178,8 +183,9 @@ export async function diagnosePnpmExit(values, { signal, onProgress = emit, regi
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const { values } = parseArgs({ options: Object.fromEntries(['work-dir', 'scene-dir', 'old-artifact-dir', 'artifact-dir', 'old-version', 'version', 'pnpm-bin'].map(key => [key, { type: 'string' }])) })
-  if (Object.keys(values).length !== 7) throw new Error('Supply work-dir, scene-dir, old-artifact-dir, artifact-dir, old-version, version and pnpm-bin')
+  const required = ['work-dir', 'scene-dir', 'old-artifact-dir', 'artifact-dir', 'old-version', 'version', 'pnpm-bin']
+  const { values } = parseArgs({ options: Object.fromEntries([...required, 'pnpm-version'].map(key => [key, { type: 'string' }])) })
+  if (required.some(key => !values[key])) throw new Error('Supply work-dir, scene-dir, old-artifact-dir, artifact-dir, old-version, version and pnpm-bin')
   const controller = new AbortController()
   const onSignal = () => controller.abort()
   process.on('SIGTERM', onSignal); process.on('SIGINT', onSignal)

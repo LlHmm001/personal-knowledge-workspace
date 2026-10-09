@@ -44,7 +44,26 @@ test('missing release receipt preserves diagnostic failure and starts no command
   assert.deepEqual(report.commands, [])
   assert.equal(report.servicesStarted, false)
   assert.equal(report.installationSwitched, false)
+  assert.equal(report.pnpm.expectedVersion, '11.7.0')
   assert.equal(JSON.parse(await readFile(join(values['work-dir'], 'report.json'), 'utf8')).status, report.status)
+})
+
+test('fixed-version diagnostic pins only its own new working directory', async t => {
+  const { values, inputs } = await fixture(t)
+  const original = '{"packageManager":"pnpm@11.7.0"}\n'
+  await writeFile(join(inputs, 'package.json'), original)
+  const report = await diagnosePnpmExit({ ...values, 'pnpm-version': '11.23.0' }, { onProgress: () => {} })
+  assert.equal(report.pnpm.expectedVersion, '11.23.0')
+  assert.equal(JSON.parse(await readFile(join(values['work-dir'], 'package.json'), 'utf8')).packageManager, 'pnpm@11.23.0')
+  assert.equal(await readFile(join(inputs, 'package.json'), 'utf8'), original)
+  assert.deepEqual(report.commands, [])
+  assert.equal(report.status, 'pnpm-exit-probe-stopped') // Missing artifacts never become acceptance.
+})
+
+test('unreviewed pnpm version is rejected before creating diagnostic output', async t => {
+  const { values } = await fixture(t)
+  await assert.rejects(diagnosePnpmExit({ ...values, 'pnpm-version': 'latest' }), { code: 'PKW_PROBE_PNPM' })
+  await assert.rejects(readFile(join(values['work-dir'], 'package.json')), { code: 'ENOENT' })
 })
 
 test('private trace parser keeps early records beyond a log tail and rejects malformed lines separately', async t => {
