@@ -124,3 +124,43 @@ advertised a 600-second keep-alive. These are counterexamples to proposed
 causes, not a server fix. Server runtime/entry metadata and live resource
 evidence are still needed. Do not increase the deadline or treat Done as an
 exit-zero substitute; preserve the failed scene.
+
+## Bounded installation-only exit probe
+
+The server reports Node `v22.23.1` at `/root/.hermes/node/bin/node`, with global
+pnpm at `/usr/local/lib/node_modules/pnpm/bin/pnpm.mjs` using `env node`.
+Repeating the ten-package primitive with checksum-verified official Node
+22.23.1 on this Mac still exited normally (8 ms direct, 7 ms through the
+shebang). This does not reproduce Linux x64 behavior or establish the cause.
+
+`docs/delivery/repro-inflight/diagnose-pnpm-handoff.sh` runs
+`deploy/diagnose-pnpm-exit.mjs` in a fresh data-disk directory. It reads the
+preserved failed scene's assembled manifest, cached package bytes, and support
+tarballs, plus the original old/new release receipts and archives. It never
+reads application databases, creates an application listener, or touches live
+services. It installs a new old profile into a new private store, copies that
+profile to a candidate, closes the old registry, then runs the original add
+parameters against a new registry. The peer targets come from the failed
+rehearsal's actual repacked support set. A copied existing node_modules tree
+cannot be used with a different store: pnpm would reject its store binding.
+
+Budgets are 30 seconds for pnpm version, 120 seconds for old installation,
+and 60 seconds for add, followed by bounded owned-process termination if needed.
+The opt-in preload records process/resource metadata at startup, Done, 2/10
+seconds after Done if still alive, and normal exit. Timers are unreferenced;
+no termination decision depends on Done. Each trace is at most 3500 UTF-8
+bytes, with bounded resource creation locations and explicit omission counts.
+The parser reads the full private log rather than a tail, keeping malformed
+diagnostics separate from the command's actual exit and cleanup outcome.
+
+Local validation includes normal/held child processes, trace byte limits,
+source and existing-output protection, and a real Node 22 installation probe
+using ten synthetic PKW tarballs plus a support peer. The original scene and
+artifacts stayed byte/metadata identical, child groups disappeared, and the
+candidate contained the new payload. This is an installation diagnostic,
+not completion of any business rehearsal or production acceptance.
+
+Final local checks: Node 22 focused suites 77/77, zero skips; real synthetic
+entry kept all 11 trace records in logs, forwarding, and report (largest 1736
+bytes). All three owned command groups were absent afterward. This does not
+claim that the server hang has been reproduced or repaired.

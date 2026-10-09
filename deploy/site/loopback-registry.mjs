@@ -114,6 +114,7 @@ export async function startLoopbackRegistry(options = {}) {
         versions: { [manifest.version]: manifest },
         time: { [manifest.version]: new Date().toISOString() },
       })
+      return { name: manifest.name, version: manifest.version, sha256: createHash('sha256').update(bytes).digest('hex') }
     },
     close: () => new Promise(done => server.close(done)),
   }
