@@ -377,7 +377,7 @@ test('copy: a clean existing root passes re-verification, so reuse is allowed on
   }
 })
 
-test('rehearsal: two consecutive runs refuse the preserved copy and configure nothing', async () => {
+test('rehearsal: isolated-copy refusal is preserved and an existing work directory cannot be adopted', async () => {
   const { execFile } = await import('node:child_process')
   const { promisify } = await import('node:util')
   const run = promisify(execFile)
@@ -390,13 +390,16 @@ test('rehearsal: two consecutive runs refuse the preserved copy and configure no
     await symlink(outside, join(source.root, 'spaces', source.spaceId, 'link-to-outside'))
     // The driver seeds its old release from a profile before it copies data, so it is given a
     // synthetic one: the refusal under test happens in the copy phase, which follows.
-    const { makeSyntheticHarness } = await import('./helpers/synthetic-harness.mjs')
     const profileSource = join(workDir, 'profile-source')
-    await makeSyntheticHarness(profileSource)
+    const webPackage = join(profileSource, 'node_modules/@deepseek-ai/dsh-pkw-web')
+    await mkdir(webPackage, { recursive: true })
+    await writeFile(join(profileSource, 'package.json'), '{}')
+    await writeFile(join(webPackage, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-pkw-web', version: '0.9.8-rehearsal' }))
+    const runDirectory = join(workDir, 'fresh-run')
     const args = [
-      '--work-dir', workDir, '--data-source', source.root, '--profile-source', profileSource,
+      '--work-dir', runDirectory, '--data-source', source.root, '--profile-source', profileSource,
       '--artifact-dir', join(workDir, 'artifacts-that-do-not-exist'),
-      '--version', '0.9.9-rehearsal', '--port', '42777',
+      '--version', '0.9.9-rehearsal', '--old-version', '0.9.8-rehearsal', '--port', '42777',
     ]
     const first = await run(process.execPath, [driver, ...args], { encoding: 'utf8' }).then(() => null, error => error)
     assert.ok(first, 'the first rehearsal must refuse a copy that is not isolated')
@@ -404,25 +407,27 @@ test('rehearsal: two consecutive runs refuse the preserved copy and configure no
     assert.match(first.stderr, /copy-not-self-contained/)
     assert.match(first.stderr, /"preserved": true/)
     // The refusal is recorded, and the copy is still there: this is the scene the second run finds.
-    const dataRoot = join(workDir, 'data')
+    const dataRoot = join(runDirectory, 'data')
     assert.equal(existsSync(join(dataRoot, 'identity.sqlite')), true)
-    assert.equal(existsSync(join(workDir, 'collaboration.json')), false, 'nothing may be configured on a refused copy')
+    assert.equal(existsSync(join(runDirectory, 'collaboration.json')), false, 'nothing may be configured on a refused copy')
+    assert.equal(existsSync(join(runDirectory, 'listener.pid')), false, 'no listener may be started')
+    const originalReport = await readFile(join(runDirectory, 'report.json'), 'utf8')
 
-    // The second run of the same work directory finds that copy. It must verify it again, refuse
-    // it again, and still configure nothing.
+    // A repeated CLI invocation refuses the existing work directory before it can adopt any
+    // former pid record or overwrite the preserved refusal. Library reuse is tested separately.
     const second = await run(process.execPath, [driver, ...args], { encoding: 'utf8' }).then(() => null, error => error)
     assert.ok(second, 'the second rehearsal must refuse the preserved copy too')
     assert.equal(second.code, 1, `unexpected exit ${second.code}: ${second.stdout}`)
-    assert.match(second.stderr, /copy-not-self-contained/)
-    assert.match(second.stderr, /"phase": "re-verified"/)
-    assert.match(second.stderr, /"preserved": true/)
-    assert.equal(existsSync(join(workDir, 'collaboration.json')), false, 'the second run must not configure the refused copy')
-    // The scene survives both runs, and the report records the second refusal as a re-verification.
+    assert.match(second.stderr, /EEXIST/)
+    assert.equal(existsSync(join(runDirectory, 'collaboration.json')), false, 'the second run must not configure the refused copy')
+    assert.equal(existsSync(join(runDirectory, 'listener.pid')), false)
+    assert.equal(await readFile(join(runDirectory, 'report.json'), 'utf8'), originalReport, 'the second run must not overwrite the first refusal evidence')
+    // The scene and original isolation report survive both runs unchanged.
     assert.equal(existsSync(join(dataRoot, 'identity.sqlite')), true)
     assert.equal(existsSync(join(dataRoot, 'spaces', source.spaceId, 'link-to-outside')), true, 'the failure scene must not be cleaned up')
-    const report = JSON.parse(await readFile(join(workDir, 'report.json'), 'utf8'))
+    const report = JSON.parse(originalReport)
     assert.equal(report.status, 'copy-not-self-contained')
-    assert.equal(report.phases.copyData.reused, true)
+    assert.equal(report.phases.copyData.reused, false)
     assert.ok(report.phases.copyData.leaks.length >= 1)
   } finally {
     await rm(source.root, { recursive: true, force: true })

@@ -146,8 +146,9 @@ export async function probeListenerStop({ pid, port, lockPath, kill = process.ki
 /**
  * Manage exactly one listener process for one data root and port.
  *
- * The pid file is the single source of truth: whoever is recorded there is the process the stop
- * hook stops and the process every later observation is made of. Nothing in here ever decides that
+ * The saved ChildProcess is the authority for signals; the pid file is diagnostic evidence only.
+ * Stop observes that handle's exit and close, and the independent probe observes the owned pid,
+ * port and lock. Nothing in here ever decides that
  * a listener is up because a port answered — the recorded process has to be alive *and* the port
  * has to be answering, and a child that died is reported as a failure to start rather than papered
  * over by whatever else happens to be listening.
@@ -159,9 +160,12 @@ export function listenerManager({
   logDir = join(root, 'logs'),
   bootstrapEnv = 'PKW_E2E_BOOTSTRAP',
   extraEnv = {},
+  spawnChild = spawn, startupTimeoutMs = 30_000, stopTimeoutMs = 30_000, killTimeoutMs = 5_000,
 } = {}) {
   if (!root || !port || !scriptsDir || !repoRoot) throw new Error('listenerManager needs root, port, scriptsDir and repoRoot')
   const state = { current: null }
+  let owned = null
+  let starting = null
 
   const readPidFile = async () => {
     if (!existsSync(pidFile)) return null
@@ -170,13 +174,9 @@ export function listenerManager({
     try { return JSON.parse(text) } catch { return { pid: Number(text) || null, version: null } }
   }
 
-  const alive = pid => {
-    if (!Number.isInteger(pid) || pid <= 0) return false
-    try { process.kill(pid, 0); return true } catch (error) { return error?.code === 'EPERM' }
-  }
-
   /** Start the release at `<root>/current`, record its pid, and prove *that* process is serving. */
-  const start = async () => {
+  const startOnce = async () => {
+    if (owned && !owned.closed) throw new Error('the previously owned listener has not closed')
     await mkdir(logDir, { recursive: true })
     const link = join(root, 'current')
     const releaseDir = await realpath(link)
@@ -187,33 +187,50 @@ export function listenerManager({
     // seeded with, so reading it names a release by the wrong version — which is how a start hook
     // comes to report having started the previous release.
     const version = await releaseVersion(profileDir)
+    if (!version) throw new Error(`the release at ${releaseDir} declares no version in its own packages`)
     const logged = join(logDir, `listener-${version}-${Date.now()}.log`)
-    const child = spawn(process.execPath, [
+    const child = spawnChild(process.execPath, [
       join(scriptsDir, 'serve-collaboration.mjs'),
       '--profile', profileDir, '--config', configPath, '--port', String(port),
     ], {
       env: { ...process.env, [bootstrapEnv]: password, ...extraEnv },
-      stdio: ['ignore', 'pipe', 'pipe'], detached: true,
+      // Keep the owned listener inside a rehearsal driver's process group, so a bounded
+      // outer runner can clean up its entire group if the driver itself cannot finish.
+      stdio: ['ignore', 'pipe', 'pipe'], detached: false,
     })
-    if (!version) {
-      await writeFile(pidFile, JSON.stringify({ pid: child.pid, version: null, port, startedAt: new Date().toISOString() }, null, 2) + '\n', { mode: 0o600 })
-      throw new Error(`the release at ${releaseDir} declares no version in its own packages, so which release was started cannot be reported`)
-    }
+    // Register the lifetime before any await. The saved handle, never a pid read from disk,
+    // authorizes signals. Exit is recorded separately from close so piped diagnostics drain.
     const frames = []
-    const capture = chunk => { frames.push(String(chunk)) }
-    child.stdout.on('data', capture)
-    child.stderr.on('data', capture)
-    child.unref()
+    const current = { child, pid: child.pid, version, frames, logged, ended: false, closed: false, outcome: null, stopPromise: null }
+    owned = current
+    let resolveClosed
+    current.closePromise = new Promise(done => { resolveClosed = done })
+    child.on('error', error => {
+      current.outcome = { exitCode: child.exitCode ?? null, signal: child.signalCode ?? null, spawnError: error.message }
+      if (!child.pid) current.ended = true
+    })
+    child.once('exit', (exitCode, signal) => {
+      current.ended = true
+      current.outcome = { exitCode, signal: signal ?? null, spawnError: current.outcome?.spawnError ?? null }
+    })
+    child.once('close', (exitCode, signal) => {
+      current.ended = true; current.closed = true
+      current.outcome ??= { exitCode, signal: signal ?? null, spawnError: null }
+      resolveClosed(current.outcome)
+    })
+    const capture = chunk => { frames[0] = ((frames[0] ?? '') + String(chunk)).slice(-65536) }
+    child.stdout?.on('data', capture)
+    child.stderr?.on('data', capture)
     await writeFile(pidFile, JSON.stringify({ pid: child.pid, version, port, startedAt: new Date().toISOString(), log: logged }, null, 2) + '\n', { mode: 0o600 })
     state.current = { pid: child.pid, version, port, log: logged, frames }
 
     // The child has to be *this* process serving, not a port that happened to answer. A child that
     // exited is a failed start even if something else is listening on the port, so liveness is
     // checked first and reported with the child's own output.
-    const deadline = Date.now() + 30_000
+    const deadline = Date.now() + startupTimeoutMs
     let listening = false
     while (Date.now() < deadline) {
-      if (!alive(child.pid)) {
+      if (current.ended || current.outcome?.spawnError) {
         await writeFile(logged, frames.join(''))
         throw new Error(`the listener for ${version} exited before it served (pid ${child.pid}): ${frames.join('').slice(-600)}`)
       }
@@ -225,38 +242,55 @@ export function listenerManager({
     if (!listening) throw new Error(`the listener for ${version} never reported listening (pid ${child.pid}): ${frames.join('').slice(-600)}`)
     return { pid: child.pid, version, port, log: logged }
   }
+  const start = () => {
+    if (starting) return starting
+    starting = startOnce().finally(() => { starting = null })
+    return starting
+  }
 
-  /** Stop the recorded listener and report what was observed, never editing the pid file to invent it. */
-  const stop = async () => {
-    const recorded = await readPidFile()
-    if (!recorded?.pid) return { requested: false, reason: 'no listener was recorded as running' }
-    const observed = { pid: recorded.pid, version: recorded.version ?? null, signalled: false, exited: false, exit: null }
-    try { process.kill(recorded.pid, 'SIGTERM'); observed.signalled = true } catch (error) {
-      observed.note = `the signal could not be delivered: ${error?.code ?? error.message}`
-    }
-    for (let i = 0; i < 200; i++) {
-      if (!alive(recorded.pid)) { observed.exited = true; break }
-      await new Promise(resolvePromise => setTimeout(resolvePromise, 50))
-    }
-    if (!observed.exited) {
-      try { process.kill(recorded.pid, 'SIGKILL') } catch { /* gone */ }
-      observed.killed = true
-      for (let i = 0; i < 100; i++) {
-        if (!alive(recorded.pid)) { observed.exited = true; break }
-        await new Promise(resolvePromise => setTimeout(resolvePromise, 50))
+  const waitClosed = (current, timeoutMs) => {
+    if (current.closed) return Promise.resolve(current.outcome)
+    return new Promise(done => {
+      const timer = setTimeout(() => done(null), timeoutMs)
+      current.closePromise.then(outcome => { clearTimeout(timer); done(outcome) })
+    })
+  }
+
+  /** Stop only the owned handle and report its actual outcome, without rewriting the pid file. */
+  const stop = () => {
+    const current = owned
+    if (!current) return Promise.resolve({ requested: false, reason: 'this manager has not spawned a listener' })
+    if (current.stopPromise) return current.stopPromise
+    current.stopPromise = (async () => {
+      const observed = { requested: true, pid: current.pid ?? null, version: current.version, signalled: false, exited: false, exit: null, alreadyExited: current.ended }
+      const signal = name => {
+        if (current.ended) return
+        try { if (current.child.kill(name)) observed.signalled = true }
+        catch (error) { observed.signalError = error?.code ?? error.message }
       }
-    }
-    // The record is kept, not erased. The stop probe asks "is the recorded writer gone?", and a
-    // record that has been deleted leaves it with nothing to ask about — which it would have to
-    // report as undecided, refusing a stop that actually happened. The recorded pid is the last
-    // known writer, and that is the right thing to keep pointing at.
-    state.current = null
-    return { requested: true, ...observed }
+      signal('SIGTERM')
+      let outcome = await waitClosed(current, stopTimeoutMs)
+      if (!outcome && !current.ended) {
+        observed.killed = true
+        signal('SIGKILL')
+        outcome = await waitClosed(current, killTimeoutMs)
+      }
+      observed.exited = current.ended
+      observed.closed = current.closed
+      observed.exit = outcome ?? current.outcome
+      observed.graceful = current.closed && !observed.killed && !observed.signalError && !observed.alreadyExited && observed.exit?.exitCode === 0 && !observed.exit?.signal && !observed.exit?.spawnError
+      // A descendant can retain a pipe after the child exits. Bound diagnostic draining too.
+      if (!current.closed) { current.child.stdout?.destroy(); current.child.stderr?.destroy() }
+      await writeFile(current.logged, current.frames.join(''), { mode: 0o600 })
+      if (owned === current) state.current = null
+      return observed
+    })()
+    return current.stopPromise
   }
 
   /** The independent stop probe the transaction asks. Separate from `stop`, on purpose. */
   const isStopped = async () => {
-    const recorded = await readPidFile()
+    const recorded = owned ? { pid: owned.pid } : await readPidFile()
     // No record at all is knowledge, not an unanswerable question: this manager starts the only
     // listener that could hold this root, and it writes the record before the child can bind. A
     // missing record therefore says no listener of ours was ever started — the state the first

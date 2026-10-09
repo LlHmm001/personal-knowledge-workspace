@@ -22,12 +22,43 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import { spawn } from 'node:child_process'
-import { switchRelease, profileVersion, currentRelease, checkReachable } from './switch-release.mjs'
 import { copyDataRoot, verifyExistingCopy, isNotIsolated } from '../scripts/copy-data-root.mjs'
 import { startLoopbackRegistry } from './site/loopback-registry.mjs'
+import { listenerManager } from './site/process-stop-state.mjs'
+
+/** A declared old version is a check, never permission to relabel copied code. */
+export async function assertRehearsalProfileVersion(profile, expectedVersion) {
+  const scope = join(profile, 'node_modules/@deepseek-ai')
+  const names = (await readdir(scope)).filter(name => name.startsWith('dsh-pkw-')).sort()
+  if (!names.includes('dsh-pkw-web')) throw new Error('the source profile contains no PKW web package')
+  const packages = []
+  for (const name of names) {
+    const manifest = JSON.parse(await readFile(join(scope, name, 'package.json'), 'utf8'))
+    if (manifest.name !== `@deepseek-ai/${name}` || manifest.version !== expectedVersion) {
+      const error = new Error(`source package ${name} declares ${manifest.version}, expected ${expectedVersion}; old releases must not be relabelled`)
+      error.code = 'PKW_REHEARSAL_SOURCE_VERSION_MISMATCH'
+      throw error
+    }
+    packages.push({ name: manifest.name, version: manifest.version })
+  }
+  return packages
+}
+
+/** Preserve both the stop outcome and its independent observation, including failures. */
+export async function stopRehearsalListener(manager) {
+  const result = { ok: false, stop: null, evidence: null, errors: [] }
+  try { result.stop = await manager.stop() } catch (error) { result.errors.push({ phase: 'stop', message: error.message }) }
+  try { result.evidence = await manager.isStopped() } catch (error) { result.errors.push({ phase: 'probe', message: error.message }) }
+  result.ok = result.errors.length === 0 && result.evidence?.known === true && result.evidence.stopped === true
+    && (result.stop?.requested === false || result.stop?.graceful === true)
+  result.confirmed = result.evidence?.known === true && result.evidence.stopped === true
+  result.error = result.ok ? null : { code: 'PKW_REHEARSAL_CLEANUP_FAILED', message: 'owned listener cleanup was not graceful and independently confirmed' }
+  return result
+}
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const { values } = parseArgs({ options: {
+export async function runRehearsal(args = process.argv.slice(2)) {
+const { values } = parseArgs({ args, options: {
   'work-dir': { type: 'string' }, 'data-source': { type: 'string' }, 'profile-source': { type: 'string' },
   'artifact-dir': { type: 'string' }, version: { type: 'string' }, port: { type: 'string' },
   'old-version': { type: 'string' }, 'store-dir': { type: 'string' }, 'bootstrap-username': { type: 'string' },
@@ -53,41 +84,39 @@ const { values } = parseArgs({ options: {
   // as the expected fault, so it is a flag of the rehearsal and never part of a deployment path.
   'break-write': { type: 'string' },
 } })
-if (!values['work-dir'] || !values['data-source'] || !values['profile-source'] || !values['artifact-dir'] || !values.version || !values.port) {
-  process.stderr.write('Usage: node deploy/rehearse-release.mjs --work-dir DIR --data-source DIR --profile-source DIR --artifact-dir DIR --version V --port N [--old-version V] [--fail-install] [--modify-candidate-after-install] [--force-verify-failure]\n  [--write-during-serve] [--expect-mode OCTAL] [--store-dir DIR] [--owner-password P] [--set-owner-password]\n')
-  process.exit(2)
+if (!values['work-dir'] || !values['data-source'] || !values['profile-source'] || !values['artifact-dir'] || !values.version || !values.port || !values['old-version']) {
+  process.stderr.write('Usage: node deploy/rehearse-release.mjs --work-dir NEW_DIR --data-source DIR --profile-source DIR --artifact-dir DIR --version V --old-version V --port N [--fail-install] [--modify-candidate-after-install] [--force-verify-failure]\n  [--write-during-serve] [--expect-mode OCTAL] [--store-dir DIR] [--owner-password P] [--set-owner-password]\n')
+  return 2
 }
 const workDir = resolve(values['work-dir'])
 const version = values.version
 const port = Number(values.port)
-const oldVersion = values['old-version'] ?? '0.0.0-rehearsal-old'
+const oldVersion = values['old-version']
+if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('port must be an integer from 1 to 65535')
+if (oldVersion === version) throw new Error('the new and old release versions must differ')
+const sourcePackages = await assertRehearsalProfileVersion(resolve(values['profile-source']), oldVersion)
 const report = { version, oldVersion, workDir, port, phases: {}, startedAt: new Date().toISOString() }
 
-await mkdir(workDir, { recursive: true, mode: 0o700 })
+// A prior pid file is not ownership evidence. Never adopt or signal a previous run's process.
+await mkdir(workDir, { mode: 0o700 })
 const root = join(workDir, 'root')
 const logDir = join(workDir, 'logs')
 await mkdir(logDir, { recursive: true, mode: 0o700 })
 
-// ── the release in service: a copy of the supplied profile, labelled with the old version
+// ── the release in service: a copy of the verified old profile, without changing its version
 const oldRelease = join(root, 'releases', oldVersion, 'profile')
 if (!existsSync(join(oldRelease, 'package.json'))) {
   await mkdir(join(root, 'releases'), { recursive: true })
   await cp(resolve(values['profile-source']), oldRelease, { recursive: true, dereference: false, verbatimSymlinks: true })
-  await writeFile(join(oldRelease, 'pnpm-workspace.yaml'), 'packages: []\n')
+  await writeFile(join(oldRelease, 'pnpm-workspace.yaml'), 'packages: []\nnodeLinker: hoisted\nautoInstallPeers: false\n')
   // The seed carries the profile's own `.npmrc`, which pins the registry the profile was built
   // from — a one-off loopback registry that is gone by the time a rehearsal runs. Left in place it
   // makes every install hang against a dead port. The transaction passes its own registry
   // explicitly, so the seed's pinned one is removed here and the rehearsal uses the live one.
   await rm(join(oldRelease, '.npmrc'), { force: true })
-  for (const entry of await readdir(join(oldRelease, 'node_modules/@deepseek-ai'), { withFileTypes: true }).catch(() => [])) {
-    if (!entry.isDirectory() || !entry.name.startsWith('dsh-pkw-')) continue
-    const manifestPath = join(oldRelease, 'node_modules/@deepseek-ai', entry.name, 'package.json')
-    const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
-    manifest.version = oldVersion
-    await writeFile(manifestPath, JSON.stringify(manifest, null, 2) + '\n')
-  }
+  await assertRehearsalProfileVersion(oldRelease, oldVersion)
   await symlink(join('releases', oldVersion), join(root, 'current'))
-  report.phases.seedRelease = { from: resolve(values['profile-source']), to: oldRelease, oldVersion }
+  report.phases.seedRelease = { from: resolve(values['profile-source']), to: oldRelease, oldVersion, packages: sourcePackages }
 }
 
 // ── the data copy: the shared copier writes straight to the final destination, and the library
@@ -112,7 +141,9 @@ async function refuseDataRoot(error, phase) {
     status: report.status, phase, message: error.message, target: dataRoot, preserved: true,
     leaks: (error.leaks ?? []).slice(0, 3), writableProblems: (error.writableProblems ?? []).slice(0, 3),
   }, null, 2))
-  process.exit(1)
+  const refusal = new Error('the rehearsal data copy is not isolated')
+  refusal.code = 'PKW_REHEARSAL_COPY_NOT_ISOLATED'
+  throw refusal
 }
 // An existing data directory is re-verified in full, never trusted because it is there. A copy
 // that failed the gate is deliberately kept on disk, so the next run of the same work directory
@@ -144,6 +175,8 @@ if (existsSync(join(dataRoot, 'identity.sqlite'))) {
   }
 }
 
+const { switchRelease, currentRelease, checkReachable } = await import('./switch-release.mjs')
+
 // The copy's account is what every later step logs in with, so it is set explicitly rather than
 // assumed. The hash format is the one the runtime validates; the salt is fresh per run.
 if (values['set-owner-password'] || values['owner-password']) {
@@ -169,34 +202,43 @@ await writeFile(configPath, JSON.stringify({
   bootstrapPasswordEnv: 'PKW_REHEARSAL_BOOTSTRAP',
 }, null, 2) + '\n', { mode: 0o600 })
 const pidFile = join(workDir, 'listener.pid')
-let listener = null
-/**
- * Stop this driver's listener and report what actually happened. A stop that times out is
- * not graceful: the pid file is kept (it still names a live process) and the failure is
- * raised so the transaction's recovery path runs.
- */
+const manager = listenerManager({
+  root, port, dataRoot, configPath, pidFile, logDir, repoRoot, scriptsDir: join(repoRoot, 'scripts'),
+  password: 'synthetic', bootstrapEnv: 'PKW_REHEARSAL_BOOTSTRAP',
+})
+report.listenerHistory = []
+const interruption = new AbortController()
+let startingListener = null
+let interruptedCleanup = null
+const onSignal = signal => {
+  if (interruption.signal.aborted) return
+  const error = new Error(`rehearsal interrupted by ${signal}`)
+  error.code = 'PKW_REHEARSAL_INTERRUPTED'
+  report.interruption = { signal, code: error.code }
+  interruption.abort(error)
+  // A startup already underway must finish recording its child before cleanup claims absence.
+  interruptedCleanup = (async () => {
+    await startingListener?.catch(() => {})
+    report.cleanup = await stopRehearsalListener(manager)
+    report.status = error.code
+    report.exit = { code: 1, cleanupConfirmed: report.cleanup.confirmed }
+    await writeFile(join(workDir, 'report.json'), JSON.stringify(report, null, 2) + '\n', { mode: 0o600 })
+  })().catch(failure => {
+    report.cleanup = { ok: false, confirmed: false, error: { code: 'PKW_REHEARSAL_CLEANUP_FAILED', message: failure.message } }
+    console.error(JSON.stringify({ status: 'interrupted-cleanup-failed', message: failure.message }))
+  })
+}
+const onTerm = () => onSignal('SIGTERM'), onInt = () => onSignal('SIGINT')
+process.on('SIGTERM', onTerm); process.on('SIGINT', onInt)
 const stopHook = async () => {
-  if (!existsSync(pidFile)) { report.phases.stop = { alreadyStopped: true }; return }
-  const pid = Number((await readFile(pidFile, 'utf8')).trim())
-  try { process.kill(pid, 'SIGTERM') } catch { /* already gone */ }
-  let alive = false
-  for (let i = 0; i < 100; i++) {
-    try { process.kill(pid, 0); alive = true } catch { alive = false; break }
-    await new Promise(r => setTimeout(r, 100))
-  }
-  if (alive) {
-    report.phases.stop = { pid, graceful: false, alive: true }
-    throw new Error(`listener ${pid} did not stop within the drain budget`)
-  }
-  await rm(pidFile, { force: true })
-  report.phases.stop = { pid, graceful: true }
+  const outcome = await stopRehearsalListener(manager)
+  report.phases.stop = outcome
+  report.listenerHistory.push({ action: 'stop', ...outcome })
+  if (!outcome.ok) throw new Error('the owned listener did not stop gracefully with independently confirmed absence')
+  return outcome
 }
 /** The site's own answer to "is it stopped?", used when a stop reports failure. */
-const isStopped = async () => {
-  if (!existsSync(pidFile)) return { known: true, stopped: true }
-  const pid = Number((await readFile(pidFile, 'utf8')).trim())
-  try { process.kill(pid, 0); return { known: true, stopped: false } } catch { return { known: true, stopped: true } }
-}
+const isStopped = () => manager.isStopped()
 
 /**
  * Run the official collaboration verifier in enforcing mode, passing the release version
@@ -217,12 +259,12 @@ async function runVerifier(expectedVersion, mode) {
     '--expected-version', expectedVersion,
   ]
   const output = await new Promise((resolvePromise, reject) => {
-    const child = spawn(process.execPath, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(process.execPath, args, { stdio: ['ignore', 'pipe', 'pipe'], signal: interruption.signal, timeout: 60_000 })
     let out = ''
     child.stdout.on('data', c => { out += c })
     child.stderr.on('data', c => { out += c })
     child.once('error', reject)
-    child.once('exit', code => code === 0 ? resolvePromise(out) : reject(new Error(out.trim().split('\n').slice(-3).join(' | ') || `verifier exited ${code}`)))
+    child.once('close', code => code === 0 ? resolvePromise(out) : reject(new Error(out.trim().split('\n').slice(-3).join(' | ') || `verifier exited ${code}`)))
   })
   return JSON.parse(output.trim().split('\n').filter(Boolean).slice(-1)[0])
 }
@@ -275,7 +317,7 @@ function apiClient() {
     if (body !== undefined) headers['Content-Type'] = 'application/json'
     if (csrf) headers['X-PKW-CSRF'] = csrf
     if (jar.size) headers.Cookie = [...jar].map(([k, v]) => `${k}=${v}`).join('; ')
-    const response = await fetch(origin + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), redirect: 'manual' })
+    const response = await fetch(origin + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), redirect: 'manual', signal: AbortSignal.any([interruption.signal, AbortSignal.timeout(30_000)]) })
     for (const raw of response.headers.getSetCookie?.() ?? []) {
       const [pair] = raw.split(';'); const at = pair.indexOf('=')
       if (at > 0) jar.set(pair.slice(0, at), pair.slice(at + 1))
@@ -425,27 +467,27 @@ async function onlySpaceId() {
   try { return db.prepare('SELECT id FROM spaces LIMIT 1').get().id } finally { db.close() }
 }
 
-const startHook = async () => {
+const startHook = () => {
+  interruption.signal.throwIfAborted()
+  startingListener = (async () => {
   const release = await currentRelease(root)
-  listener = spawn(process.execPath, [
-    join(repoRoot, 'scripts/serve-collaboration.mjs'),
-    '--profile', join(release, 'profile'), '--config', configPath, '--port', String(port),
-  ], { env: { ...process.env, PKW_REHEARSAL_BOOTSTRAP: 'synthetic' }, stdio: ['ignore', 'pipe', 'pipe'], detached: true })
-  let output = ''
-  listener.stdout.on('data', c => { output += c })
-  listener.stderr.on('data', c => { output += c })
-  listener.unref()
-  await writeFile(pidFile, String(listener.pid))
+  const started = await manager.start()
+  interruption.signal.throwIfAborted()
   const reachable = await checkReachable({ origin: `http://127.0.0.1:${port}`, timeoutMs: 30_000 })
-  if (!reachable.reachable) throw new Error(`${release} did not start: ${reachable.error}; ${output.slice(-300)}`)
-  report.phases.start = { release, pid: listener.pid }
+  const observed = await manager.isStopped()
+  if (!reachable.reachable || observed.observations?.process?.state !== 'alive') throw new Error(`${release} did not remain serving in its owned process`)
+  report.phases.start = { release, ...started }
+  report.listenerHistory.push({ action: 'start', ...report.phases.start })
+  })()
+  return startingListener.finally(() => { startingListener = null })
 }
 
 // ── artifacts: the release under test, served from a staged directory
-const registry = await startLoopbackRegistry()
+let registry
 const artifacts = []
 const support = []
 try {
+  registry = await startLoopbackRegistry()
   for (const entry of (await readdir(resolve(values['artifact-dir']), { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
     if (!entry.isDirectory()) continue
     const dir = join(resolve(values['artifact-dir']), entry.name)
@@ -478,6 +520,7 @@ try {
   report.supportArtifacts = support.length
 
   try {
+    await startHook()
     report.result = await switchRelease({
       root, version, artifacts, registry: registry.url, storeDir: values['store-dir'],
       allowFreshRelease: true, snapshotDir: join(workDir, 'snapshots', version),
@@ -555,9 +598,20 @@ try {
     report.phases.readBackAfterRollback = restored
     if (!restored.ok) report.status = 'rollback-data-not-readable'
   }
+} catch (error) {
+  report.status = error.code ?? 'failed'
+  report.error = { message: error.message, code: error.code ?? null }
 } finally {
-  await registry.close()
-  try { await stopHook() } catch { /* already stopped */ }
+  // Cleanup runs even if the registry or transaction fails. Its evidence gates the verdict.
+  await interruptedCleanup
+  report.cleanup = await stopRehearsalListener(manager)
+  try { await registry?.close() } catch (error) {
+    report.cleanup.ok = false
+    report.cleanup.error = { code: 'PKW_REHEARSAL_CLEANUP_FAILED', message: error.message }
+    report.cleanup.errors.push({ phase: 'registry-close', message: error.message })
+  }
+  await interruptedCleanup
+  process.off('SIGTERM', onTerm); process.off('SIGINT', onInt)
 }
 // Exit code policy:
 //   0  the release was activated and accepted, or the injected fault produced a
@@ -591,15 +645,22 @@ if (writeAcceptance) {
   else if (report.phases.readBackAfterRollback.ok !== true) writeAcceptanceProblems.push(`the read-back after the rollback did not pass: ${report.phases.readBackAfterRollback.reason ?? 'no reason recorded'}`)
 }
 report.writeAcceptance = { requested: writeAcceptance, problems: writeAcceptanceProblems, ok: writeAcceptanceProblems.length === 0 }
-const exitCode = (activated || (faultInjected && rollbackVerified)) && readBackOk && writeAcceptanceProblems.length === 0 ? 0 : 1
+const lifecycleOk = report.listenerHistory.every(entry => entry.action !== 'stop' || entry.ok === true)
+const exitCode = !interruption.signal.aborted && lifecycleOk && report.cleanup?.ok === true && (activated || (faultInjected && rollbackVerified)) && readBackOk && writeAcceptanceProblems.length === 0 ? 0 : 1
 // The report is written after the verdict is computed, so the verdict it records is the verdict the
 // process exits with: a report written before the write-acceptance gate would be missing the very
 // field that explains a non-zero exit.
-report.exit = { code: exitCode, faultInjected, activated, rollbackVerified, readBackOk }
+report.exit = { code: exitCode, faultInjected, activated, rollbackVerified, readBackOk, lifecycleOk, cleanupConfirmed: report.cleanup?.ok === true }
 await writeFile(join(workDir, 'report.json'), JSON.stringify(report, null, 2) + '\n', { mode: 0o600 })
 console.log(JSON.stringify({
   status: report.status, version, oldVersion, faultInjected, rollbackVerified, exitCode,
   writeAcceptance: report.writeAcceptance, readBack: report.phases.readBackAfterRollback?.ok ?? null,
   phases: Object.keys(report.phases), report: join(workDir, 'report.json'),
 }, null, 2))
-process.exit(exitCode)
+return exitCode
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try { process.exitCode = await runRehearsal() }
+  catch (error) { console.error(JSON.stringify({ status: error.code ?? 'failed', message: error.message })); process.exitCode = 1 }
+}

@@ -4,7 +4,9 @@ import { access, cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/pro
 import { createRequire } from 'node:module'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
-import { repoRoot } from './harness-config.mjs'
+import { fileURLToPath } from 'node:url'
+
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
 export const profileFiles = ['package.json', 'pnpm-lock.yaml', 'package-lock.json', '.npmrc', 'node_modules']
 export const sha256 = data => createHash('sha256').update(data).digest('hex')
