@@ -207,3 +207,38 @@ verification/extraction was exercised with all 891 files; reuse was rejected.
 Server same-artifact verification and the three business rehearsals remain
 outstanding. Do not change system pnpm or claim production deployment from
 these local results.
+
+## Server exit comparison passed; private pnpm wired into the serial matrix
+
+The user-returned `855721e` run at `/LlHmm9527/pkw-pnpm-fixed-SYFpPU`
+verified the official pnpm 11.23.0 archive, then completed version, old install,
+and new add with normal exit zero, no timeout and confirmed child cleanup.
+New add printed Done at 3953 ms and exited at 7657 ms. Both live services kept
+their original PIDs and zero restarts. This closes the installation-exit blocker
+for that server comparison; it does not complete the three business rehearsals.
+
+`rehearse-handoff.sh` now uses the same pinned archive verification and safe
+extraction in each new rehearsal work directory. The matrix accepts a paired
+`--pnpm-bin` / `--pnpm-version` selection. A private PATH launcher uses the
+actual Node executable and `--pm-on-fail=error`, covering nested installs as
+well as predecessor assembly. Only newly generated work/old/candidate manifests
+use 11.23.0. Checkout and source pins remain unchanged; an unexpected 11.7.0
+pin fails rather than downloading or selecting the old tool. The report records
+the tool entry and launcher hashes. Existing case deadlines, receipts, private
+store rebuilding, runtime import checks, write/rollback gates and cleanup
+confirmation remain enforced. No global tool or live service is changed.
+
+Validation: 85 focused Node 22 tests passed with zero skips. A separate real
+nested-install experiment used official pnpm 11.23.0, the actual private launcher,
+`createArtifactRunner`, `deployment.prepareInstall`, and runtime import checker
+with ten synthetic PKW packages plus a peer. Old install and nested new add both
+exited zero; all ten payload/import checks passed; old/source artifacts stayed
+unchanged and child process groups were gone. The copied runner retained 11.7.0
+while generated profiles used 11.23.0. The wrong-pin counterexample exited one
+in 330 ms without an install or automatic download. These synthetic packages
+verify tool selection and installation plumbing, not PKW business behavior.
+
+The next server run must finish all three serial cases and report
+`three-rehearsals-verified` with exit zero. Any first failure retains its scene
+and stops the matrix. Production deployment and recovery-material cleanup remain
+outside this rehearsal.

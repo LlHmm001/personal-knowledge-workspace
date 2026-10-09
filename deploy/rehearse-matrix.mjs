@@ -13,6 +13,7 @@ import { readReleaseArtifacts, verifyArtifactPayload } from './site/rehearsal-ar
 import { assertRehearsalVerdict } from './site/rehearsal-verdict.mjs'
 import { createArtifactRunner } from './site/rehearsal-reference.mjs'
 import { inspectPnpmStore, copyPnpmStore } from './site/rehearsal-store.mjs'
+import { preparePackageManager } from './site/rehearsal-package-manager.mjs'
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const inside = (root, value) => value === root || value.startsWith(root + sep)
@@ -176,10 +177,13 @@ export async function runMatrix(values, { signal } = {}) {
   const dirs = Object.fromEntries(['tmp', 'logs', 'cache', 'config', 'staging'].map(name => [name, join(work, name)]))
   for (const dir of Object.values(dirs)) await mkdir(dir, { mode: 0o700 })
   for (const name of ['npm-user', 'npm-global']) await writeFile(join(dirs.config, name), '', { mode: 0o600 })
-  const packageManager = JSON.parse(await readFile(join(repo, 'package.json'), 'utf8')).packageManager
-  if (!/^pnpm@\d+\.\d+\.\d+$/.test(packageManager ?? '')) throw failure('PKW_MATRIX_PM', 'A fixed pnpm version is required')
+  const sourcePackageManager = JSON.parse(await readFile(join(repo, 'package.json'), 'utf8')).packageManager
+  const selectedPm = await preparePackageManager({ work, sourcePackageManager,
+    pnpmBin: values['pnpm-bin'], pnpmVersion: values['pnpm-version'] })
+  const packageManager = selectedPm.packageManager
+  report.packageManagerSelection = selectedPm.evidence
   await writeFile(join(work, 'package.json'), JSON.stringify({ private: true, packageManager }) + '\n', { mode: 0o600 })
-  const env = { PATH: `${dirname(process.execPath)}:${process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin'}`,
+  const env = { PATH: selectedPm.path,
     ...(process.env.HOME ? { HOME: process.env.HOME } : {}), LANG: 'C.UTF-8',
     TMPDIR: dirs.tmp, SQLITE_TMPDIR: dirs.tmp, NODE_DISABLE_COMPILE_CACHE: '1',
     XDG_CACHE_HOME: dirs.cache, XDG_CONFIG_HOME: dirs.config, npm_config_cache: dirs.cache,
@@ -303,7 +307,7 @@ export async function runMatrix(values, { signal } = {}) {
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const names = ['work-dir', 'profile-source', 'data-source', 'old-artifact-dir', 'artifact-dir', 'old-version', 'version', 'store-source']
-  const { values } = parseArgs({ options: Object.fromEntries(names.map(name => [name, { type: 'string' }])) })
+  const { values } = parseArgs({ options: Object.fromEntries([...names, 'pnpm-bin', 'pnpm-version'].map(name => [name, { type: 'string' }])) })
   for (const name of names) if (!values[name]) throw new Error(`Required --${name}`)
   const controller = new AbortController()
   const stop = () => controller.abort()
