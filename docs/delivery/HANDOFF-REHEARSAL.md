@@ -4,6 +4,35 @@ This entry handles the three remaining rehearsal cases. It does not deploy to
 the live installation, clean historical test directories, or replace the
 uncommitted patch retained on the server.
 
+## Current handoff status — server result received 2026-10-09
+
+The three serial cases are **complete** for source
+`5084f5cee7465edbcd0a7cc73697ddab47521e12`. The user-returned terminal result
+reports `three-rehearsals-verified`, overall exit zero, and no matrix error.
+Evidence retained on the server:
+`/LlHmm9527/pkw-codex-rehearsal-SC6951/run/matrix-report.json` with each case's
+private `report.json`. This is a returned server result, not direct SSH access.
+
+| Case | Observed exit | Accepted result |
+| --- | --- | --- |
+| positive | 0 | new-release note/attachment/link written, requested fault injected, actual predecessor restored and accepted, note marker and attachment disk baseline read back |
+| breakwrite | 1 | real write refusal retained as failure; no fake post-write fault; predecessor rollback accepted |
+| mode | 1 | deliberately wrong mode expectation refused after verified rollback; baseline integrity checks retained |
+
+All three cases report `cleanupConfirmed: true`, `lifecycleOk: true`, no timeout,
+no interruption, and confirmed absence of their process groups. Their listeners
+exited gracefully; independent process/port/lock probes confirmed absence.
+Returned live-service state stayed active/running: DSH PID 1585972 and PKW
+PID 1608174, both `NRestarts=0`. No production cutover or historical deletion was
+performed. Together with the earlier 30-round race result, both technical
+handoff items are closed; do not rerun them without a relevant new change.
+
+The current read-back proves an API note marker and stored attachment bytes,
+hash and permissions; it does not claim HTTP attachment download or a full-body
+note hash. Production preparation/cutover, Harness-dependent CI and any scoped
+historical cleanup remain separate work. Keep this evidence and the recovery
+materials. The following sections retain the investigation history.
+
 ## Evidence before this change
 
 The user returned the real server race result for source commit
@@ -19,7 +48,8 @@ not be relabelled as predecessor `0.1.7-pkw.1`.
 `deploy/rehearse-matrix.mjs` exclusively creates a new data-disk directory and:
 
 1. Validates both release receipts, exact package names/versions and tar hashes.
-2. Checks support-profile isolation, capacity, and fixed pnpm 11.7.0. Copies only
+2. Checks support-profile isolation, capacity, and the selected fixed pnpm (the
+   current bootstrap supplies private 11.23.0). Copies only
    the store's `files/` package bytes, refusing links within that payload. Project
    registrations, linked installation trees, temporary files and source SQLite
    indexes are excluded. Private pnpm rebuilds its index through normal package
@@ -50,8 +80,8 @@ the pinned package manager or uncached public dependencies; all caches are
 private to this run. No private registry credentials are read into child tools.
 
 The intended final status is `three-rehearsals-verified`. Its primary evidence is
-`run/matrix-report.json` and per-case `report.json` files. No Linux three-case
-result has been obtained for this new entry yet.
+`run/matrix-report.json` and per-case `report.json` files. The Linux three-case result is now verified above; the earlier local-only
+checks below remain historical evidence.
 
 ## Local checks
 
