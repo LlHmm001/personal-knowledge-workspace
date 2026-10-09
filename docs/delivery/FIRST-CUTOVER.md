@@ -1,21 +1,55 @@
 # First production move to an independent PKW runtime
 
-Status: the candidate and actual installed legacy synthetic compatibility checks
-passed on the server. The first-cutover tools are implemented and tested locally.
-The next server operation is **prepare a plan only**. Production cutover,
-production acceptance, maintenance approval and historical cleanup remain pending.
+Status: the user approved the maintenance window and returned a successful
+**production activation with authenticated read acceptance** from installed
+legacy `0.1.2-pkw.4` to independent `0.1.9-pkw.1`. User browser/business confirmation
+and historical cleanup remain pending. Do not repeat the activation command.
+
+## Returned production activation receipt
+
+Evidence provenance: the following is the user's pasted SSH/root terminal output,
+not a new direct remote inspection by Codex. The output records
+`ACTIVATED_VERIFIED`, command exit `0` and log-copy exit `0` after preflight, fresh
+existing-content capture, confirmed PKW stop, verified cold backup, owned-reference
+installation, candidate start, authenticated candidate acceptance and the DSH
+unchanged check.
+
+| Receipt item | Returned value |
+| --- | --- |
+| Tool source | `e9c3375510257ceba7e18389c3fe52bbb758a5f7` |
+| Plan | `/LlHmm9527/pkw-first-cutover-9xeifm/plan/plan.json` |
+| Plan SHA-256 | `2e8f401c321c96202620e53a9cd342ae3a9db86554064bf457f1091519127e24` |
+| Activation journal | `/LlHmm9527/pkw-first-cutover-9xeifm/plan/activation.json` |
+| Terminal log | `/LlHmm9527/pkw-first-cutover-9xeifm/plan/activation-terminal-jqJ3yO.log` |
+| Cold backup | `/LlHmm9527/pkw-first-cutover-9xeifm/plan/cold-backup` |
+| Backup manifest SHA-256 | `cd9d1988078e612391ccf1c1e853d5f36b8df63e58f56e9f47a4581e41a195bf` |
+| Production read acceptance | `verified` |
+| User business confirmation | `pending` |
+| Database restored | `false` |
+| DSH unchanged | `true` |
+| DSH process after activation | PID `1585972`, active/running, `NRestarts=0` |
+| PKW process after activation | PID `3866375`, active/running, `NRestarts=0` |
+
+The transaction installed the owned `current` link and systemd drop-in described
+below. It retained the canonical data root and did not restore a database.
+Read acceptance compared the selected pre-stop original note and attachment after
+candidate startup; it is not an assertion that every historical record, new writes,
+the public reverse proxy, or the browser workflow has been verified. The next
+confirmation is the user's browser check of the displayed version, an original
+note and attachment, and a new test note saved and read again after refresh.
+Keep the plan and backup intact while that confirmation is pending.
 
 ## Completed evidence and the actual predecessor
 
 The three serial rehearsals passed with tool source
 `5084f5cee7465edbcd0a7cc73697ddab47521e12` in
 `/LlHmm9527/pkw-codex-rehearsal-SC6951`; the earlier startup race also passed.
-Those completed gates are not rerun by first-cutover preparation. Their
-`0.1.7-pkw.1` predecessor is not the version currently serving production.
+Those completed gates were not rerun by first-cutover preparation. Their
+`0.1.7-pkw.1` predecessor was not the actual pre-cutover production version.
 
-The returned inventory on 2026-10-09 identified nine installed PKW packages at
+The pre-cutover returned inventory on 2026-10-09 identified nine installed PKW packages at
 `0.1.2-pkw.4` and `dsh-pkw-weknora` at `0.1.0`. This mixed version vector is
-preserved. Installed files and process metadata do not prove the exact bytes a
+preserved in the retained legacy profile. Installed files and process metadata do not prove the exact bytes a
 long-running process originally loaded.
 
 The candidate preparation returned `PREPARED_NOT_ACTIVATED`, exit 0, using source
@@ -29,8 +63,9 @@ The candidate preparation returned `PREPARED_NOT_ACTIVATED`, exit 0, using sourc
 | Candidate runner | `releases/0.1.9-pkw.1/runner` |
 | Runner tree | `8c3fabd29aa8d21a97749f12b32e8f782b566b766ecb639b34c09d68c48a075f` |
 
-Imports and trace checks passed. No `current` link was created, the prepared
-unit draft was not installed, and no production data root was opened. Preparation
+Imports and trace checks passed. At that preparation stage, no `current` link
+was created, the prepared unit draft was not installed, and no production data
+root was opened. The later production activation is recorded above. Preparation
 copied and checked the already assembled candidate; it did not install packages
 into the DSH profile. Do not run pnpm in this retained profile. Future package
 installation belongs in a new candidate with its own package-manager setup.
@@ -54,10 +89,11 @@ cold backup and authenticated production acceptance. The compatibility tool
 fingerprinted the legacy PKW code and the prepared candidate; it did not claim
 a fingerprint of the entire external legacy dependency closure.
 
-## Retained production boundary
+## Historical pre-cutover production boundary
 
-The following are the returned baseline, not a claim that later state can be
-assumed unchanged. Preparation and activation check them again and refuse drift.
+The following are the returned pre-cutover baseline, retained for recovery and
+comparison. The activation receipt above supersedes its PKW PID and no-drop-in
+state. Preparation and activation rechecked the baseline and refused drift.
 
 | Item | Recorded value |
 | --- | --- |
@@ -85,7 +121,7 @@ The canonical data root, identity database, spaces, public origin and proxy rout
 are retained. Changing code location does not authorize moving or initializing
 production data, resetting an account, or deleting recovery material.
 
-## Next server step: prepare a reviewable plan
+## Completed preparation: the reviewable plan
 
 `docs/delivery/repro-inflight/prepare-first-cutover-plan.sh <fixed-source-SHA>`
 creates a new private `/LlHmm9527/pkw-first-cutover-*` directory, downloads that
@@ -209,18 +245,22 @@ acceptance and retention review; this handoff deletes none of them.
 ## Verification boundaries
 
 Local Node 22.23.1 verification: `node --test scripts/tests/first-cutover-*.test.mjs`
-completed with 95 passed, 0 failed and 0 skipped; `bash -n` on the preparation
-bootstrap and `git diff --check` passed. These include the retained candidate
-preparation tests and the new plan/transaction tests.
+completed with 101 passed, 0 failed and 0 skipped after the safe error-reporting
+fix; `bash -n` on the preparation bootstrap and `git diff --check` passed. These
+include the retained candidate preparation tests and plan/transaction tests.
+This receipt update changes documentation only, not the exercised tools.
 
 Local suites exercise the first-cutover transaction's stop/recovery ordering,
 partial-start and interruption paths; exact owned-reference changes; systemd,
 PID/cgroup/listener/lock evidence; authenticated full-content checks; cold-backup
 worker outcomes; and the terminal/bootstrap guards. They are tool tests, not a
-record of operating this production unit. Candidate preparation and actual-legacy
-synthetic compatibility are the returned server results recorded above.
+record of operating this production unit. Candidate preparation, actual-legacy
+synthetic compatibility, plan preparation and production activation are separate
+returned server results recorded above.
 
-The next expected server evidence is `FIRST_CUTOVER_PLAN_READY`. Production
-activation, post-cutover authenticated acceptance and user business confirmation
-are not run. Real Harness CI still requires its repository inputs; local and
-server checks must not be reported as an independent Harness CI pass.
+Production activation and selected-content authenticated read acceptance are
+verified in the returned receipt. Browser login, original-note/attachment access
+through the public route and a new save/refresh check remain pending user business
+confirmation. No historical cleanup is authorized by this success report. Real
+Harness CI still requires its repository inputs; local and server checks must
+not be reported as an independent Harness CI pass.
