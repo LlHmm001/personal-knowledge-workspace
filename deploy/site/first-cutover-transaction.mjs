@@ -1,6 +1,20 @@
 /** First legacy-unit conversion. Code rollback only: never restore an older database. */
 const fail = (code, message) => Object.assign(new Error(message), { code })
-export const errorRecord = error => ({ code: /^[A-Z0-9_]+$/.test(error?.code ?? '') ? error.code : 'PKW_FIRST_CUTOVER_ERROR', message: String(error?.message ?? 'Operation failed').slice(0, 600) })
+const ACCEPTANCE_STAGES = new Set(['credentials', 'options', 'baseline', 'instance-before-login', 'instance-after-read', 'login', 'session', 'space-page', 'rpc', 'listNotes', 'getNote', 'listAttachments', 'attachment-download', 'content-stability', 'content-compare'])
+export function errorRecord(error) {
+  const result = { code: /^[A-Z0-9_]+$/.test(error?.code ?? '') ? error.code : 'PKW_FIRST_CUTOVER_ERROR', message: String(error?.message ?? 'Operation failed').slice(0, 600) }
+  // Acceptance details can also hold request/response material. Preserve only
+  // bounded protocol diagnostics, never a response body, headers or credentials.
+  const source = error?.details
+  if (result.code === 'PKW_FIRST_CUTOVER_ACCEPTANCE' && source !== null && typeof source === 'object' && !Array.isArray(source)) {
+    const details = {}
+    if (Object.hasOwn(source, 'stage') && ACCEPTANCE_STAGES.has(source.stage)) details.stage = source.stage
+    if (Object.hasOwn(source, 'status') && Number.isInteger(source.status) && source.status >= 100 && source.status <= 599) details.status = source.status
+    if (Object.hasOwn(source, 'method') && ['GET', 'POST'].includes(source.method)) details.method = source.method
+    if (Object.keys(details).length) result.details = details
+  }
+  return result
+}
 const stopped = evidence => evidence?.known === true && evidence.stopped === true
 export function assertFirstAcceptance(result, version, capture = false) {
   const keys = ['authenticated', 'instanceConfirmed', 'accountConfirmed', 'spaceConfirmed', 'noteReadable', 'fullBodyVerified', 'fullMarkdownVerified', 'fullAttachmentVerified', capture ? 'baselineCaptured' : 'baselineMatched']

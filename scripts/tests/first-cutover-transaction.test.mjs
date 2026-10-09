@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { firstCutoverTransaction } from '../../deploy/site/first-cutover-transaction.mjs'
+import { errorRecord, firstCutoverTransaction } from '../../deploy/site/first-cutover-transaction.mjs'
 const OLD='0.1.2-pkw.4',NEW='0.1.9-pkw.1'
 function fixture() {
   const order=[],report={},controller=new AbortController();let running='old',installed=false
@@ -68,4 +68,50 @@ test('DSH drift is reported after old PKW is restarted and accepted, without cla
  assert.deepEqual(f.order.slice(-6),['stop:new','probe:null','restore','start:old','verify:old','dsh:changed'])
  assert.equal(f.report.status,'RECOVERY_BLOCKED_OR_UNVERIFIED')
  assert.equal(f.report.recoveryError.message,'DSH identity changed')
+})
+
+for (const status of [401, 403, 429, 400]) test(`acceptance HTTP ${status} survives the transaction error boundary without contacting service hooks`, async () => {
+  const f = fixture()
+  const error = Object.assign(new Error('login: the endpoint refused the request'), {
+    code: 'PKW_FIRST_CUTOVER_ACCEPTANCE', details: { stage: 'login', reason: 'the endpoint refused the request', status, method: 'POST' },
+  })
+  f.hooks.capture = async () => { throw error }
+  await assert.rejects(firstCutoverTransaction(f), observed => {
+    assert.equal(observed, error)
+    assert.deepEqual(errorRecord(observed), { code: error.code, message: error.message, details: { stage: 'login', status, method: 'POST' } })
+    return true
+  })
+  const persisted = JSON.parse(JSON.stringify(f.report))
+  assert.deepEqual(persisted.error.details, { stage: 'login', status, method: 'POST' })
+  assert.deepEqual(persisted.actions.at(-1).error, persisted.error)
+  assert.equal(persisted.status, 'STOPPED_BEFORE_SERVICE_ACTION')
+  assert.deepEqual(f.order, ['preflight'])
+  assert.deepEqual(f.state(), { running: 'old', installed: false })
+})
+
+test('acceptance diagnostics discard injected bodies, secrets, extra fields and invalid allowed-field values', () => {
+  const error = Object.assign(new Error('login: the endpoint refused the request'), {
+    code: 'PKW_FIRST_CUTOVER_ACCEPTANCE', details: {
+      stage: 'login', status: 403, method: 'POST', reason: 'secret-reason',
+      body: 'secret-body', responseBody: 'secret-response', cookie: 'secret-cookie',
+      headers: { authorization: 'secret-authorization' }, password: 'secret-password',
+      credentials: { username: 'secret-user', password: 'secret-password' },
+    },
+  })
+  assert.deepEqual(errorRecord(error), { code: error.code, message: error.message, details: { stage: 'login', status: 403, method: 'POST' } })
+  assert.equal(JSON.stringify(errorRecord(error)).includes('secret-'), false)
+  for (const details of [
+    { stage: 'login secret-password', status: '401', method: 'POST secret-cookie' },
+    { stage: { password: 'secret-password' }, status: 999, method: ['POST'] },
+    { status: 401.5 }, { status: NaN }, { status: 99 }, { status: Infinity },
+    Object.create({ stage: 'login', status: 401, method: 'POST' }), null, false, [],
+  ]) {
+    assert.deepEqual(errorRecord({ code: error.code, message: error.message, details }), { code: error.code, message: error.message })
+  }
+})
+
+test('non-acceptance error records retain their existing shape and bounded message', () => {
+  assert.deepEqual(errorRecord(Object.assign(new Error('ordinary failure'), { code: 'PKW_FIRST_STOP_FAILED', details: { stage: 'login', status: 401, method: 'POST' } })), { code: 'PKW_FIRST_STOP_FAILED', message: 'ordinary failure' })
+  assert.deepEqual(errorRecord({ code: 'bad-code', message: 'x'.repeat(800) }), { code: 'PKW_FIRST_CUTOVER_ERROR', message: 'x'.repeat(600) })
+  assert.deepEqual(errorRecord(null), { code: 'PKW_FIRST_CUTOVER_ERROR', message: 'Operation failed' })
 })
