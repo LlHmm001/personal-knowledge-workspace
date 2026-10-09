@@ -34,7 +34,8 @@ import { appendFileSync, existsSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
-import { LOCK_EXIT, prepareRootLock } from './root-lock.mjs'
+import { LOCK_EXIT } from './root-lock.mjs'
+import { openListenerGateway, reportListenerRefusal } from './listener-startup.mjs'
 
 const { values } = parseArgs({ options: {
   profile: { type: 'string' }, config: { type: 'string' }, port: { type: 'string', default: '3081' },
@@ -54,83 +55,18 @@ const require = createRequire(join(resolve(values.profile), 'package.json'))
 const { CollaborationGateway } = await import(pathToFileURL(require.resolve('@deepseek-ai/dsh-pkw-web/lib/collaboration/index.js')).href)
 const config = JSON.parse(await readFile(resolve(values.config), 'utf8'))
 
-// Clear a provably stale lock before the gateway claims it atomically. A lock whose
-// writer is still alive is never touched: refuse instead of racing for the root.
-function refuseLock(lock) {
-  // Refuse rather than guess. The exit code says which rule was hit, and the file is
-  // left exactly as found so a human can inspect the writer it names. The exit code is set and the
-  // process returns rather than exiting immediately: a write to a pipe is asynchronous, and
-  // `process.exit()` does not wait for it, so the reason was being discarded and the refusal reached
-  // the caller as a bare exit code — the same shape as a crash.
-  console.error(JSON.stringify({ status: 'lock-refused', reason: lock.reason, pid: lock.pid ?? null, detail: lock.detail ?? null, lockPath: lock.lockPath ?? null }))
-  process.exitCode = lock.exitCode ?? 5
+const opened = await openListenerGateway(config, {
+  openGateway: value => CollaborationGateway.open(value),
+  onRecovered: recoveredFrom => console.log(JSON.stringify({ status: 'stale-lock-recovered', ...recoveredFrom })),
+})
+if (opened.kind === 'refused') {
+  // No server is created on this path. Let Node finish flushing the diagnostic and exit naturally.
+  process.exitCode = await reportListenerRefusal(opened)
+} else {
+  await startListener(opened.gateway)
 }
 
-const lock = await prepareRootLock(config.dataPath)
-if (!lock.ready) {
-  refuseLock(lock)
-  process.exit(process.exitCode ?? 5)
-}
-if (lock.recoveredFrom) console.log(JSON.stringify({ status: 'stale-lock-recovered', ...lock.recoveredFrom }))
-
-/**
- * Open the gateway, or refuse with the lock protocol's own exit code.
- *
- * The check above and the gateway's `open(lockPath, 'wx')` are two steps, and two starters that
- * arrive together can both pass the check before either claims the lock. The claim is atomic, so
- * exactly one of them wins — but the loser then fails on a plain `Error`, which would leave the
- * process exiting 1: the same code as a crash, with a message about a locked root that says
- * nothing about which rule applies. Re-deciding through the lock protocol turns that race into the
- * answer the protocol already defines (a live writer is `LIVE_WRITER`, an unreadable lockfile is
- * `UNREADABLE`), and keeps "refused" distinguishable from "broke" in the exit code.
- */
-async function openGateway() {
-  let blocked = 0
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      return await CollaborationGateway.open(config)
-    } catch (error) {
-      // Ask the protocol, never the message: the same rules that decide whether a lock may be
-      // cleared also say who owns the root now.
-      const again = await prepareRootLock(config.dataPath)
-      // Three states are worth waiting through, and only these three. A lockfile can be read while
-      // the winner has created it but has not yet written its record: it reads as "free", as "empty",
-      // or as "owned by nobody", and microseconds later it names its writer. Waiting through those is
-      // not the same as treating them as stopped — nothing is cleared, nothing is written, and the
-      // wait is bounded, so a file that never becomes readable is still refused with its own code.
-      // Everything else is a decision: a live writer, a malformed lock, or an identity that cannot be
-      // established.
-      const undecided = again.ready === true || again.reason === 'lock-without-owner' || again.reason === 'empty-lock'
-      // A decision ends the loop here. `refuseLock` sets the exit code and returns instead of exiting
-      // — a write to a pipe is asynchronous and `process.exit()` would discard it — so the code has to
-      // be carried out to the caller rather than assumed to have terminated this function.
-      if (!undecided) { refuseLock(again); return { refused: again.exitCode ?? 5 } }
-      blocked += 1
-      // Long enough for a winner that has claimed the lock to get as far as writing its record —
-      // that is module loading and opening the data root, not a microsecond — and still bounded, so a
-      // lockfile that never becomes readable ends as a refusal with its own code rather than as a wait
-      // that never ends. What the wait saw is reported: a refusal that cannot say whether the lock was
-      // empty, ownerless or unreadable for fifteen seconds cannot say what happened either.
-      if (blocked > 300) {
-        // A stream write to a pipe is asynchronous, and `process.exit()` does not wait for it: the
-        // diagnostic below was being discarded, which is why this refusal arrived as a bare exit code
-        // with no output at all — indistinguishable from a crash. Setting the exit code and returning
-        // lets the write drain, and Node exits with that code once the loop is empty.
-        console.error(JSON.stringify({ status: 'lock-refused', reason: 'claim-not-confirmed', detail: again.reason, lockPath: again.lockPath ?? null, waitedMs: blocked * 50 }))
-        process.exitCode = LOCK_EXIT.UNREADABLE
-        return null
-      }
-      await new Promise(resolve => setTimeout(resolve, 50))
-    }
-  }
-}
-
-const opened = await openGateway()
-// The refusal's own code is what the process exits with: a live writer is LIVE_WRITER, an unreadable
-// lockfile is UNREADABLE. Collapsing them into one code would throw away the answer the protocol just
-// gave, which is how a correct refusal came to be reported as the wrong one.
-if (opened?.refused !== undefined) process.exit(opened.refused)
-const gateway = opened
+async function startListener(gateway) {
 let closing = false
 let inflight = 0
 
@@ -210,8 +146,11 @@ try {
   // and it says so on stderr. Without this the process ended with a bare non-zero status and no
   // output at all, which is indistinguishable from a crash.
   if (error?.code === 'EADDRINUSE') {
-    console.error(JSON.stringify({ status: 'bind-refused', reason: 'port-in-use', port, detail: error.message }))
-    process.exit(LOCK_EXIT.LIVE_WRITER)
+    process.exitCode = await reportListenerRefusal({
+      exitCode: LOCK_EXIT.LIVE_WRITER,
+      diagnostic: { status: 'bind-refused', reason: 'port-in-use', port, detail: error.message },
+    })
+    return
   }
   throw error
 }
@@ -302,3 +241,4 @@ function onSignal(signal) {
 }
 process.on('SIGTERM', () => onSignal('SIGTERM'))
 process.on('SIGINT', () => onSignal('SIGINT'))
+}
